@@ -1,5 +1,6 @@
 import { Laptop, UserRound } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
+import type { ModelBrand } from '@shared/models'
 import { SUBSCRIPTION_ACCOUNT, type AccountId, type Subscription } from '@shared/types'
 
 interface Logo {
@@ -36,6 +37,31 @@ export function SubscriptionIcon({ subscription, size = 13.5 }: { subscription: 
   if (subscription === 'Default') return <Laptop size={size} className="shrink-0" />
   const logo = subscription ? LOGOS[SUBSCRIPTION_ACCOUNT[subscription]] : undefined
   if (!logo) return <UserRound size={size} className="shrink-0" />
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={logo.color ?? 'currentColor'} fillRule="evenodd" className="shrink-0" aria-hidden="true">
+      <path d={logo.path} />
+    </svg>
+  )
+}
+
+/** Model branding is independent of the subscription serving the model. */
+export function ModelBrandIcon({ brand, size = 15 }: { brand: ModelBrand; size?: number }): ReactNode {
+  const gradientId = useId()
+  if (brand === 'Gemini') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" className="shrink-0" aria-hidden="true">
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="1" x2="1" y2="0">
+            <stop stopColor="#4285F4" />
+            <stop offset="0.5" stopColor="#9B72CB" />
+            <stop offset="1" stopColor="#D96570" />
+          </linearGradient>
+        </defs>
+        <path fill={`url(#${gradientId})`} d="M12 0C12 6.627 6.627 12 0 12c6.627 0 12 5.373 12 12 0-6.627 5.373-12 12-12C17.373 12 12 6.627 12 0Z" />
+      </svg>
+    )
+  }
+  const logo = LOGOS[brand === 'Claude' ? 'claude' : brand === 'GPT' ? 'codex' : 'grok']
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill={logo.color ?? 'currentColor'} fillRule="evenodd" className="shrink-0" aria-hidden="true">
       <path d={logo.path} />

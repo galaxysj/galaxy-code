@@ -11,6 +11,10 @@ function FastIcon({ size = 12 }: { size?: number }): ReactNode {
   return <Zap size={size} fill="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-black" />
 }
 
+function UltrafastIcon({ size = 12 }: { size?: number }): ReactNode {
+  return <Zap size={size} fill="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-[#4a7cf6]" />
+}
+
 export const SUBSCRIPTION_LABELS: Record<Subscription, string> = {
   Default: 'OpenRouter',
   Claude: 'Claude',
@@ -196,7 +200,7 @@ export function ModelPicker(): ReactNode {
   const pickModel = useStore((s) => s.pickModel)
   const setRunOptions = useStore((s) => s.setRunOptions)
   const chatId = useChatId()
-  const { model, subscription, effort, ultra, fast } = useRunConfig()
+  const { model, subscription, effort, ultra, fast, ultrafast } = useRunConfig()
 
   const close = useCallback(() => {
     setOpen(false)
@@ -206,6 +210,19 @@ export function ModelPicker(): ReactNode {
   const hasEffort = !!model && !auto && model.efforts.length > 0
   const label = !model ? '' : auto ? 'Auto' : ultra ? 'Ultra' : effort ? EFFORT_LABELS[effort] : 'Standard'
   const isDefault = !!model && !ultra && !fast && effort === model.defaultEffort
+  const speedIcon = ultrafast ? <UltrafastIcon /> : fast ? <FastIcon /> : null
+  // Off, Fast, then Ultrafast where the model has it.
+  const nextSpeed = (): { fast: boolean; ultrafast: boolean } =>
+    !fast ? { fast: true, ultrafast: false } : !ultrafast && model?.ultrafastMode ? { fast: true, ultrafast: true } : { fast: false, ultrafast: false }
+  const speedTitle = !model?.fastMode
+    ? 'This model has no Fast mode'
+    : ultrafast
+      ? 'Ultrafast is on. Fastest output, billed at the highest rate.'
+      : fast
+        ? model.ultrafastMode
+          ? 'Fast is on. Click again for Ultrafast.'
+          : 'Fast is on. Faster output, billed at a higher rate.'
+        : 'Turn on Fast'
 
   return (
     <>
@@ -226,7 +243,7 @@ export function ModelPicker(): ReactNode {
           ultra && 'aurora-ring'
         )}
       >
-        {fast && !auto && <FastIcon />}
+        {!auto && speedIcon}
         <span className="truncate">{model?.name ?? 'Select a model'}</span>
         {model && !auto && (ultra || effort) && <span className={cn('shrink-0', ultra ? 'aurora-text font-medium' : 'text-subtle')}>{label}</span>}
         <ChevronDown size={12} className={cn('picker-chevron shrink-0 text-subtle', open && 'rotate-180')} />
@@ -247,17 +264,17 @@ export function ModelPicker(): ReactNode {
             <div className="flex items-start">
               {auto ? <span className="-ml-1 h-6 w-6 shrink-0" /> : <button
                 type="button"
-                title={model.fastMode ? (fast ? 'Fast is on. Faster output, billed at a higher rate.' : 'Turn on Fast') : 'This model has no Fast mode'}
+                title={speedTitle}
                 disabled={!model.fastMode}
-                aria-label="Fast mode"
+                aria-label={ultrafast ? 'Ultrafast mode' : 'Fast mode'}
                 aria-pressed={fast}
-                onClick={() => setRunOptions({ fast: !fast }, chatId)}
+                onClick={() => setRunOptions(nextSpeed(), chatId)}
                 className={cn(
                   '-ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors disabled:opacity-25',
                   fast ? 'text-black hover:bg-hover' : 'text-muted hover:bg-hover hover:text-fg'
                 )}
               >
-                {fast ? <FastIcon size={13.5} /> : <Zap size={13.5} strokeWidth={1.5} />}
+                {ultrafast ? <UltrafastIcon size={13.5} /> : fast ? <FastIcon size={13.5} /> : <Zap size={13.5} strokeWidth={1.5} />}
               </button>}
               <button
                 type="button"
@@ -275,7 +292,7 @@ export function ModelPicker(): ReactNode {
                 type="button"
                 title="Reset to default"
                 disabled={auto || isDefault || (!hasEffort && !fast)}
-                onClick={() => setRunOptions({ ...(model.defaultEffort ? { effort: model.defaultEffort } : {}), ultra: false, fast: false }, chatId)}
+                onClick={() => setRunOptions({ ...(model.defaultEffort ? { effort: model.defaultEffort } : {}), ultra: false, fast: false, ultrafast: false }, chatId)}
                 className="-mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-25"
               >
                 <RotateCcw size={13} />

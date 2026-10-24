@@ -23,6 +23,9 @@ import {
   PanelRight,
   Plug,
   Search,
+  SearchCheck,
+  Hourglass,
+  BellRing,
   SquareTerminal,
   Wrench
 } from 'lucide-react'
@@ -55,6 +58,9 @@ const KIND_ICON: Record<ToolKind, typeof Wrench> = {
   grep: Search,
   glob: Search,
   list: FolderTree,
+  lint: SearchCheck,
+  wait: Hourglass,
+  event: BellRing,
   websearch: Globe,
   webfetch: Globe,
   bash: SquareTerminal,
@@ -178,6 +184,7 @@ function liveVerb(items: ToolItem[]): string {
   const current = items[items.length - 1]
   if (current?.tool === 'edit' || current?.tool === 'create') return 'Editing'
   if (current?.tool === 'bash') return 'Running'
+  if (current?.tool === 'wait' && items.every((item) => item.tool === 'wait')) return 'Waiting'
   return 'Exploring'
 }
 
@@ -188,6 +195,7 @@ function exploreSummary(items: ToolItem[], verb = 'Explored'): string {
   const skills = items.filter((i) => i.meta?.skill).length
   const searches = items.filter((i) => i.tool === 'grep' || i.tool === 'glob').length
   const lists = items.filter((i) => i.tool === 'list').length
+  const lints = items.some((i) => i.tool === 'lint')
   const web = items.filter((i) => i.tool === 'websearch').length
   const pages = items.filter((i) => i.tool === 'webfetch' || i.tool === 'browser').length
   const commands = items.filter((i) => i.tool === 'bash').length
@@ -199,6 +207,8 @@ function exploreSummary(items: ToolItem[], verb = 'Explored'): string {
     skills && plural(skills, 'skill'),
     searches && plural(searches, 'search', 'searches'),
     lists && plural(lists, 'folder'),
+    // Always "lints", never counted.
+    lints && 'lints',
     web && plural(web, 'web search', 'web searches'),
     pages && plural(pages, 'page')
   ].filter(Boolean)
@@ -211,6 +221,8 @@ function exploreSummary(items: ToolItem[], verb = 'Explored'): string {
     edited && `${done ? 'edited' : 'editing'} ${plural(edited, 'file')}`,
     others && `${done ? 'used' : 'using'} ${plural(others, 'tool')}`
   ].filter((part): part is string => !!part)
+  // Waits sit in the group without being listed; on their own the group reads "Waited".
+  if (!parts.length && !actions.length && items.some((i) => i.tool === 'wait')) return done ? 'Waited' : verb
   if (!parts.length && actions.length) actions[0] = actions[0].charAt(0).toUpperCase() + actions[0].slice(1)
   return [parts.length ? `${verb} ${parts.join(', ')}` : '', ...actions].filter(Boolean).join(', ')
 }
@@ -868,6 +880,8 @@ export function isAgentMessage(item: Item): boolean {
 }
 
 export function isHiddenAgentMessage(item: Item): boolean {
+  // Event calls only set up a trigger; the timeline shows it as "Will resume after" instead.
+  if (item.kind === 'tool' && item.tool === 'event') return true
   return item.kind === 'tool' && isAgentMessage(item) && (item.input as { action?: string } | null)?.action !== 'send'
 }
 

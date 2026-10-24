@@ -1,10 +1,10 @@
 import { diffLines } from 'diff'
-import { ChevronDown, CornerDownLeft, X } from 'lucide-react'
+import { CornerDownLeft, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { InlineModel } from '@shared/models'
 import { applyMonacoTheme, monaco } from '../lib/monaco'
 import { useStore } from '../store'
-import { Spinner } from './ui'
+import { Dropdown, Spinner } from './ui'
 
 type Editor = monaco.editor.IStandaloneCodeEditor
 
@@ -570,23 +570,15 @@ export function InlineEditBox({
       )}
       {state.error && <div className="mt-1 text-[12px] text-danger">{state.error}</div>}
       <div className="mt-2.5 flex items-center justify-between gap-3">
-        <label className="relative flex min-w-0 items-center gap-1 text-[12px] text-muted hover:text-fg">
-          <span className="truncate">{model.DisplayName}</span>
-          <ChevronDown size={13} className="text-muted" />
-          <select
-            aria-label="Inline edit model"
-            value={model.ID}
-            disabled={state.busy}
-            onChange={(event) => onModel(event.target.value)}
-            className="absolute inset-0 cursor-pointer opacity-0"
-          >
-            {InlineModel.map((entry) => (
-              <option key={entry.ID} value={entry.ID}>
-                {entry.DisplayName}
-              </option>
-            ))}
-          </select>
-        </label>
+        <Dropdown
+          label="Inline edit model"
+          value={model.ID as string}
+          disabled={state.busy}
+          onChange={onModel}
+          options={InlineModel.map((entry) => ({ value: entry.ID as string, label: entry.DisplayName }))}
+          placement="top-start"
+          className="h-auto! gap-1! bg-transparent! px-0! text-muted! hover:text-fg!"
+        />
         {proposal ? (
           <div className="flex shrink-0 items-center gap-1.5">
             {!proposal.done && (

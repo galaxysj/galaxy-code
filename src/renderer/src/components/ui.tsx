@@ -1,4 +1,4 @@
-import { Check, Copy, Loader2 } from 'lucide-react'
+import { Check, ChevronDown, Copy, Loader2 } from 'lucide-react'
 import {
   useCallback,
   useEffect,
@@ -217,6 +217,57 @@ export function MenuItem({ icon, label, hint, selected, danger, disabled, onClic
       {hint && <span className="shrink-0 text-[11px] text-subtle">{hint}</span>}
       {selected && <Check size={13} className="shrink-0 text-fg" />}
     </button>
+  )
+}
+
+export interface DropdownOption<T extends string> {
+  value: T
+  label: ReactNode
+  icon?: ReactNode
+  hint?: ReactNode
+  /** Hover text for the button while this option is selected. */
+  title?: string
+}
+
+interface DropdownProps<T extends string> {
+  value: T
+  options: DropdownOption<T>[]
+  onChange(value: T): void
+  label: string
+  disabled?: boolean
+  placement?: Placement
+  className?: string
+  menuClassName?: string
+}
+
+/** A select in the app's own menu style, in place of the OS dropdown. */
+export function Dropdown<T extends string>({ value, options, onChange, label, disabled, placement = 'bottom-start', className, menuClassName }: DropdownProps<T>): ReactNode {
+  const [open, setOpen] = useState(false)
+  const anchor = useRef<HTMLButtonElement>(null)
+  const selected = options.find((option) => option.value === value)
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+        title={selected?.title}
+        onClick={() => setOpen((current) => !current)}
+        className={cn('inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md bg-elev px-2 text-[12px] text-fg transition-colors hover:bg-hover disabled:pointer-events-none disabled:opacity-45', className)}
+      >
+        {selected?.icon && <span className="flex shrink-0 text-muted">{selected.icon}</span>}
+        <span className="min-w-0 flex-1 truncate text-left">{selected?.label}</span>
+        <ChevronDown size={13} className="shrink-0 text-muted" />
+      </button>
+      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} placement={placement} className={cn('max-h-80 min-w-44 overflow-y-auto p-1', menuClassName)}>
+        {options.map((option) => (
+          <MenuItem key={option.value} icon={option.icon} label={option.label} hint={option.hint} selected={option.value === value} onClick={() => { setOpen(false); onChange(option.value) }} />
+        ))}
+      </Popover>
+    </>
   )
 }
 

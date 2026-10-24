@@ -27,12 +27,14 @@ function fromSpec(spec: AgentModelSpec, disabled: Set<string>, enabled: Set<stri
   return {
     key,
     name: spec.DisplayName,
+    brand: spec.Brand,
     id: spec.ID,
     subscription: spec.Subscription,
     efforts,
     defaultEffort: pickDefaultEffort(spec),
     ultraEffort: spec.UltraEffort === '' ? null : spec.UltraEffort,
     fastMode: spec.FastMode,
+    ultrafastMode: spec.FastMode && spec.UltrafastMode === true,
     vision: spec.Vision !== false,
     custom: false,
     enabled: spec.Off ? enabled.has(key) : !disabled.has(key),
@@ -51,6 +53,7 @@ function fromCustom(model: CustomModel, disabled: Set<string>): ResolvedModel {
     defaultEffort: null,
     ultraEffort: null,
     fastMode: false,
+    ultrafastMode: false,
     vision: true,
     custom: true,
     enabled: !disabled.has(key)
@@ -67,6 +70,7 @@ export const AUTO_MODEL: ResolvedModel = {
   defaultEffort: null,
   ultraEffort: null,
   fastMode: false,
+  ultrafastMode: false,
   vision: true,
   custom: false,
   enabled: true,
@@ -84,6 +88,7 @@ function fromAcpAgent(name: string): ResolvedModel {
     defaultEffort: null,
     ultraEffort: null,
     fastMode: false,
+    ultrafastMode: false,
     vision: true,
     custom: false,
     enabled: true

@@ -9,7 +9,7 @@ import { AntigravityConsent } from './components/AntigravityConsent'
 import { AttachmentPreview } from './components/AttachmentPreview'
 import { Sidebar } from './components/Sidebar'
 import { SidePanel } from './components/SidePanel'
-import { Timeline } from './components/timeline/Timeline'
+import { ErrorDialog, Timeline } from './components/timeline/Timeline'
 import { IconButton, Spinner } from './components/ui'
 
 function useTheme(): void {
@@ -220,6 +220,7 @@ export function App(): ReactNode {
   const antigravityConsent = useStore((s) => s.antigravityConsent)
   const attachmentPreview = useStore((s) => s.attachmentPreview)
   const toast = useStore((s) => s.toast)
+  const gitError = useStore((s) => s.gitError)
   const updateSettings = useStore((s) => s.updateSettings)
   const savedSidebar = useStore((s) => s.settings.sidebarWidth)
   const savedPanel = useStore((s) => s.settings.panelWidth)
@@ -281,14 +282,14 @@ export function App(): ReactNode {
   const root = chat?.worktree?.path ?? project?.path ?? null
 
   return (
-    <div className="flex h-full bg-sidebar text-fg">
-      <aside aria-hidden={!sidebarOpen} inert={!sidebarOpen} className={cn('animated-pane relative shrink-0 overflow-hidden', resizing === 'sidebar' && 'pane-resizing')} style={{ width: sidebarOpen ? sidebarWidth : 0, opacity: sidebarOpen ? 1 : 0, pointerEvents: sidebarOpen ? 'auto' : 'none' }}>
+    <div className="app-shell flex h-full text-fg">
+      <aside aria-hidden={!sidebarOpen} inert={!sidebarOpen} className={cn('sidebar-surface animated-pane relative shrink-0 overflow-hidden', resizing === 'sidebar' && 'pane-resizing')} style={{ width: sidebarOpen ? sidebarWidth : 0, opacity: sidebarOpen ? 1 : 0, pointerEvents: sidebarOpen ? 'auto' : 'none' }}>
         <div className="animated-pane-content absolute inset-y-0 left-0" style={{ width: sidebarWidth, transform: sidebarOpen ? 'translateX(0)' : 'translateX(-16px)' }}>
           <Sidebar />
         </div>
         <Resizer width={sidebarWidth} min={210} max={420} direction={1} onChange={setSidebarWidth} onStart={() => setResizing('sidebar')} onEnd={() => setResizing(null)} onCommit={(width) => void updateSettings({ sidebarWidth: Math.round(width) })} />
       </aside>
-      <div className="flex min-w-0 flex-1 overflow-hidden">
+      <div className="workspace-surface flex min-w-0 flex-1 overflow-hidden">
         <main className={cn('chat-surface flex min-w-[380px] flex-1 flex-col overflow-hidden', (sidebarOpen || panelOpen) && 'my-1.5 mr-1.5 rounded-xl shadow-[0_0_0_1px_var(--border)]')}>
           <ChatHeader chat={chat} sidebarOpen={sidebarOpen} />
           {chat ? (
@@ -308,6 +309,7 @@ export function App(): ReactNode {
         </aside>
       </div>
       <SettingsPage />
+      {gitError && <ErrorDialog title="Instant commit failed" message={gitError} onClose={() => useStore.setState({ gitError: null })} />}
       {antigravityConsent && <AntigravityConsent requestId={antigravityConsent} />}
       {attachmentPreview && <AttachmentPreview key={attachmentPreview.id} file={attachmentPreview} />}
       {toast && (

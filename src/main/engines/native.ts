@@ -137,6 +137,7 @@ async function loop(options: LoopOptions): Promise<string> {
       tools: specs,
       effort: options.effort,
       fast: turn.fast && turn.model.fastMode,
+      ultrafast: turn.ultrafast && turn.model.ultrafastMode,
       signal,
       onText: (delta) => writer.text(delta),
       onReasoning: (delta) => writer.reasoning(delta)

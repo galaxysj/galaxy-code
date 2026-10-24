@@ -22,18 +22,22 @@ import {
   MessageCircle,
   MessagesSquare,
   Package,
+  Play,
   Square,
   SquareTerminal,
+  Sparkles,
   X
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from 'react'
 import type { AgentMode, Attachment, Chat, GitCommand, Item, PermissionMode, ProjectFileEntry, PromptMentions, RevertedMessage, SkillInfo, ToolItem } from '@shared/types'
 import { basename, cn, tildify } from '../lib/utils'
-import { GIT_COMMANDS, gitCommandFor, gitCommandMessage, gitToken } from '../lib/gitCommands'
+import { GIT_COMMANDS, gitCommandFor, gitToken, runGitCommand } from '../lib/gitCommands'
 import { useActiveChat, useChatId, useRunConfig, useStore, type PanelTab } from '../store'
 import { FileIcon as FileTypeIcon } from './ProjectFiles'
 import { AcpOptions } from './AcpOptions'
 import { ModelPicker } from './ModelPicker'
+import { ModelBrandIcon } from './SubscriptionIcon'
+import type { ModelBrand } from '@shared/models'
 import { ApprovalPrompt } from './ApprovalPrompt'
 import { SubscriptionPicker } from './SubscriptionPicker'
 import { Button, MenuItem, MenuSeparator, Popover, Segmented, Spinner, TextInput } from './ui'
@@ -402,6 +406,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const panelTabs = useStore((s) => s.panelTabs)
   const terminalOutput = useStore((s) => s.terminalOutput)
   const mentionQueue = useStore((s) => s.mentionQueue)
+  const settingsOpen = useStore((s) => s.settingsOpen !== null)
   const key = edit?.key ?? chat?.id ?? 'new'
   const text = useStore((s) => s.composerText[key] ?? '')
   const attachments = useStore((s) => s.composerAttachments[key]) ?? EMPTY
@@ -409,7 +414,10 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const setAttachments = useStore((s) => s.setComposerAttachments)
   const send = useStore((s) => s.send)
   const openSideChat = useStore((s) => s.openSideChat)
-  const { model, ultra, acp } = useRunConfig()
+  const { model, subscription, ultra, acp } = useRunConfig()
+  const models = useStore((s) => s.models)
+  const pickModel = useStore((s) => s.pickModel)
+  const chatId = useChatId()
   // Ask and Plan are enforced by Galaxy Code's own tools, so only native models offer them.
   const modesAvailable = model?.subscription === 'Default'
   const storedMode = useStore((s) => s.composerMode[key])
@@ -425,6 +433,12 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [mentionFiles, setMentionFiles] = useState<ProjectFileEntry[]>([])
   const [mentionIndex, setMentionIndex] = useState(0)
+  useEffect(() => {
+    if (settingsOpen) {
+      setMention(null)
+      setMentionIndex(0)
+    }
+  }, [settingsOpen])
   const [selectedMentions, setSelectedMentions] = useState<SelectedMention[]>(() => selectedFrom(edit?.message.mentions))
   // Mentions added from elsewhere, such as Add to Chat in a terminal, go at the end of the message.
   useEffect(() => {
@@ -515,9 +529,10 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         ...(edit ? [] : SIDE_COMMANDS)
           .filter((command) => command.startsWith(mention.query.toLowerCase()))
           .map((command) => ({ id: `command:${command}`, kind: 'command' as const, name: `/${command}`, detail: 'Open a side chat in the panel. It is deleted when closed.' })),
-        ...(Object.keys(GIT_COMMANDS) as GitCommand[])
-          .filter((command) => command.startsWith(mention.query.toLowerCase()))
-          .map((command) => ({ id: `git:${command}`, kind: 'git' as const, name: `/${command}`, detail: GIT_COMMANDS[command].detail, git: command })),
+        ...models
+          .filter((entry) => !acp && entry.enabled && entry.subscription === subscription &&
+            (!mention.query || `${entry.name} ${entry.id}`.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase().includes(mention.query.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase())))
+          .map((entry) => ({ id: `model:${entry.key}`, kind: 'model' as const, brand: entry.brand, name: entry.name, detail: entry.key === model?.key ? `${entry.name} · Selected` : `Switch to ${entry.name}`, modelKey: entry.key })),
         ...skills.filter((skill) => `${skill.name} ${skill.description}`.toLowerCase().includes(mention.query.toLowerCase())).map((skill) => ({ id: `skill:${skill.path}`, kind: 'skill' as const, name: skill.name, detail: skill.description || skill.scope, path: skill.path }))
       ]
     : mention?.trigger === '@'
@@ -525,6 +540,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
           { id: 'upload', kind: 'upload' as const, name: 'Add files or photos', detail: 'Upload attachments from your computer.' },
           ...skills.map((skill) => ({ id: `skill:${skill.path}`, kind: 'skill' as const, name: skill.name, detail: skill.description || skill.scope, path: skill.path })),
           { id: 'browser', kind: 'browser' as const, name: 'Browser', detail: 'Use the in-app browser for this task.' },
+          ...(Object.keys(GIT_COMMANDS) as GitCommand[]).map((command) => ({ id: `git:${command}`, kind: 'git' as const, name: GIT_COMMANDS[command].label, detail: GIT_COMMANDS[command].detail, git: command })),
           ...mcp.filter((server) => server.state === 'ready').map((server) => ({ id: `mcp:${server.id}`, kind: 'mcp' as const, name: mcpServers.find((config) => config.id === server.id)?.name ?? server.id, detail: `${server.tools.length} tools`, server: server.id })),
           ...terminalTabs.map((tab) => ({ id: `terminal:${tab.id}`, kind: 'terminal' as const, name: tab.customTitle || tab.title, detail: tab.cwd, tabId: tab.id, cwd: tab.cwd })),
           ...recentChats.slice(0, 12).map((entry) => ({ id: `chat:${entry.id}`, kind: 'chat' as const, name: entry.title || 'Untitled chat', detail: '', chatId: entry.id })),
@@ -572,6 +588,11 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   }
 
   const chooseMention = (entry: MentionEntry): void => {
+    if (entry.kind === 'model' && entry.modelKey) {
+      pickModel(entry.modelKey, chatId)
+      replaceMention('')
+      return
+    }
     if (entry.kind === 'command' && mention) {
       const rest = `${text.slice(0, mention.start)}${text.slice(mention.end)}`.trim()
       setText(key, '')
@@ -732,8 +753,8 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         .slice(-12000)
       mentionedChats.push({ title: referenced.title, excerpt })
     }
-    // A typed /commit or /commit-push works like the picked one.
-    const git = selected.find((item) => item.kind === 'git')?.command ?? (/^\/(commit-push|commit)(?=\s|$)/.exec(outgoing.trim())?.[1] as GitCommand | undefined)
+    // A typed @commit or @commit-push works like the picked one.
+    const git = selected.find((item) => item.kind === 'git')?.command ?? (/^@(commit-push|commit)(?=\s|$)/.exec(outgoing.trim())?.[1] as GitCommand | undefined)
     const mentions: PromptMentions = {
       ...(git ? { git } : {}),
       skills: selected.flatMap((item) => item.kind === 'skill' ? [{ name: item.name, path: item.path }] : []),
@@ -802,7 +823,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
 
       {!edit && chat && <CurrentTask chat={chat} items={items} />}
 
-      {followUp && chat && !chat.side && <GitChips chat={chat} />}
+      {followUp && chat && !chat.side && <ChatChips chat={chat} items={items} />}
 
       {!edit && chat && chat.queued.length > 0 && (
         <div className="mb-1.5 space-y-1">
@@ -843,11 +864,11 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
             <div ref={wrapProbe} className="composer-wrap-probe">{text || '\u200b'}</div>
           </div>
         )}
-        {mention && mentionEntries.length > 0 && (
+        {!settingsOpen && mention && mentionEntries.length > 0 && (
           <div ref={mentionList} role="listbox" aria-label={mention.trigger === '/' ? 'Commands' : 'Mentions'} className={cn('absolute left-2 right-2 z-40 max-h-80 overflow-y-auto flex flex-col gap-0.5 rounded-2xl border border-line bg-elev p-2 shadow-pop', edit ? 'top-full mt-2' : 'bottom-full mb-2')}>
             {mentionEntries.map((entry, index) => {
               const Icon = entry.mode ? MODES[entry.mode].icon : CHIP_ICON[entry.kind]
-              const heading = index === 0 || mentionEntries[index - 1].kind !== entry.kind ? MENU_HEADINGS[entry.kind] : null
+              const heading = index === 0 || MENU_HEADINGS[mentionEntries[index - 1].kind] !== MENU_HEADINGS[entry.kind] ? MENU_HEADINGS[entry.kind] : null
               return (
                 <div key={entry.id} role="presentation">
                 {heading && <div className={cn('px-3 pb-1 text-[11px] font-medium text-subtle', index > 0 ? 'pt-2.5' : 'pt-1')}>{heading}</div>}
@@ -861,7 +882,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
                   onMouseMove={() => { if (index !== mentionIndex) setMentionIndex(index) }}
                   className={cn('flex h-9.5 w-full min-w-0 items-center gap-3 rounded-lg px-3 text-left', index === mentionIndex ? 'bg-hover text-fg' : 'text-muted')}
                 >
-                  <span className="flex w-4 shrink-0 justify-center">{entry.kind === 'file' ? <FileTypeIcon name={entry.name} /> : <Icon size={15} className="text-subtle" />}</span>
+                  <span className="flex w-4 shrink-0 justify-center">{entry.kind === 'model' && entry.brand ? <ModelBrandIcon brand={entry.brand} /> : entry.kind === 'file' ? <FileTypeIcon name={entry.name} /> : <Icon size={15} className="text-subtle" />}</span>
                   <span className="flex min-w-0 flex-1 items-baseline gap-2.5">
                     <span className="max-w-[60%] shrink-0 truncate text-[13px] text-fg">{entry.name}</span>
                     <span className="min-w-0 truncate text-[11.5px] text-subtle">{entry.detail}</span>
@@ -1055,11 +1076,12 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
 
 const EMPTY: Attachment[] = []
 
-/** While the agent works: the step it is on, with the whole plan on hover. */
-/** Round Commit and Commit & Push chips above the box, shown mid-chat while the folder has uncommitted changes. */
-function GitChips({ chat }: { chat: Chat }): ReactNode {
+/** Round chips above the box mid-chat: Continue after a stopped turn, and Commit while the folder has uncommitted changes. */
+function ChatChips({ chat, items }: { chat: Chat; items: Item[] | undefined }): ReactNode {
   const cwd = useStore((s) => chat.worktree?.path ?? s.projects.find((entry) => entry.id === chat.projectId)?.path)
   const [git, setGit] = useState<{ dirty: boolean; hasRemote: boolean } | null>(null)
+  const [committing, setCommitting] = useState<GitCommand | null>(null)
+  const [recheck, setRecheck] = useState(0)
   const idle = chat.status !== 'running' && chat.status !== 'awaiting'
   // Recheck whenever the agent finishes, since a turn may have edited or committed files.
   useEffect(() => {
@@ -1067,23 +1089,34 @@ function GitChips({ chat }: { chat: Chat }): ReactNode {
     let cancelled = false
     void window.galaxy.review.state(cwd).then((value) => { if (!cancelled) setGit(value.isRepo ? value : null) }).catch(() => { if (!cancelled) setGit(null) })
     return () => { cancelled = true }
-  }, [cwd, idle, chat.updatedAt])
-  if (!idle || !git?.dirty) return null
-  const commands: GitCommand[] = git.hasRemote ? ['commit', 'commit-push'] : ['commit']
+  }, [cwd, idle, chat.updatedAt, recheck])
+  if (!idle) return null
+  const last = (items ?? []).findLast((item) => !item.parentId && (item.kind === 'turn' || item.kind === 'user'))
+  const stopped = chat.status === 'error' || last?.kind === 'turn' && !!last.interrupted
+  const commands: GitCommand[] = !git?.dirty ? [] : git.hasRemote ? ['commit', 'commit-push'] : ['commit']
+  if (!stopped && !commands.length) return null
+  const chip = 'flex h-7.5 items-center gap-1.5 rounded-full bg-elev px-3 text-[12.5px] text-fg shadow-composer transition-colors hover:bg-hover'
   return (
     <div className="mb-2 flex items-center gap-2">
+      {stopped && (
+        <button type="button" title="Have the agent pick up where it stopped" onClick={() => void useStore.getState().send('Continue', [], undefined, false, undefined, undefined, chat.id)} className={chip}>
+          <Play size={12.5} />
+          Continue
+        </button>
+      )}
       {commands.map((command) => (
         <button
           key={command}
           type="button"
           title={GIT_COMMANDS[command].detail}
+          disabled={committing !== null}
           onClick={() => {
-            const { text, mentions } = gitCommandMessage(command)
-            void useStore.getState().send(text, [], mentions, false, undefined, undefined, chat.id)
+            setCommitting(command)
+            void runGitCommand(command, chat.id, cwd).finally(() => { setCommitting(null); setRecheck((value) => value + 1) })
           }}
-          className="flex h-8 items-center gap-1.5 rounded-full bg-elev px-3.5 text-[13px] text-fg shadow-composer transition-colors hover:bg-hover"
+          className={chip}
         >
-          <GitCommitHorizontal size={14} style={{ color: 'var(--orange)' }} />
+          {committing === command ? <Spinner size={12} /> : <GitCommitHorizontal size={13.5} />}
           {GIT_COMMANDS[command].label}
         </button>
       ))}
@@ -1091,6 +1124,7 @@ function GitChips({ chat }: { chat: Chat }): ReactNode {
   )
 }
 
+/** While the agent works: the step it is on, with the whole plan on hover. */
 function CurrentTask({ chat, items }: { chat: Chat; items: Item[] | undefined }): ReactNode {
   if (chat.status !== 'running' && chat.status !== 'awaiting') return null
   const list = items ?? []
@@ -1117,9 +1151,9 @@ function CurrentTask({ chat, items }: { chat: Chat; items: Item[] | undefined })
   )
 }
 
-const MENU_HEADINGS: Record<MentionKind, string> = { mode: 'Modes', command: 'Commands', upload: 'Attachments', skill: 'Skills', git: 'Git', browser: 'Tools', mcp: 'MCP servers', terminal: 'Terminals', chat: 'Recent chats', file: 'Files' }
+const MENU_HEADINGS: Record<MentionKind, string> = { model: 'Models', mode: 'Modes', command: 'Commands', upload: 'Attachments', skill: 'Skills', git: 'Tools', browser: 'Tools', mcp: 'MCP servers', terminal: 'Terminals', chat: 'Recent chats', file: 'Files' }
 
-const CHIP_ICON: Record<MentionKind, typeof Globe> = { mode: FileText, command: MessagesSquare, upload: Paperclip, skill: Package, file: FileText, chat: MessageCircle, browser: Globe, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
+const CHIP_ICON: Record<MentionKind, typeof Globe> = { model: Sparkles, mode: FileText, command: MessagesSquare, upload: Paperclip, skill: Package, file: FileText, chat: MessageCircle, browser: Globe, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
 
 /**
  * Draws picked mentions as chips under the transparent textarea text. Each chip keeps
@@ -1149,7 +1183,7 @@ function ComposerChips({ text, mentions }: { text: string; mentions: SelectedMen
   )
 }
 
-type MentionKind = 'mode' | 'command' | 'git' | 'upload' | 'skill' | 'file' | 'chat' | 'browser' | 'mcp' | 'terminal'
+type MentionKind = 'model' | 'mode' | 'command' | 'git' | 'upload' | 'skill' | 'file' | 'chat' | 'browser' | 'mcp' | 'terminal'
 type SelectedMention =
   | { id: string; kind: 'skill'; token: string; name: string; path: string }
   | { id: string; kind: 'file'; token: string; name: string; path: string }
@@ -1162,6 +1196,8 @@ interface MentionEntry {
   id: string
   kind: MentionKind
   mode?: AgentMode
+  modelKey?: string
+  brand?: ModelBrand
   git?: GitCommand
   name: string
   detail: string

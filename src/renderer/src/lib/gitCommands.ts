@@ -1,4 +1,6 @@
 import type { GitCommand, PromptMentions } from '@shared/types'
+import { cleanError } from '../components/Settings'
+import { useStore } from '../store'
 
 export const GIT_COMMANDS: Record<GitCommand, { label: string; detail: string }> = {
   commit: { label: 'Commit', detail: 'Have the agent commit the current changes.' },
@@ -12,11 +14,32 @@ export const gitCommandFor = (label: string): GitCommand | undefined =>
 /** The token a picked git command takes in the message. Like every pick it is "@ name": the chip icon covers the @. */
 export const gitToken = (command: GitCommand): string => `@ ${GIT_COMMANDS[command].label}`
 
-/** A message that asks the agent to run a git command, as if it was picked from the / menu. */
+/** A message that asks the agent to run a git command, as if it was picked from the @ menu. */
 export function gitCommandMessage(command: GitCommand): { text: string; mentions: PromptMentions } {
   const token = gitToken(command)
   return {
     text: token,
     mentions: { skills: [], files: [], chats: [], browser: false, tools: [], git: command, chips: [{ token, kind: 'git', label: GIT_COMMANDS[command].label }] }
+  }
+}
+
+/**
+ * What the Commit buttons do. With Instant commit on, the commit message model writes the
+ * message and the commit happens here; failures open an error dialog. Otherwise the agent is asked.
+ * Without a chat, asking the agent starts a new one.
+ */
+export async function runGitCommand(command: GitCommand, chatId: string | null, cwd: string | undefined): Promise<void> {
+  const state = useStore.getState()
+  if (!state.settings.instantCommit || !cwd) {
+    const { text, mentions } = gitCommandMessage(command)
+    await state.send(text, [], mentions, false, undefined, undefined, chatId)
+    return
+  }
+  try {
+    const result = await window.galaxy.review.instantCommit(cwd, command === 'commit-push')
+    const subject = result.message.split('\n')[0]
+    useStore.getState().notify(result.pushed ? `Committed ${result.hash} and pushed to ${result.pushed.remote}: ${subject}` : `Committed ${result.hash}: ${subject}`)
+  } catch (error) {
+    useStore.setState({ gitError: cleanError(error) })
   }
 }

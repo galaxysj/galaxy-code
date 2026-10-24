@@ -104,7 +104,7 @@ const UserMessage = memo(function UserMessage({ item, chatId }: { item: UserItem
   )
 })
 
-function ErrorDialog({ title, message, onClose }: { title: string; message: string; onClose(): void }): ReactNode {
+export function ErrorDialog({ title, message, onClose }: { title: string; message: string; onClose(): void }): ReactNode {
   return (
     <Modal onClose={onClose} className="w-[420px] max-w-full p-5">
       <div className="flex items-start gap-3">
@@ -368,6 +368,8 @@ function Blocks({ blocks, ctx, running = false, stickyMessages = false }: { bloc
         const item = block.item
         switch (item.kind) {
           case 'user':
+            // An event resuming the agent is not a message from the user.
+            if (item.event) return null
             return <UserMessage key={item.id} item={item} chatId={ctx.chatId} />
           case 'assistant':
             return <AssistantMessage key={item.id} item={item} root={ctx.root} />
@@ -512,6 +514,13 @@ export function Timeline({ chat, items, root }: TimelineProps): ReactNode {
       <div ref={scroller} onScroll={onScroll} className="h-full overflow-y-auto">
         <div className="mx-auto w-full max-w-[780px] px-6 pb-10 pt-4">
           <Blocks blocks={blocks} ctx={ctx} running={chat.status === 'running'} stickyMessages />
+          {chat.resumeAfter && chat.status !== 'running' && (
+            <div className="flex items-center gap-3 py-4 text-[12px] text-subtle">
+              <div className="h-px flex-1 bg-line" />
+              <span className="min-w-0 truncate">Will resume after {chat.resumeAfter}</span>
+              <div className="h-px flex-1 bg-line" />
+            </div>
+          )}
           {chat.reverted && chat.status !== 'running' && <RevertedEditor key={chat.reverted.text} chat={chat} />}
           {chat.status === 'running' && (!expand ? <WorkingIndicator since={lastUser?.ts ?? Date.now()} status={liveStatus(top.slice(lastUser ? top.indexOf(lastUser) + 1 : 0))} /> : !hasActivity && <WorkingIndicator since={lastUser?.ts ?? Date.now()} />)}
         </div>

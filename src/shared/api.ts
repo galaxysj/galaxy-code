@@ -89,7 +89,7 @@ export interface GalaxyApi {
     stop(chatId: string): Promise<void>
     update(
       chatId: string,
-      patch: Partial<Pick<Chat, 'modelKey' | 'effort' | 'ultra' | 'fast' | 'permissionMode' | 'title' | 'acpConfig'>>
+      patch: Partial<Pick<Chat, 'modelKey' | 'effort' | 'ultra' | 'fast' | 'ultrafast' | 'permissionMode' | 'title' | 'acpConfig'>>
     ): Promise<Chat>
     remove(chatId: string): Promise<void>
     markRead(chatId: string): Promise<void>
@@ -158,6 +158,8 @@ export interface GalaxyApi {
     commits(cwd: string): Promise<ReviewCommit[]>
     push(cwd: string): Promise<{ branch: string; remote: string }>
     state(cwd: string): Promise<{ isRepo: boolean; dirty: boolean; hasRemote: boolean }>
+    /** Stages everything, commits with a generated message, and pushes when asked. */
+    instantCommit(cwd: string, push: boolean): Promise<{ hash: string; message: string; pushed: { branch: string; remote: string } | null }>
   }
 
   onChatEvent(listener: (event: ChatEvent) => void): () => void

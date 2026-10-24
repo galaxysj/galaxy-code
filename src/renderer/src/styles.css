@@ -793,3 +793,27 @@
   line-height: 19px;
   padding-left: 4px;
 }
+
+/* One continuous native backdrop under the entire window. Content cards keep
+   their own backgrounds; the sidebar and surrounding gutters share one tint. */
+.app-shell {
+  background: var(--bg-sidebar);
+}
+
+:root[data-sidebar-material] body {
+  background: transparent;
+}
+
+:root[data-sidebar-material] .app-shell {
+  background: rgba(17, 17, 17, 0.32);
+}
+
+:root[data-sidebar-material][data-theme='light'] .app-shell {
+  background: rgba(242, 241, 237, 0.32);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-sidebar-material] .app-shell {
+    background: var(--bg-sidebar);
+  }
+}

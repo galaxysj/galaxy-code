@@ -2,6 +2,10 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHAT_EVENT, IPC_INVOKE, IPC_UI_EVENT, type GalaxyApi } from '@shared/api'
 import type { ChatEvent, UiEvent } from '@shared/types'
 
+// The main process determines native material support for this window.
+const sidebarMaterial = process.argv.find((arg) => arg.startsWith('--galaxy-sidebar-material='))?.split('=')[1]
+contextBridge.exposeInMainWorld('galaxySidebarMaterial', sidebarMaterial ?? 'none')
+
 const call =
   (path: string) =>
   (...args: unknown[]): Promise<never> =>
@@ -97,7 +101,7 @@ const api: GalaxyApi = {
   terminal: {
     create: call('terminal.create'), write: call('terminal.write'), resize: call('terminal.resize'), interrupt: call('terminal.interrupt'), close: call('terminal.close')
   },
-  review: { read: call('review.read'), commits: call('review.commits'), status: call('review.status'), init: call('review.init'), push: call('review.push'), state: call('review.state') },
+  review: { read: call('review.read'), commits: call('review.commits'), status: call('review.status'), init: call('review.init'), push: call('review.push'), state: call('review.state'), instantCommit: call('review.instantCommit') },
   onChatEvent: (listener) => subscribe<ChatEvent>(IPC_CHAT_EVENT, listener),
   onUiEvent: (listener) => subscribe<UiEvent>(IPC_UI_EVENT, listener)
 }

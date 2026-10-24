@@ -12,6 +12,7 @@ class Terminals {
   private output = new Map<string, string>()
   private directories = new Map<string, string>()
   private owners = new Map<string, { chatId: string; itemId: string }[]>()
+  private watchers = new Map<string, Set<(exited: boolean) => void>>()
   emit: (event: UiEvent) => void = () => {}
 
   async create(cwd: string, id = newId('terminal_')): Promise<string> {
@@ -37,6 +38,7 @@ class Terminals {
     const output = (text: string): void => {
       this.output.set(id, ((this.output.get(id) ?? '') + text).slice(-200_000))
       this.emit({ type: 'terminal-output', tabId: id, text })
+      for (const watcher of this.watchers.get(id) ?? []) watcher(false)
     }
     child.onData(output)
     child.onExit(({ exitCode }) => {
@@ -46,6 +48,7 @@ class Terminals {
       const text = `\n[Process exited ${exitCode}]\n`
       this.output.set(id, ((this.output.get(id) ?? '') + text).slice(-200_000))
       this.emit({ type: 'terminal-output', tabId: id, text, exited: true })
+      for (const watcher of this.watchers.get(id) ?? []) watcher(true)
     })
     return id
   }
@@ -53,6 +56,13 @@ class Terminals {
     const child = this.sessions.get(id)
     if (!child) throw new Error('This terminal has exited. Open a new terminal.')
     child.write(text)
+  }
+  /** Calls back on new output, and with true when the process exits. Returns a function that stops watching. */
+  watch(id: string, listener: (exited: boolean) => void): () => void {
+    const watchers = this.watchers.get(id) ?? new Set()
+    this.watchers.set(id, watchers)
+    watchers.add(listener)
+    return () => { watchers.delete(listener) }
   }
   read(id: string): string { return this.output.get(id) ?? '' }
   resize(id: string, cols: number, rows: number): void {
@@ -98,6 +108,9 @@ class Terminals {
     this.output.delete(id)
     this.directories.delete(id)
     this.owners.delete(id)
+    const watchers = this.watchers.get(id)
+    this.watchers.delete(id)
+    for (const watcher of watchers ?? []) watcher(true)
     if (!child) return
     try { child.kill() } catch { /* The shell may already have exited. */ }
   }

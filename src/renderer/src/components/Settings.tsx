@@ -16,7 +16,7 @@ import {
   Trash2,
   UserRound
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type ReactNode, type SelectHTMLAttributes } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   ACCOUNT_LABELS,
   ACP_ACCOUNTS,
@@ -39,11 +39,11 @@ import {
   type UsageWindow
 } from '@shared/types'
 import { AcpAgents } from '@shared/acp-registry'
-import { CompletionModel, InlineModel } from '@shared/models'
+import { CommitMessageModel, CompletionModel, InlineModel } from '@shared/models'
 import { cn, tildify } from '../lib/utils'
 import { useStore, type SettingsSection } from '../store'
 import { SUBSCRIPTION_LABELS } from './ModelPicker'
-import { Button, IconButton, Segmented, Spinner, Switch, TextInput } from './ui'
+import { Button, Dropdown, IconButton, Segmented, Spinner, Switch, TextInput, type DropdownOption } from './ui'
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu }[] = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
@@ -87,15 +87,8 @@ function RowItem({ label, hint, children }: { label: ReactNode; hint?: ReactNode
   )
 }
 
-function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>): ReactNode {
-  return (
-    <select
-      className={cn('h-7.5 max-w-[240px] rounded-md border border-line-strong bg-inset px-2 text-[12.5px] text-fg focus:border-fg/40', className)}
-      {...rest}
-    >
-      {children}
-    </select>
-  )
+function Select<T extends string>({ className, ...rest }: { label: string; value: T; options: DropdownOption<T>[]; onChange(value: T): void; className?: string }): ReactNode {
+  return <Dropdown placement="bottom-end" className={cn('h-7.5! max-w-[240px] border border-line-strong bg-inset! text-[12.5px]! hover:bg-hover!', className)} {...rest} />
 }
 
 function cleanError(err: unknown): string {
@@ -143,23 +136,50 @@ function GeneralSection(): ReactNode {
             <Switch checked={settings.foldWork} onChange={(foldWork) => void update({ foldWork })} label="Fold finished work" />
           </RowItem>
           <RowItem label="Tool output" hint="Controls command output and file edit previews. Click a tool to expand its output.">
-            <Select value={settings.terminalOutput} onChange={(event) => void update({ terminalOutput: event.target.value as TerminalOutputMode })}>
-              <option value="collapsed">Always collapsed</option>
-              <option value="foreground">Expand while running</option>
-              <option value="preview">Always show a scrolling preview</option>
-            </Select>
+            <Select<TerminalOutputMode>
+              label="Terminal output"
+              value={settings.terminalOutput}
+              onChange={(value) => void update({ terminalOutput: value })}
+              options={[
+                { value: 'collapsed', label: 'Always collapsed' },
+                { value: 'foreground', label: 'Expand while running' },
+                { value: 'preview', label: 'Always show a scrolling preview' }
+              ]}
+            />
           </RowItem>
+        </Card>
+      </Section>
+      <Section title="Git">
+        <Card>
+          <RowItem label="Instant commit" hint="Commit and Commit &amp; Push commit right away with a message written by the model below, instead of asking the agent. Mentioning @Commit still asks the agent.">
+            <Switch checked={settings.instantCommit} onChange={(instantCommit) => void update({ instantCommit })} label="Instant commit" />
+          </RowItem>
+          {settings.instantCommit && (
+            <RowItem label="Commit message model" hint="Runs on your OpenRouter key.">
+              <Select
+                label="Commit message model"
+                value={CommitMessageModel.some((m) => m.ID === settings.commitMessageModelId) ? (settings.commitMessageModelId as string) : CommitMessageModel[0].ID}
+                onChange={(value) => void update({ commitMessageModelId: value })}
+                options={CommitMessageModel.map((model) => ({ value: model.ID, label: model.DisplayName }))}
+              />
+            </RowItem>
+          )}
         </Card>
       </Section>
       <Section title="Permissions" description="How new chats start. You can change the mode for any chat from the message box.">
         <Card>
           <RowItem label="Default permission mode">
-            <Select value={settings.defaultPermissionMode} onChange={(event) => void update({ defaultPermissionMode: event.target.value as PermissionMode })}>
-              <option value="auto">Auto</option>
-              <option value="ask">Ask for Approval</option>
-              <option value="accept-edits">Accept Edits</option>
-              <option value="full">Full Access</option>
-            </Select>
+            <Select<PermissionMode>
+              label="Default permission mode"
+              value={settings.defaultPermissionMode}
+              onChange={(value) => void update({ defaultPermissionMode: value })}
+              options={[
+                { value: 'auto', label: 'Auto' },
+                { value: 'ask', label: 'Ask for Approval' },
+                { value: 'accept-edits', label: 'Accept Edits' },
+                { value: 'full', label: 'Full Access' }
+              ]}
+            />
           </RowItem>
           <RowItem
             label="Auto approval model"
@@ -242,13 +262,7 @@ function ModelsSection(): ReactNode {
       <Section title="Image generation" description="The model the ImageGeneration tool uses.">
         <Card>
           <RowItem label="Image Generation Model">
-            <Select value={imageKey} onChange={(event) => void update({ imageModelKey: event.target.value })}>
-              {imageModels.map((model) => (
-                <option key={model.key} value={model.key}>
-                  {model.name}
-                </option>
-              ))}
-            </Select>
+            <Select label="Image model" value={imageKey} onChange={(value) => void update({ imageModelKey: value })} options={imageModels.map((model) => ({ value: model.key, label: model.name }))} />
           </RowItem>
         </Card>
       </Section>
@@ -260,27 +274,19 @@ function ModelsSection(): ReactNode {
           </RowItem>
           <RowItem label="Completion model">
             <Select
+              label="Completion model"
               value={CompletionModel.some((m) => m.ID === settings.completionModelId) ? (settings.completionModelId as string) : CompletionModel[0].ID}
-              onChange={(event) => void update({ completionModelId: event.target.value })}
-            >
-              {CompletionModel.map((model) => (
-                <option key={model.ID} value={model.ID}>
-                  {model.DisplayName}
-                </option>
-              ))}
-            </Select>
+              onChange={(value) => void update({ completionModelId: value })}
+              options={CompletionModel.map((model) => ({ value: model.ID as string, label: model.DisplayName }))}
+            />
           </RowItem>
           <RowItem label="Inline edit model" hint="Ctrl+I in the editor. The edit box can switch it too.">
             <Select
+              label="Inline edit model"
               value={InlineModel.some((m) => m.ID === settings.inlineModelId) ? (settings.inlineModelId as string) : InlineModel[0].ID}
-              onChange={(event) => void update({ inlineModelId: event.target.value })}
-            >
-              {InlineModel.map((model) => (
-                <option key={model.ID} value={model.ID}>
-                  {model.DisplayName}
-                </option>
-              ))}
-            </Select>
+              onChange={(value) => void update({ inlineModelId: value })}
+              options={InlineModel.map((model) => ({ value: model.ID as string, label: model.DisplayName }))}
+            />
           </RowItem>
         </Card>
       </Section>
@@ -319,13 +325,13 @@ function ModelsSection(): ReactNode {
               </label>
               <label className="flex items-center gap-3">
                 <span className="w-24 shrink-0 text-[12px] text-muted">Subscription</span>
-                <Select value={subscription} onChange={(event) => setSubscription(event.target.value as Subscription)} className="max-w-none flex-1">
-                  {MODEL_SUBSCRIPTIONS.map((sub) => (
-                    <option key={sub} value={sub}>
-                      {sub === 'Default' ? 'Default (OpenRouter)' : (SUBSCRIPTION_LABELS[sub] ?? sub)}
-                    </option>
-                  ))}
-                </Select>
+                <Select<Subscription>
+                  label="Subscription"
+                  value={subscription}
+                  onChange={setSubscription}
+                  className="max-w-none flex-1"
+                  options={MODEL_SUBSCRIPTIONS.map((sub) => ({ value: sub, label: sub === 'Default' ? 'Default (OpenRouter)' : (SUBSCRIPTION_LABELS[sub] ?? sub) }))}
+                />
               </label>
             </div>
             <div className="mt-4 flex justify-end gap-2">
@@ -726,6 +732,13 @@ function AccountList({ ids, off = false }: { ids: AccountId[]; off?: boolean }):
   const [editing, setEditing] = useState<AccountId | null>(null)
   const [path, setPath] = useState('')
   const [signingIn, setSigningIn] = useState<AccountId | null>(null)
+
+  // Terminal sign-ins finish outside the app, so check again when the user comes back.
+  useEffect(() => {
+    const onFocus = (): void => void refresh()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [refresh])
 
   const patchAccount = async (id: AccountId, patch: Partial<{ enabled: boolean; binaryPath: string }>): Promise<void> => {
     await update({ accounts: { ...settings.accounts, [id]: { ...settings.accounts[id], ...patch } } })
@@ -1270,14 +1283,13 @@ function SkillsSection(): ReactNode {
         action={
           <div className="flex items-center gap-1.5">
             {projects.length > 0 && (
-              <Select value={projectId ?? ''} onChange={(event) => setProjectId(event.target.value || null)} className="max-w-[160px]">
-                <option value="">No project</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </Select>
+              <Select
+                label="Project"
+                value={projectId ?? ''}
+                onChange={(value) => setProjectId(value || null)}
+                className="max-w-[160px]"
+                options={[{ value: '', label: 'No project' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
+              />
             )}
             <IconButton label="Rescan" onClick={load}>
               <RefreshCw size={13} />

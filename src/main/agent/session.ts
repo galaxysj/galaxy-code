@@ -20,6 +20,7 @@ import type {
 import { recordUsage } from '../services/analytics'
 import { store, type ChatDoc } from '../store'
 import { newId } from '../util'
+import type { PendingEvent } from '../tools/events'
 import type { AgentTeam } from './team'
 
 export interface Turn {
@@ -31,6 +32,8 @@ export interface Turn {
   effort: Effort | null
   ultra: boolean
   fast: boolean
+  /** Ultrafast tier. Only set when fast is. */
+  ultrafast: boolean
   permissionMode: PermissionMode
   /** Ask or Plan keeps the turn read-only. Native engine only. */
   mode?: AgentMode
@@ -48,6 +51,10 @@ type EmitUi = (event: UiEvent) => void
 /** Live state of one chat: its timeline, pending prompts, and the run in flight. */
 export class Session {
   team: AgentTeam | null = null
+  /** Triggers set by the Event tool this turn. The chat listens for them once the turn ends. */
+  events: PendingEvent[] = []
+  /** Stops listening for events, when the chat is. */
+  stopListening: ((abortWork: boolean) => void) | null = null
   agentId = 'main'
   readonly doc: ChatDoc
   controller: AbortController | null = null
@@ -254,9 +261,11 @@ export class Session {
   }
 
   /** Marks anything still live as finished so the UI stops spinning. */
-  settle(interrupted: boolean): void {
+  /** Ends everything still streaming or running, except what `keep` holds, such as subagents left running in the background. */
+  settle(interrupted: boolean, keep?: (item: Item) => boolean): void {
     this.flushDeltas()
     for (const item of this.doc.items) {
+      if (keep?.(item)) continue
       if ((item.kind === 'assistant' || item.kind === 'reasoning') && item.streaming) {
         this.update(item.id, { streaming: false, ...(item.kind === 'reasoning' ? { endedAt: Date.now() } : {}) })
       } else if (item.kind === 'tool' && (item.status === 'running' || item.status === 'pending' || item.status === 'awaiting')) {

@@ -35,6 +35,8 @@ export interface Draft {
   effort: Effort | null
   ultra: boolean
   fast: boolean
+  /** With fast on, runs at the Ultrafast tier. */
+  ultrafast: boolean
   permissionMode: PermissionMode
   /** Values picked for an ACP agent's session options, by option id. */
   acpConfig?: Record<string, string>
@@ -97,6 +99,7 @@ interface Prefs {
   efforts: Record<string, Effort>
   ultra: Record<string, boolean>
   fast: Record<string, boolean>
+  ultrafast: Record<string, boolean>
   /** Last values picked per ACP agent, so new chats start where the user left off. */
   acp: Record<string, Record<string, string>>
   lastProjectId: string | null
@@ -106,9 +109,9 @@ const PREFS_KEY = 'galaxy.prefs'
 
 function loadPrefs(): Prefs {
   try {
-    return { models: {}, efforts: {}, ultra: {}, fast: {}, acp: {}, lastProjectId: null, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') }
+    return { models: {}, efforts: {}, ultra: {}, fast: {}, ultrafast: {}, acp: {}, lastProjectId: null, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') }
   } catch {
-    return { models: {}, efforts: {}, ultra: {}, fast: {}, acp: {}, lastProjectId: null }
+    return { models: {}, efforts: {}, ultra: {}, fast: {}, ultrafast: {}, acp: {}, lastProjectId: null }
   }
 }
 
@@ -166,6 +169,8 @@ interface State {
   chatPanels: Record<string, ChatPanel>
   settingsOpen: SettingsSection | null
   toast: { id: number; text: string; tone: 'info' | 'error' } | null
+  /** An Instant commit failure, shown in a dialog. */
+  gitError: string | null
 
   init(): Promise<void>
   selectChat(chatId: string | null): void
@@ -177,7 +182,7 @@ interface State {
   refreshAccounts(): Promise<void>
   loadAcpOptions(agentId: string, fresh?: boolean, chatId?: string | null): Promise<void>
   setAcpOption(optionId: string, value: string, chatId?: string | null): void
-  setRunOptions(patch: { effort?: Effort | null; ultra?: boolean; fast?: boolean }, chatId?: string | null): void
+  setRunOptions(patch: { effort?: Effort | null; ultra?: boolean; fast?: boolean; ultrafast?: boolean }, chatId?: string | null): void
   setPermissionMode(mode: PermissionMode, chatId?: string | null): void
   send(text: string, attachments: Attachment[], mentions?: PromptMentions, steer?: boolean, mode?: AgentMode, plan?: string, chatId?: string | null): Promise<void>
   updateSettings(patch: Partial<Settings>): Promise<void>
@@ -221,6 +226,7 @@ function draftFor(models: ResolvedModel[], settings: Settings, projectId: string
     effort: model ? normalizeEffort(model, prefs.efforts[key] ?? null) : null,
     ultra: !!model?.ultraEffort && prefs.ultra[key] === true,
     fast: !!model?.fastMode && prefs.fast[key] === true,
+    ultrafast: !!model?.ultrafastMode && prefs.ultrafast[key] === true,
     permissionMode: settings.defaultPermissionMode,
     acpConfig: acpPrefs(model?.subscription)
   }
@@ -433,7 +439,7 @@ export const useStore = create<State>((set, get) => {
     terminalOutput: {},
 
     activeChatId: null,
-    draft: { projectId: null, workspace: 'local', modelKey: '', effort: null, ultra: false, fast: false, permissionMode: 'auto' },
+    draft: { projectId: null, workspace: 'local', modelKey: '', effort: null, ultra: false, fast: false, ultrafast: false, permissionMode: 'auto' },
     composerText: {},
     composerAttachments: {},
     composerMode: {},
@@ -449,6 +455,7 @@ export const useStore = create<State>((set, get) => {
     chatPanels: {},
     settingsOpen: null,
     toast: null,
+    gitError: null,
 
     setActivityCollapsed(key, collapsed) {
       set((s) => ({ activityCollapsed: { ...s.activityCollapsed, [key]: collapsed } }))
@@ -540,6 +547,7 @@ export const useStore = create<State>((set, get) => {
         effort: normalizeEffort(model, prefs.efforts[modelKey] ?? null),
         ultra: !!model.ultraEffort && prefs.ultra[modelKey] === true,
         fast: model.fastMode && prefs.fast[modelKey] === true,
+        ultrafast: model.ultrafastMode && prefs.ultrafast[modelKey] === true,
         acpConfig: acpPrefs(model.subscription)
       }
       if (id) {
@@ -577,7 +585,7 @@ export const useStore = create<State>((set, get) => {
           const model = findModel(s.models, s.draft.modelKey)
           if (model && !subscriptions.includes(model.subscription)) {
             const draft = draftFor(s.models.filter((entry) => subscriptions.includes(entry.subscription)), s.settings, s.draft.projectId)
-            set({ draft: { ...s.draft, modelKey: draft.modelKey, effort: draft.effort, ultra: draft.ultra, fast: draft.fast } })
+            set({ draft: { ...s.draft, modelKey: draft.modelKey, effort: draft.effort, ultra: draft.ultra, fast: draft.fast, ultrafast: draft.ultrafast } })
           }
         } catch {
           // A failed check must not leave stale signed-in providers selectable.
@@ -628,6 +636,7 @@ export const useStore = create<State>((set, get) => {
       if (patch.effort) prefs.efforts[key] = patch.effort
       if (patch.ultra !== undefined) prefs.ultra[key] = patch.ultra
       if (patch.fast !== undefined) prefs.fast[key] = patch.fast
+      if (patch.ultrafast !== undefined) prefs.ultrafast[key] = patch.ultrafast
       savePrefs(prefs)
       if (chat) void window.galaxy.chats.update(chat.id, patch)
       else set({ draft: { ...s.draft, ...patch } })
@@ -825,6 +834,7 @@ export const useStore = create<State>((set, get) => {
           effort: config.effort,
           ultra: false,
           fast: config.fast,
+          ultrafast: config.ultrafast,
           permissionMode: config.permissionMode,
           workspace: 'local',
           ...(config.acpConfig ? { acpConfig: config.acpConfig } : {}),
@@ -902,6 +912,7 @@ export function useRunConfig(): {
   effort: Effort | null
   ultra: boolean
   fast: boolean
+  ultrafast: boolean
   permissionMode: PermissionMode
   /** Set when the model is an ACP agent, whose own session options replace effort and Fast. */
   acp: { agentId: string; options: AcpConfigOption[]; values: Record<string, string>; loading: boolean; error: string | null } | null
@@ -924,6 +935,7 @@ export function useRunConfig(): {
     effort: model ? normalizeEffort(model, source.effort) : null,
     ultra: !!model?.ultraEffort && source.ultra,
     fast: !!model?.fastMode && source.fast,
+    ultrafast: !!model?.ultrafastMode && source.fast && source.ultrafast === true,
     permissionMode: source.permissionMode,
     acp: agentId
       ? {

@@ -1,5 +1,7 @@
 import { shell } from 'electron'
 import { execFile } from 'node:child_process'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { ACCOUNT_LABELS, ACP_ACCOUNTS, type AccountId, type AccountStatus } from '@shared/types'
 import { acpAgent, acpBaseEnv, acpBinary, acpLaunch } from '../engines/acp'
 import { codexBinary, startCodexProcess } from '../engines/codex'
@@ -47,13 +49,32 @@ async function authState(id: AccountId, binary: string): Promise<{ authenticated
   return { authenticated: null, detail: null }
 }
 
+/** The Antigravity CLI the adapter drives, found the way agy-acp looks for it. */
+async function agyBinary(): Promise<string | null> {
+  if (process.env.AGY_BIN) return which(process.env.AGY_BIN)
+  return (await which(process.platform === 'win32' ? 'agy.exe' : 'agy')) ?? which(join(homedir(), '.local', 'bin', 'agy'))
+}
+
+/** Probes `agy models` directly, as the adapter does, without launching or downloading the adapter. */
+async function antigravityAuth(): Promise<{ version: string | null; authenticated: boolean | null; detail: string | null }> {
+  const agy = await agyBinary()
+  if (!agy) return { version: null, authenticated: null, detail: 'Unofficial adapter' }
+  const [ver, result] = await Promise.all([version(agy), run(agy, ['models'], { timeout: 20000 })])
+  const text = result.stdout + result.stderr
+  if (/not logged into antigravity|not logged in|authentication required|please log in|login required/i.test(text)) {
+    return { version: ver, authenticated: false, detail: null }
+  }
+  const signedIn = result.code === 0 && result.stdout.split('\n').some((line) => line.includes('\t'))
+  return { version: ver, authenticated: signedIn ? true : null, detail: signedIn ? 'Signed in · unofficial adapter' : 'Unofficial adapter' }
+}
+
 export async function accountStatuses(): Promise<AccountStatus[]> {
   return Promise.all(
     ['claude', 'codex', ...ACP_ACCOUNTS].map(async (id): Promise<AccountStatus> => {
       const binary = await binaryFor(id)
       if (!binary) return { id, installed: false, binary: null, version: null, authenticated: null, detail: null }
       // Do not launch/download the unofficial adapter during background status checks.
-      if (id === 'antigravity') return { id, installed: true, binary, version: null, authenticated: null, detail: 'Unofficial adapter' }
+      if (id === 'antigravity') return { id, installed: true, binary, ...(await antigravityAuth()) }
       const [ver, auth] = await Promise.all([version(binary), authState(id, binary)])
       return { id, installed: true, binary, version: ver, ...auth }
     })

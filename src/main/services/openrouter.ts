@@ -95,6 +95,8 @@ export interface StreamRequest {
   tools?: ChatToolSpec[]
   effort?: string | null
   fast?: boolean
+  /** With fast, asks for the Ultrafast tier. */
+  ultrafast?: boolean
   signal: AbortSignal
   onText(delta: string): void
   onReasoning(delta: string): void
@@ -164,7 +166,7 @@ export async function streamChat(req: StreamRequest): Promise<StreamResult> {
   }
   if (req.effort) body.reasoning = req.effort === 'none' ? { effort: 'none', exclude: true } : { effort: req.effort }
   if (req.fast) {
-    body.service_tier = 'priority'
+    body.service_tier = req.ultrafast ? 'ultrafast' : 'priority'
     body.provider = { sort: 'throughput' }
   }
 
@@ -179,9 +181,10 @@ export async function streamChat(req: StreamRequest): Promise<StreamResult> {
     })
     if (res.ok) break
     lastError = await readError(res)
-    // A rejected fast tier should not sink the request; retry at normal speed.
+    // A rejected fast tier should not sink the request; step down to Fast, then normal speed.
     if (res.status === 400 && req.fast && body.service_tier) {
-      delete body.service_tier
+      if (body.service_tier === 'ultrafast') body.service_tier = 'priority'
+      else delete body.service_tier
       continue
     }
     const retryable = res.status === 429 || res.status === 408 || res.status >= 500

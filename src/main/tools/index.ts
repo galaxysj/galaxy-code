@@ -18,6 +18,8 @@ import {
   webSearchTool
 } from './galaxy'
 import { parseEditPatch, patchFiles } from './patch'
+import { eventTool, waitTool } from './events'
+import { lintTool } from './lint'
 import { bashTool } from './shell'
 import { terminalTool } from './terminal'
 import { str, ToolInputError, type ToolContext, type ToolDef, type ToolResult } from './types'
@@ -88,13 +90,14 @@ export const messageTool: ToolDef = {
   }
 }
 
-const EXPLORE_TOOLS: ToolDef[] = [readTool, grepTool, globTool, listTool, webSearchTool, webFetchTool]
+const EXPLORE_TOOLS: ToolDef[] = [readTool, grepTool, globTool, listTool, lintTool, waitTool, webSearchTool, webFetchTool]
 
 /** Every built-in tool, in the order the model sees them. */
 export const ALL_TOOLS: ToolDef[] = [
   ...EXPLORE_TOOLS,
   bashTool,
   terminalTool,
+  eventTool,
   editTool,
   createTool,
   browserTool,
@@ -110,7 +113,7 @@ export const ALL_TOOLS: ToolDef[] = [
 ]
 
 /** Tools Galaxy Code lends to account CLIs. */
-export const BRIDGE_TOOLS: ToolDef[] = [agentTool, messageTool, editTool, terminalTool, browserTool, listTabsTool, askTool, taskTool, presentTool, openTool, memoryTool, imageGenerationTool]
+export const BRIDGE_TOOLS: ToolDef[] = [agentTool, messageTool, editTool, lintTool, waitTool, eventTool, terminalTool, browserTool, listTabsTool, askTool, taskTool, presentTool, openTool, memoryTool, imageGenerationTool]
 
 /** Where Plan mode keeps its plans, relative to the working directory. */
 export const PLANS_DIR = join('.galaxy', 'plans')

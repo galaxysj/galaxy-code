@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, nativeImage, nativeTheme, shell, type MenuItemConstructorOptions } from 'electron'
 import { join } from 'node:path'
+import { release } from 'node:os'
 import type { UiEvent } from '@shared/types'
 import { manager } from './agent/manager'
 import { disposeAllAcp } from './engines/acp'
@@ -41,6 +42,10 @@ function backgroundColor(): string {
   return dark ? '#141414' : '#f7f7f6'
 }
 
+// Mica is supported starting with Windows 11 build 22000.
+const sidebarMaterial = process.platform === 'darwin' ? 'blur'
+  : process.platform === 'win32' && Number(release().split('.')[2]) >= 22000 ? 'mica' : 'none'
+
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1360,
@@ -49,12 +54,15 @@ function createWindow(): void {
     minHeight: 560,
     show: false,
     title: 'Galaxy Code',
-    backgroundColor: backgroundColor(),
+    backgroundColor: sidebarMaterial === 'none' ? backgroundColor() : '#00000000',
+    ...(sidebarMaterial === 'blur' ? { vibrancy: 'sidebar' as const, visualEffectState: 'followWindow' as const } : {}),
+    ...(sidebarMaterial === 'mica' ? { backgroundMaterial: 'mica' as const } : {}),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 16, y: 17 },
     icon: iconPath,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
+      additionalArguments: [`--galaxy-sidebar-material=${sidebarMaterial}`],
       contextIsolation: true,
       sandbox: false,
       nodeIntegration: false,

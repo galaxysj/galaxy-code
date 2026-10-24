@@ -57,6 +57,8 @@ function defaultSettings(): Settings {
     tabCompletion: true,
     completionModelId: null,
     inlineModelId: null,
+    instantCommit: false,
+    commitMessageModelId: null,
     openRouterBaseUrl: 'https://openrouter.ai/api/v1',
     accounts,
     acpEnabled: true,

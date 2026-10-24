@@ -29,6 +29,7 @@ import { generateTitle, MissingKeyError } from '../services/openrouter'
 import { store } from '../store'
 import { errorMessage, isAbortError, newId, oneLine, truncateMiddle } from '../util'
 import { Session, type Turn } from './session'
+import type { PendingEvent } from '../tools/events'
 import { AgentTeam } from './team'
 
 class ChatManager {
@@ -51,6 +52,8 @@ class ChatManager {
         (event) => this.emitChat(event),
         (event) => this.emitUi(event)
       )
+      // Listeners do not survive a restart.
+      if (chat.resumeAfter) session.patchChat({ resumeAfter: null })
       this.sessions.set(chatId, session)
     }
     return session
@@ -72,6 +75,7 @@ class ChatManager {
       modelKey: parent.modelKey,
       effort: parent.effort,
       fast: parent.fast,
+      ultrafast: parent.ultrafast,
       permissionMode: parent.permissionMode,
       acpConfig: parent.acpConfig ? { ...parent.acpConfig } : undefined
     }
@@ -88,6 +92,7 @@ class ChatManager {
       effort: input.effort,
       ultra: input.ultra,
       fast: input.fast,
+      ultrafast: input.ultrafast === true,
       permissionMode: input.permissionMode,
       workspace: input.projectId ? input.workspace : 'local',
       worktree: null,
@@ -151,6 +156,7 @@ class ChatManager {
     if (patch.effort !== undefined) allowed.effort = patch.effort
     if (patch.ultra !== undefined) allowed.ultra = patch.ultra
     if (patch.fast !== undefined) allowed.fast = patch.fast
+    if (patch.ultrafast !== undefined) allowed.ultrafast = patch.ultrafast
     if (patch.acpConfig !== undefined) allowed.acpConfig = { ...(session.chat.acpConfig ?? {}), ...patch.acpConfig }
     if (patch.modelKey !== undefined && patch.modelKey !== session.chat.modelKey) {
       // Another agent's options mean nothing here.
@@ -204,6 +210,8 @@ class ChatManager {
 
   async stop(chatId: string): Promise<void> {
     const session = this.sessions.get(chatId)
+    // Stopping a chat that waits for an event ends the wait and the subagents it waited for.
+    session?.stopListening?.(true)
     if (!session?.controller) return
     // Stopping also drops anything waiting behind the current turn.
     if (session.chat.queued.length) session.patchChat({ queued: [] })
@@ -215,6 +223,8 @@ class ChatManager {
     const session = this.session(input.chatId)
     const text = input.text.trim()
     if (!text && input.attachments.length === 0) return
+    // The user speaking again replaces any event the agent was waiting for.
+    session.stopListening?.(false)
     // A new message starts from the reverted point; the undone turns can no longer be redone.
     if (session.chat.reverted || session.doc.engine.undone) {
       delete session.doc.engine.undone
@@ -344,7 +354,36 @@ class ChatManager {
     return runAcp(account, session, turn)
   }
 
-  private async runTurn(session: Session, text: string, attachments: SendInput['attachments'], mentions: PromptMentions = { skills: [], files: [], chats: [], browser: false, tools: [] }, extra: { mode?: AgentMode; plan?: string } = {}): Promise<void> {
+  /**
+   * After a turn that set events: shows "Will resume after …" and waits. The first event
+   * to fire resumes the agent with what happened; the others are dropped.
+   */
+  private listen(session: Session, events: PendingEvent[], work: { team: AgentTeam; controller: AbortController } | null): void {
+    let done = false
+    const stops: (() => void)[] = []
+    const end = (): void => {
+      done = true
+      for (const stop of stops) stop()
+      session.stopListening = null
+      session.patchChat({ resumeAfter: null })
+    }
+    session.stopListening = (abortWork) => {
+      if (done) return
+      end()
+      if (abortWork) work?.controller.abort()
+    }
+    session.patchChat({ resumeAfter: events.map((event) => event.label).join(' or ') })
+    for (const event of events) {
+      if (done) break
+      stops.push(event.start((detail) => {
+        if (done) return
+        end()
+        void this.runTurn(session, `The event you set fired: ${event.label}.\n\n${detail}\n\nContinue the task.`, [], undefined, { event: event.label })
+      }))
+    }
+  }
+
+  private async runTurn(session: Session, text: string, attachments: SendInput['attachments'], mentions: PromptMentions = { skills: [], files: [], chats: [], browser: false, tools: [] }, extra: { mode?: AgentMode; plan?: string; event?: string } = {}): Promise<void> {
     const chat = session.chat
     // Ask and Plan are only enforced by Galaxy Code's own tools.
     const mode = extra.mode && findModel(this.models(), chat.modelKey)?.subscription === 'Default' ? extra.mode : undefined
@@ -354,7 +393,8 @@ class ChatManager {
     const isFirst = !session.doc.items.some((item) => item.kind === 'user')
 
     session.lastUserText = text
-    const userItem = session.add<UserItem>({ kind: 'user', text, attachments, prompt: mentions, ...(mentions.chips?.length ? { mentions: mentions.chips } : {}), ...(mode ? { mode } : {}), ...(extra.plan ? { plan: extra.plan } : {}) })
+    session.events = []
+    const userItem = session.add<UserItem>({ kind: 'user', text, ...(extra.event ? { event: extra.event } : {}), attachments, prompt: mentions, ...(mentions.chips?.length ? { mentions: mentions.chips } : {}), ...(mode ? { mode } : {}), ...(extra.plan ? { plan: extra.plan } : {}) })
     // Earlier conversation for an agent whose session was reset by a revert.
     const replay = session.doc.engine.replay ? replayTranscript(session.doc.items.slice(0, -1)) : ''
     const parent = this.parentContext(session)
@@ -385,13 +425,15 @@ class ChatManager {
         effort: effectiveEffort(model, normalizeEffort(model, chat.effort), ultra),
         ultra,
         fast: chat.fast && model.fastMode,
+        ultrafast: chat.fast && chat.ultrafast === true && model.ultrafastMode,
         permissionMode: chat.permissionMode,
         mode,
         signal: controller.signal
       }
       session.team = new AgentTeam(session, turn, (worker, workerTurn) => this.runEngine(worker, workerTurn))
       await this.runEngine(session, turn)
-      await session.team.wait()
+      // Subagents an event waits for may outlive the turn.
+      if (!session.events.some((event) => event.keepsTeam)) await session.team.wait()
     } catch (err) {
       if (!controller.signal.aborted && !isAbortError(err)) {
         failed = true
@@ -399,13 +441,20 @@ class ChatManager {
         session.notice('error', message)
       }
     } finally {
-      await session.team?.wait()
+      const events = controller.signal.aborted || failed ? [] : session.events
+      session.events = []
+      const team = session.team
+      const background = !!team && events.some((event) => event.keepsTeam) && team.hasRunning()
+      if (!background) await team?.wait()
       browser.finishRun(session.id)
-      session.team?.close()
+      if (background) void team!.wait().then(() => team!.close())
+      else team?.close()
       session.team = null
       const interrupted = controller.signal.aborted
       session.cancelPending()
-      session.settle(interrupted)
+      // Subagents left running keep their items live.
+      const running = background ? team!.runningIds() : null
+      session.settle(interrupted, running ? (item) => running.has(item.id) || !!item.parentId && running.has(item.parentId) : undefined)
       const mark = session.doc.engine.checkpoints?.[userItem.id]
       if (mark) {
         const after = await this.checkpoint(session)
@@ -421,6 +470,8 @@ class ChatManager {
       if (next && (next.steer || (!interrupted && !failed))) {
         session.patchChat({ queued: session.chat.queued.slice(1) })
         void this.runTurn(session, next.text, next.attachments, next.mentions, { mode: next.mode, plan: next.plan })
+      } else if (events.length) {
+        this.listen(session, events, background ? { team: team!, controller } : null)
       }
     }
   }

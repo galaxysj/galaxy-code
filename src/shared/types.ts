@@ -1,5 +1,5 @@
 import { AcpAgents, type AcpAgentSpec } from './acp-registry'
-import type { Effort, Subscription } from './models'
+import type { Effort, ModelBrand, Subscription } from './models'
 
 export type { Effort, Subscription }
 
@@ -18,6 +18,7 @@ export type ChatStatus = 'idle' | 'running' | 'awaiting' | 'error'
 
 /** A model as the UI and engines see it: built-in or user-defined, flattened. */
 export interface ResolvedModel {
+  brand?: ModelBrand
   /** Stable key: `${subscription}:${id}`. */
   key: string
   name: string
@@ -27,6 +28,8 @@ export interface ResolvedModel {
   defaultEffort: Effort | null
   ultraEffort: Effort | null
   fastMode: boolean
+  /** Offers Ultrafast above Fast. Only true when fastMode is. */
+  ultrafastMode: boolean
   vision: boolean
   custom: boolean
   enabled: boolean
@@ -156,6 +159,10 @@ export interface Settings {
   completionModelId: string | null
   /** ID from InlineModel in models.ts, the last one picked in the Ctrl+I box. */
   inlineModelId: string | null
+  /** Commit buttons commit at once with a generated message instead of asking the agent. */
+  instantCommit: boolean
+  /** ID from CommitMessageModel in models.ts. */
+  commitMessageModelId: string | null
   openRouterBaseUrl: string
   accounts: Record<AccountId, AccountSettings>
   /** Master switch for the agents reached over the Agent Client Protocol. */
@@ -197,6 +204,8 @@ export interface ChatUsage {
 }
 
 export interface Chat {
+  /** While the chat listens for Event triggers: what it will resume after. */
+  resumeAfter?: string | null
   /** Immutable subscription chosen when this chat was created. */
   initialSubscription?: Subscription
   id: string
@@ -210,6 +219,8 @@ export interface Chat {
   effort: Effort | null
   ultra: boolean
   fast: boolean
+  /** With fast on, runs at the Ultrafast tier instead. */
+  ultrafast?: boolean
   permissionMode: PermissionMode
   workspace: WorkspaceMode
   worktree: WorktreeInfo | null
@@ -304,6 +315,9 @@ export type ToolKind =
   | 'grep'
   | 'glob'
   | 'list'
+  | 'lint'
+  | 'wait'
+  | 'event'
   | 'websearch'
   | 'webfetch'
   | 'bash'
@@ -320,7 +334,7 @@ export type ToolKind =
   | 'image'
   | 'other'
 
-export const EXPLORE_KINDS: ToolKind[] = ['read', 'grep', 'glob', 'list', 'websearch', 'webfetch']
+export const EXPLORE_KINDS: ToolKind[] = ['read', 'grep', 'glob', 'list', 'lint', 'wait', 'websearch', 'webfetch']
 
 export type ToolStatus = 'pending' | 'awaiting' | 'running' | 'done' | 'error' | 'denied'
 
@@ -405,6 +419,8 @@ interface ItemBase {
 export interface UserItem extends ItemBase {
   kind: 'user'
   text: string
+  /** Set when an Event resumed the agent: the event's label. Not shown in the timeline. */
+  event?: string
   attachments: Attachment[]
   mentions?: MentionChip[]
   /** Full mentions as sent, so a reverted message can be edited and sent again. */
@@ -505,6 +521,7 @@ export interface NewChatInput {
   effort: Effort | null
   ultra: boolean
   fast: boolean
+  ultrafast?: boolean
   permissionMode: PermissionMode
   workspace: WorkspaceMode
   acpConfig?: Record<string, string>

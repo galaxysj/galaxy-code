@@ -14,16 +14,20 @@ import {
   Code,
   ExternalLink,
   Eye,
+  FileDiff as FileDiffIcon,
   FileQuestion,
   FileText,
   FolderOpen,
   Globe,
   Hammer,
+  MessageSquareDiff,
   MessagesSquare,
   GitCompare,
   GitCommitHorizontal,
   Plus,
   PanelRight,
+  SquareCheck,
+  SquareDashed,
   SquareTerminal,
   RotateCw,
   X
@@ -35,7 +39,7 @@ import { isReviewTextDiff } from '@shared/review'
 import { basename, cn, formatBytes, languageForPath, relativeTo } from '../lib/utils'
 import { useStore, type OpenFile, type PanelTab } from '../store'
 import { Markdown } from './Markdown'
-import { Button, CopyButton, IconButton, MenuItem, MenuSeparator, Popover, Segmented, Spinner } from './ui'
+import { Button, CopyButton, Dropdown, IconButton, MenuItem, MenuSeparator, Popover, Segmented, Spinner, type DropdownOption } from './ui'
 import { DiffView, DiffStat } from './DiffView'
 import { AgentTimeline } from './timeline/Timeline'
 import { ProjectFilesPane } from './ProjectFiles'
@@ -43,7 +47,7 @@ import { CodeEditor, InlineEditBox } from './CodeEditor'
 import { InlineModel } from '@shared/models'
 import { CloseSideChatDialog, SideChatPane } from './SideChat'
 import { cleanError } from './Settings'
-import { gitCommandMessage } from '../lib/gitCommands'
+import { runGitCommand } from '../lib/gitCommands'
 import type { GitCommand } from '@shared/types'
 
 // Browser
@@ -552,6 +556,14 @@ function TerminalPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean })
 
 type ReviewMode = 'last-turn' | 'uncommitted' | 'unstaged' | 'staged' | 'commit'
 
+const REVIEW_MODES: DropdownOption<ReviewMode>[] = [
+  { value: 'last-turn', label: 'Last turn', icon: <MessageSquareDiff size={13.5} /> },
+  { value: 'uncommitted', label: 'Uncommitted', icon: <FileDiffIcon size={13.5} /> },
+  { value: 'unstaged', label: 'Unstaged', icon: <SquareDashed size={13.5} /> },
+  { value: 'staged', label: 'Staged', icon: <SquareCheck size={13.5} /> },
+  { value: 'commit', label: 'Commit…', icon: <GitCommitHorizontal size={13.5} /> }
+]
+
 function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): ReactNode {
   const chatId = useStore((s) => tab.chatId ?? s.activeChatId)
   const items = useStore((s) => chatId ? s.items[chatId] : undefined)
@@ -607,8 +619,15 @@ function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): 
     if (committing) return
     setCommitting(command)
     commitStarted.current = false
-    const { text, mentions } = gitCommandMessage(command)
-    await useStore.getState().send(text, [], mentions, false, undefined, undefined, chatId ?? null).catch(() => {})
+    if (useStore.getState().settings.instantCommit) {
+      // No agent turn: loading ends when the commit does.
+      await runGitCommand(command, chatId ?? null, tab.cwd)
+      setCommitting(null)
+      setChosen(null)
+      setReload((value) => value + 1)
+      return
+    }
+    await runGitCommand(command, chatId ?? null, tab.cwd).catch(() => {})
     // The message may not have started a turn, for example with no model chosen.
     setTimeout(() => {
       if (commitStarted.current) return
@@ -713,24 +732,23 @@ function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): 
   return (
     <div className="flex h-full flex-col">
       <div className="flex min-h-10 shrink-0 items-center gap-2 border-b border-line px-3 py-1">
-        <select aria-label="Review changes" value={mode} onChange={(event) => setMode(event.target.value as ReviewMode)} className="w-auto max-w-full shrink-0 rounded-md bg-elev px-2 py-1 text-[12px] text-fg">
-          <option value="last-turn">Last turn</option>
-          <option value="uncommitted">Uncommitted</option>
-          <option value="unstaged">Unstaged</option>
-          <option value="staged">Staged</option>
-          <option value="commit">Commit…</option>
-        </select>
+        <Dropdown<ReviewMode> label="Review changes" value={mode} options={REVIEW_MODES} onChange={setMode} className="shrink-0" />
         <IconButton label="Refresh changes" onClick={() => setReload((value) => value + 1)}><RotateCw size={13} /></IconButton>
         {mode === 'commit' && isRepo === true && !!commits?.length && !commitError && (
-          <select aria-label="Select commit" value={commit} onChange={(event) => setCommit(event.target.value)} className="w-0 min-w-0 flex-1 truncate rounded-md bg-elev px-2 py-1 text-[12px] text-fg" title={commits.find((entry) => entry.hash === commit)?.subject}>
-            {commits.map((entry) => <option key={entry.hash} value={entry.hash}>{entry.shortHash} · {entry.subject} · {entry.author}</option>)}
-          </select>
+          <Dropdown
+            label="Select commit"
+            value={commit}
+            options={commits.map((entry) => ({ value: entry.hash, label: entry.subject, hint: entry.shortHash, title: `${entry.shortHash} · ${entry.subject} · ${entry.author}` }))}
+            onChange={setCommit}
+            className="w-0 flex-1"
+            menuClassName="w-[360px]"
+          />
         )}
         {git?.isRepo && (
           <div ref={gitMenuAnchor} className="ml-auto flex shrink-0 items-center">
             <Button size="sm" variant="primary" disabled={gitDisabled(primaryAction)} title={gitBusy || !gitDisabled(primaryAction) ? undefined : !git?.dirty ? 'There are no changes to commit.' : 'This repository has no remote.'} onClick={gitActions[primaryAction].run} className={cn('gap-1! rounded-r-none px-1.5!', gitBusy && 'disabled:opacity-100!')}>{gitActions[primaryAction].icon} {gitActions[primaryAction].label}</Button>
             <Button size="sm" variant="primary" aria-label="More Git actions" onClick={() => setGitMenu((open) => !open)} className={cn('w-4 rounded-l-none border-l border-white/20 px-0!', gitDisabled(primaryAction) && !gitBusy && 'opacity-45')}><ChevronDown size={12} /></Button>
-            <Popover open={gitMenu} onClose={() => setGitMenu(false)} anchor={gitMenuAnchor} placement="bottom-end" className="w-48">
+            <Popover open={gitMenu} onClose={() => setGitMenu(false)} anchor={gitMenuAnchor} placement="bottom-end" className="w-48 p-1">
               {(Object.keys(gitActions) as (keyof typeof gitActions)[]).filter((action) => action !== primaryAction).map((action) => (
                 <MenuItem key={action} icon={gitActions[action].icon} label={gitActions[action].label} disabled={gitDisabled(action)} onClick={() => { setGitMenu(false); setChosen(action); gitActions[action].run() }} />
               ))}

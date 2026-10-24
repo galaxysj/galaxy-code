@@ -61,6 +61,11 @@ export class AgentTeam {
     return [...this.workers.values()].map((worker) => `${worker.id}: ${worker.report}`).join('\n\n')
   }
 
+  has(id: string): boolean { return this.workers.has(id) }
+
+  /** Subagents still working, by ID. */
+  runningIds(): Set<string> { return new Set([...this.workers.values()].filter((worker) => worker.state === 'running').map((worker) => worker.id)) }
+
   hasRunning(): boolean { return [...this.workers.values()].some((worker) => worker.state === 'running') }
 
   async spawn(request: SubagentRequest, caller: Session): Promise<string> {

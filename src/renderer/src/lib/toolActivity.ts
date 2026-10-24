@@ -9,6 +9,7 @@ const VERBS = [
   ['Search', 'Searched', 'Searching'],
   ['Grep', 'Grepped', 'Grepping'],
   ['Glob', 'Globbed', 'Globbing'],
+  ['Lint', 'Linted', 'Linting'],
   ['Fetch', 'Fetched', 'Fetching'],
   ['View', 'Viewed', 'Viewing'],
   ['Click', 'Clicked', 'Clicking'],

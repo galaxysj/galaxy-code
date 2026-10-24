@@ -27,7 +27,7 @@ import { probeAcpOptions } from './engines/acp'
 import { browser } from './services/browser'
 import { terminals } from './services/terminal'
 import { listProjectFiles, searchProjectFiles } from './services/projectFiles'
-import { gitInfo, gitState, pushBranch } from './services/git'
+import { gitInfo, gitState, instantCommit, pushBranch } from './services/git'
 import { mcp } from './services/mcp'
 import { signInWithOpenRouter, testKey } from './services/openrouter'
 import { analyticsRows } from './services/analytics'
@@ -360,7 +360,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'review.status': gitInfo,
     'review.init': initReviewRepository,
     'review.push': pushBranch,
-    'review.state': gitState
+    'review.state': gitState,
+    'review.instantCommit': instantCommit
   }
 
   ipcMain.handle(IPC_INVOKE, async (event, path: string, args: unknown[]) => {
