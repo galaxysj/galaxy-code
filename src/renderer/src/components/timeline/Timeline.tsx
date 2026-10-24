@@ -1,4 +1,4 @@
-import { ArrowDown, ChevronRight, CircleAlert, File as FileIcon, Info } from 'lucide-react'
+import { ArrowDown, ChevronRight, CircleAlert, CircleStop, Clock, File as FileIcon, Info } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AssistantItem, Chat, FileDiff, Item, NoticeItem, ReasoningItem, ToolItem, TurnItem, UserItem } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, plural } from '../../lib/utils'
@@ -128,7 +128,6 @@ function TurnFooter({ changes, answer, root }: { changes: FileDiff[]; answer: st
 function WorkGroup({ item, blocks, ctx }: { item: TurnItem; blocks: Block[]; ctx: TimelineContext }): ReactNode {
   const [open, setOpen] = useState(false)
   const label = item.interrupted ? `Stopped after ${formatDuration(item.durationMs)}` : `Worked for ${formatDuration(item.durationMs)}`
-  const space = label.indexOf(' ')
   return (
     <div>
       <button
@@ -136,9 +135,10 @@ function WorkGroup({ item, blocks, ctx }: { item: TurnItem; blocks: Block[]; ctx
         onClick={blocks.length ? () => setOpen(!open) : undefined}
         disabled={!blocks.length}
         aria-expanded={blocks.length ? open : undefined}
-        className={cn('group/work flex h-7 items-center gap-1.5 text-left text-[13.8px] text-muted', blocks.length ? 'hover:text-fg' : 'cursor-default')}
+        className={cn('group/work flex h-7 items-center gap-2 text-left text-[13.8px] text-muted', blocks.length ? 'hover:text-fg' : 'cursor-default')}
       >
-        <span><span className="text-fg">{label.slice(0, space)}</span>{label.slice(space)}</span>
+        <span className="flex w-4 shrink-0 justify-center">{item.interrupted ? <CircleStop size={13.5} className="text-subtle" /> : <Clock size={13.5} className="text-subtle" />}</span>
+        <span>{label}</span>
         {blocks.length > 0 && <ChevronRight size={13} className={cn('shrink-0 text-subtle opacity-0 transition-all group-hover/work:opacity-100', open && 'rotate-90 opacity-100')} />}
       </button>
       {open && <div className="activity-reveal"><Blocks blocks={blocks} ctx={ctx} /></div>}
