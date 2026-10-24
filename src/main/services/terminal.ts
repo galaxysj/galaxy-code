@@ -1,6 +1,8 @@
 import type { IPty } from 'node-pty'
 import { homedir } from 'node:os'
 import { stat } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import type { UiEvent } from '@shared/types'
 import { newId } from '../util'
 
@@ -9,6 +11,7 @@ class Terminals {
   private starting = new Map<string, Promise<string>>()
   private output = new Map<string, string>()
   private directories = new Map<string, string>()
+  private owners = new Map<string, { chatId: string; itemId: string }[]>()
   emit: (event: UiEvent) => void = () => {}
 
   async create(cwd: string, id = newId('terminal_')): Promise<string> {
@@ -27,7 +30,7 @@ class Terminals {
     // Load the native module only when a terminal is requested.
     const { spawn } = await import('node-pty')
     const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && key !== 'ELECTRON_RUN_AS_NODE')) as Record<string, string>
-    const child = spawn(shell, process.platform === 'win32' ? [] : ['-il'], { name: 'xterm-256color', cols: 100, rows: 30, cwd: directory, env: { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } })
+    const child = spawn(shell, process.platform === 'win32' ? [] : ['-il'], { name: 'xterm-256color', cols: 100, rows: 30, cwd: directory, env: { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor', CLICOLOR: '1' } })
     this.output.set(id, '')
     this.sessions.set(id, child)
     this.directories.set(id, directory)
@@ -60,11 +63,41 @@ class Terminals {
   interrupt(id: string): void {
     this.write(id, '\x03')
   }
+  track(id: string, chatId: string, itemId: string): void {
+    const owners = this.owners.get(id) ?? []
+    owners.push({ chatId, itemId })
+    this.owners.set(id, owners)
+  }
+  async stopReverted(chatId: string, itemIds: Set<string>): Promise<void> {
+    const ids = [...this.owners].filter(([, owners]) => owners.some((owner) => owner.chatId === chatId && itemIds.has(owner.itemId))).map(([id]) => id)
+    if (!ids.length) return
+    // Interactive shells put background jobs in separate process groups.
+    // Stop their descendants as well as the shell itself.
+    const { stdout } = await promisify(execFile)('ps', ['-axo', 'pid=,ppid='])
+    const processes = stdout.trim().split('\n').map((line) => line.trim().split(/\s+/).map(Number))
+    for (const id of ids) {
+      const shell = this.sessions.get(id)
+      if (shell) {
+        const descendants = new Set<number>([shell.pid])
+        let previousSize = 0
+        while (previousSize !== descendants.size) {
+          previousSize = descendants.size
+          for (const [pid, parent] of processes) if (descendants.has(parent)) descendants.add(pid)
+        }
+        for (const pid of [...descendants].reverse()) {
+          try { process.kill(pid, 'SIGKILL') } catch { /* Already exited. */ }
+        }
+      }
+      this.close(id)
+      this.emit({ type: 'close-panel-tab', tabId: id })
+    }
+  }
   close(id: string): void {
     const child = this.sessions.get(id)
     this.sessions.delete(id)
     this.output.delete(id)
     this.directories.delete(id)
+    this.owners.delete(id)
     if (!child) return
     try { child.kill() } catch { /* The shell may already have exited. */ }
   }

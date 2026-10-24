@@ -1,10 +1,13 @@
 import hljs from 'highlight.js/lib/common'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import {
   ArrowLeft,
   ArrowRight,
+  ArrowUpFromLine,
+  ChevronDown,
   Copy,
   Pin,
   Pencil,
@@ -15,7 +18,10 @@ import {
   FileText,
   FolderOpen,
   Globe,
+  Hammer,
+  MessagesSquare,
   GitCompare,
+  GitCommitHorizontal,
   Plus,
   PanelRight,
   SquareTerminal,
@@ -24,13 +30,21 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { FileView, FileDiff } from '@shared/types'
+import type { ReviewCommit } from '@shared/api'
+import { isReviewTextDiff } from '@shared/review'
 import { basename, cn, formatBytes, languageForPath, relativeTo } from '../lib/utils'
 import { useStore, type OpenFile, type PanelTab } from '../store'
 import { Markdown } from './Markdown'
-import { CopyButton, IconButton, MenuItem, MenuSeparator, Popover, Segmented, Spinner } from './ui'
+import { Button, CopyButton, IconButton, MenuItem, MenuSeparator, Popover, Segmented, Spinner } from './ui'
 import { DiffView, DiffStat } from './DiffView'
 import { AgentTimeline } from './timeline/Timeline'
 import { ProjectFilesPane } from './ProjectFiles'
+import { CodeEditor, InlineEditBox } from './CodeEditor'
+import { InlineModel } from '@shared/models'
+import { CloseSideChatDialog, SideChatPane } from './SideChat'
+import { cleanError } from './Settings'
+import { gitCommandMessage } from '../lib/gitCommands'
+import type { GitCommand } from '@shared/types'
 
 // Browser
 
@@ -44,6 +58,7 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
   const [editing, setEditing] = useState(false)
   const hasPage = state.url !== ''
   const createTab = useStore((s) => s.createPanelTab)
+  const openSideChat = useStore((s) => s.openSideChat)
 
   useEffect(() => {
     if (!editing) setAddress(state.url)
@@ -127,8 +142,8 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
           {!hasPage && (
             <div className="flex h-full flex-col items-center justify-center gap-5 px-5 text-center">
               <div><div className="mb-2 text-[19px] font-medium text-fg">New tab</div><div className="text-[12px] text-subtle">Enter a website above, or open a tool.</div></div>
-              <div className="grid w-full max-w-[360px] grid-cols-3 gap-2">
-                {([{ type: 'file', label: 'Files', Icon: FolderOpen }, { type: 'terminal', label: 'Terminal', Icon: SquareTerminal }, { type: 'review', label: 'Review', Icon: GitCompare }] as const).map(({ type, label, Icon }) => <button key={type} type="button" disabled={type === 'file' && !root} title={type === 'file' && !root ? 'Select a project to browse files' : label} onClick={() => void createTab(type, root, tabId)} className="flex min-w-0 flex-col items-center gap-2 rounded-xl border border-line bg-elev px-2 py-4 text-[12px] text-muted transition-all hover:border-line-strong hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-elev"><Icon size={18} /><span>{label}</span></button>)}
+              <div className="grid w-full max-w-[460px] grid-cols-4 gap-2">
+                {([{ type: 'file', label: 'Files', Icon: FolderOpen }, { type: 'terminal', label: 'Terminal', Icon: SquareTerminal }, { type: 'review', label: 'Review', Icon: GitCompare }, { type: 'side', label: 'Side chat', Icon: MessagesSquare }] as const).map(({ type, label, Icon }) => <button key={type} type="button" disabled={type === 'file' && !root} title={type === 'file' && !root ? 'Select a project to browse files' : label} onClick={() => { if (type === 'side') { useStore.getState().closePanelTab(tabId); void openSideChat() } else void createTab(type, root, tabId) }} className="flex min-w-0 flex-col items-center gap-2 rounded-xl border border-line bg-elev px-2 py-4 text-[12px] text-muted transition-all hover:border-line-strong hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-elev"><Icon size={18} /><span>{label}</span></button>)}
               </div>
               {!root && <div className="text-[11.5px] text-subtle">Choose a project to enable Files.</div>}
             </div>
@@ -182,12 +197,30 @@ function SourceView({ content, path, line }: { content: string; path: string; li
   )
 }
 
+/** Plans written in Plan mode live directly in .galaxy/plans. */
+const PLAN_FILE = /[/\\]\.galaxy[/\\]plans[/\\][^/\\]+\.md$/i
+
+/** Sends the saved plan to the agent, without a mode, so it starts carrying it out. */
+async function buildPlan(path: string, root: string | null): Promise<void> {
+  const state = useStore.getState()
+  const view = await window.galaxy.files.read(path)
+  if (view.kind !== 'text' || !view.content?.trim()) {
+    state.notify('The plan file is empty or could not be read.', 'error')
+    return
+  }
+  const name = root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path
+  state.setComposerMode(state.activeChatId ?? 'new', undefined)
+  await state.send(`Build the plan in \`${name}\`. Follow it step by step and verify the result.\n\n${view.content.trim()}`, [], undefined, false, undefined, path)
+}
+
 function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; root: string | null }): ReactNode {
   const homeDir = useStore((s) => s.homeDir)
   const showBrowser = useStore((s) => s.showBrowser)
   const [view, setView] = useState<FileView | null>(null)
   const [mode, setMode] = useState<'preview' | 'source'>('preview')
   const [reload, setReload] = useState(0)
+  const [dirty, setDirty] = useState(false)
+  const [completing, setCompleting] = useState(false)
 
   // Reload when the agent finishes an edit to this file.
   const editStamp = useStore((s) => {
@@ -200,9 +233,15 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
     return count
   })
 
+  const shownPath = useRef(file.path)
   useEffect(() => {
     let cancelled = false
-    setView(null)
+    // A reload of the same file keeps the editor mounted, so unsaved edits survive it.
+    if (shownPath.current !== file.path) {
+      shownPath.current = file.path
+      setView(null)
+      setDirty(false)
+    }
     void window.galaxy.files.read(file.path).then((result) => {
       if (!cancelled) setView(result)
     })
@@ -219,9 +258,16 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
   return (
     <div className={cn('flex h-full flex-col', !visible && 'hidden')}>
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line pl-3 pr-2">
-        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted" title={file.path}>
+        <span className="min-w-0 truncate font-mono text-[11.5px] text-muted" title={file.path}>
           {relativeTo(root, file.path, homeDir)}
         </span>
+        {completing && (
+          <span className="flex shrink-0 items-center px-1 text-subtle" title="Generating a suggestion">
+            <Spinner size={11} />
+          </span>
+        )}
+        {dirty && <span className="shrink-0 px-1 text-[11px] text-muted" title="Unsaved changes. Press Ctrl+S to save.">Edited</span>}
+        <span className="flex-1" />
         {view && view.kind !== 'missing' && <span className="shrink-0 px-1 text-[11px] text-subtle">{formatBytes(view.size)}</span>}
         {hasPreview && view?.content !== undefined && (
           <Segmented<'preview' | 'source'>
@@ -256,6 +302,12 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
         <IconButton label="Open with default app" size="sm" onClick={() => void window.galaxy.files.openExternal(file.path)}>
           <ExternalLink size={13} />
         </IconButton>
+        {PLAN_FILE.test(file.path) && view?.kind === 'text' && (
+          <Button variant="primary" size="sm" className="ml-1" disabled={dirty} title={dirty ? 'Save the plan before building' : 'Send this plan to the agent and start building'} onClick={() => void buildPlan(file.path, root)}>
+            <Hammer size={12.5} />
+            Build
+          </Button>
+        )}
       </div>
       <div className="min-h-0 flex-1">
         {!view ? (
@@ -272,6 +324,8 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
           <div className="h-full overflow-y-auto px-6 py-5">
             <Markdown text={view.content ?? ''} root={file.path.slice(0, file.path.lastIndexOf('/'))} />
           </div>
+        ) : view.kind === 'text' && !view.truncated ? (
+          <CodeEditor path={file.path} initial={view.content ?? ''} line={file.line} onDirtyChange={setDirty} onCompletingChange={setCompleting} />
         ) : (
           <SourceView content={view.content ?? ''} path={file.path} line={file.line} />
         )}
@@ -299,14 +353,104 @@ function TerminalPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean })
   const host = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
   const fitAddon = useRef<FitAddon | null>(null)
+  const showBrowser = useStore((s) => s.showBrowser)
+  const inlineModelId = useStore((s) => s.settings.inlineModelId)
+  const updateSettings = useStore((s) => s.updateSettings)
+  const [ask, setAsk] = useState<{ instruction: string; busy: boolean; error: string } | null>(null)
+  const [answer, setAnswer] = useState<{ requestId: string; text: string; done: boolean } | null>(null)
+  const queueMention = useStore((s) => s.queueMention)
+  const [selection, setSelection] = useState('')
+  const addSelection = useRef<() => void>(() => {})
+  addSelection.current = () => {
+    const text = terminal.current?.getSelection() ?? ''
+    if (!text.trim()) return
+    const lines = text.replace(/\n$/, '').split('\n').length
+    queueMention({ kind: 'terminal', name: `${tab.customTitle || tab.title} (${lines} ${lines === 1 ? 'line' : 'lines'})`, tabId: tab.id, cwd: tab.cwd, selection: text })
+    terminal.current?.clearSelection()
+  }
+  const openAsk = useRef<() => void>(() => {})
+  const stoppedAsk = useRef<string | null>(null)
+  openAsk.current = () => {
+    if (!output?.exited) setAsk((current) => current ?? { instruction: '', busy: false, error: '' })
+  }
+  const modelId = InlineModel.some((m) => m.ID === inlineModelId) ? (inlineModelId as string) : InlineModel[0].ID
+
+  const generate = async (): Promise<void> => {
+    if (!ask || !ask.instruction.trim() || ask.busy) return
+    const requestId = crypto.randomUUID()
+    setAsk({ ...ask, busy: true, error: '' })
+    setAnswer({ requestId, text: '', done: false })
+    const stop = window.galaxy.onUiEvent((event) => {
+      if (event.type === 'inline-edit-delta' && event.requestId === requestId) setAnswer((current) => (current?.requestId === requestId ? { ...current, text: event.text } : current))
+    })
+    try {
+      // The end of the output, without color codes, tells the model what just happened.
+      const recent = (useStore.getState().terminalOutput[tab.id]?.text ?? '').slice(-6000).replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07]*\x07/g, '')
+      const command = await window.galaxy.editor.terminalCommand({ instruction: ask.instruction.trim(), cwd: tab.cwd, output: recent, modelId, requestId })
+      setAnswer((current) => (current?.requestId === requestId ? { ...current, text: command, done: true } : current))
+      setAsk((current) => (current ? { ...current, busy: false } : current))
+    } catch (error) {
+      if (stoppedAsk.current === requestId) return
+      setAnswer((current) => (current?.requestId === requestId ? null : current))
+      setAsk((current) => (current ? { ...current, busy: false, error: String(error instanceof Error ? error.message : error) } : current))
+    } finally {
+      stop()
+    }
+  }
+
+  const closeAsk = (): void => {
+    if (answer && !answer.done) {
+      stoppedAsk.current = answer.requestId
+      void window.galaxy.editor.cancelInlineEdit(answer.requestId)
+    }
+    setAnswer(null)
+    setAsk(null)
+    terminal.current?.focus()
+  }
+
+  /** Types the command at the prompt without running it; Enter in the terminal runs it. */
+  const insertCommand = (): void => {
+    if (!answer?.done || !answer.text) return
+    void window.galaxy.terminal.write(tab.id, answer.text).catch((error) => notify(String(error), 'error'))
+    setAnswer(null)
+    setAsk(null)
+    terminal.current?.focus()
+  }
+
   useEffect(() => {
     if (!host.current) return
     const term = new Terminal({
-      cursorBlink: true, fontSize: 12, fontFamily: 'Menlo, Monaco, monospace',
+      cursorBlink: true, cursorStyle: 'bar', cursorWidth: 2, cursorInactiveStyle: 'bar', fontSize: 12, fontFamily: 'Menlo, Monaco, monospace',
       scrollback: 10000, allowProposedApi: false
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
+    // Cmd+click (Ctrl+click elsewhere) opens a link in the built-in browser.
+    term.loadAddon(
+      new WebLinksAddon((event, uri) => {
+        if (!(event.metaKey || event.ctrlKey)) return
+        const tabId = `terminal-link:${crypto.randomUUID()}`
+        showBrowser(tabId)
+        void window.galaxy.browser.navigate(uri, tabId).catch((error) => notify(String(error), 'error'))
+      })
+    )
+    // Cmd+I asks for a command. Ctrl+I stays Tab for the shell on macOS.
+    const mac = navigator.platform.toLowerCase().includes('mac')
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type === 'keydown' && event.key.toLowerCase() === 'i' && (mac ? event.metaKey : event.ctrlKey && event.shiftKey)) {
+        event.preventDefault()
+        openAsk.current()
+        return false
+      }
+      // Cmd+L adds the selected text to the chat. Ctrl+L still clears the screen in the shell.
+      if (event.type === 'keydown' && event.key.toLowerCase() === 'l' && (mac ? event.metaKey : event.ctrlKey && event.shiftKey) && term.hasSelection()) {
+        event.preventDefault()
+        addSelection.current()
+        return false
+      }
+      return true
+    })
+    const selected = term.onSelectionChange(() => setSelection(term.getSelection()))
     term.open(host.current)
     terminal.current = term
     fitAddon.current = fit
@@ -345,11 +489,12 @@ function TerminalPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean })
       themeObserver.disconnect()
       input.dispose()
       resize.dispose()
+      selected.dispose()
       term.dispose()
       terminal.current = null
       fitAddon.current = null
     }
-  }, [tab.id, notify])
+  }, [tab.id, notify, showBrowser, queueMention])
   useEffect(() => {
     if (!visible) return
     const frame = requestAnimationFrame(() => {
@@ -365,35 +510,252 @@ function TerminalPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean })
         <CopyButton text={output?.text ?? ''} label="Copy terminal output" />
         <button type="button" disabled={output?.exited} onClick={() => void window.galaxy.terminal.interrupt(tab.id).catch((error) => notify(String(error), 'error'))} className="rounded-md px-2 py-1 text-[11px] text-muted hover:bg-hover disabled:opacity-40">Interrupt</button>
       </div>
-      <div ref={host} aria-label="Live terminal" className="min-h-0 flex-1 overflow-hidden p-3" />
+      <div className="relative min-h-0 flex-1">
+        <div ref={host} aria-label="Live terminal" className="h-full overflow-hidden p-3" />
+        {selection.trim() && (
+          <button
+            type="button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => addSelection.current()}
+            className="absolute right-3 top-2 z-10 flex h-6.5 items-center gap-1.5 rounded-md border border-line-strong bg-elev px-2 text-[12px] text-fg shadow-pop hover:bg-hover"
+          >
+            Add to Chat <span className="text-[11px] text-subtle">{navigator.platform.toLowerCase().includes('mac') ? '⌘L' : 'Ctrl+Shift+L'}</span>
+          </button>
+        )}
+        {ask && (
+          <InlineEditBox
+            bottom={12}
+            placeholder="Describe a command to run"
+            preview={answer ? answer.text : undefined}
+            proposal={answer}
+            onApprove={insertCommand}
+            onStop={() => {
+              if (answer) {
+                stoppedAsk.current = answer.requestId
+                void window.galaxy.editor.cancelInlineEdit(answer.requestId)
+              }
+              setAnswer(null)
+              setAsk({ ...ask, busy: false, error: '' })
+            }}
+            state={ask}
+            modelId={modelId}
+            onModel={(id) => void updateSettings({ inlineModelId: id })}
+            onChange={(instruction) => setAsk({ ...ask, instruction })}
+            onSubmit={() => void generate()}
+            onClose={closeAsk}
+          />
+        )}
+      </div>
     </div>
   )
 }
 
+type ReviewMode = 'last-turn' | 'uncommitted' | 'unstaged' | 'staged' | 'commit'
+
 function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): ReactNode {
-  const items = useStore((s) => tab.chatId ? s.items[tab.chatId] : undefined)
-  const [review, setReview] = useState<{ isRepo: boolean; patch: string; untracked: string[] } | null>(null)
+  const chatId = useStore((s) => tab.chatId ?? s.activeChatId)
+  const items = useStore((s) => chatId ? s.items[chatId] : undefined)
+  const chatStatus = useStore((s) => chatId ? s.chats[chatId]?.status : undefined)
+  const [git, setGit] = useState<{ isRepo: boolean; dirty: boolean; hasRemote: boolean } | null>(null)
+  const [pushing, setPushing] = useState(false)
+  const [gitMenu, setGitMenu] = useState(false)
+  // An action picked from the menu takes the main button until it finishes.
+  const [chosen, setChosen] = useState<'commit' | 'commit-push' | 'push' | null>(null)
+  const [committing, setCommitting] = useState<GitCommand | null>(null)
+  const commitStarted = useRef(false)
+  const gitMenuAnchor = useRef<HTMLDivElement>(null)
+  const [mode, setMode] = useState<ReviewMode>('last-turn')
+  const [commits, setCommits] = useState<ReviewCommit[] | null>(null)
+  const [commitError, setCommitError] = useState('')
+  const [commit, setCommit] = useState('')
+  const [review, setReview] = useState<Awaited<ReturnType<typeof window.galaxy.review.read>> | null>(null)
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
-  const diffs = useMemo(() => {
-    const files = new Map<string, FileDiff>()
-    for (const item of items ?? []) if (item.kind === 'tool' && item.status === 'done') for (const diff of item.meta?.diffs ?? []) files.set(diff.path, diff)
-    return [...files.values()]
-  }, [items])
+  const [isRepo, setIsRepo] = useState<boolean | null>(null)
+  const [repoError, setRepoError] = useState('')
+  const [initError, setInitError] = useState('')
+  const [initializing, setInitializing] = useState(false)
+  useEffect(() => {
+    if (!visible || mode !== 'commit') return
+    let cancelled = false
+    setIsRepo(null)
+    setRepoError('')
+    setInitError('')
+    void window.galaxy.review.status(tab.cwd).then((value) => {
+      if (!cancelled) setIsRepo(value.isRepo)
+    }).catch((error) => { if (!cancelled) setRepoError(cleanError(error)) })
+    return () => { cancelled = true }
+  }, [tab.cwd, visible, reload, tab.nonce, mode])
+  // The Git buttons follow the folder, whichever view is picked, and recheck when the agent finishes a turn.
   useEffect(() => {
     if (!visible) return
     let cancelled = false
-    void window.galaxy.review.read(tab.cwd).then((value) => { if (!cancelled) { setReview(value); setError('') } }).catch((error) => { if (!cancelled) setError(String(error)) })
+    void window.galaxy.review.state(tab.cwd).then((value) => { if (!cancelled) setGit(value) }).catch(() => { if (!cancelled) setGit(null) })
     return () => { cancelled = true }
-  }, [tab.cwd, visible, reload, diffs, tab.nonce])
+  }, [tab.cwd, visible, reload, tab.nonce, chatStatus])
+  // A commit is loading until the agent's turn for it ends.
+  useEffect(() => {
+    if (!committing) return
+    if (chatStatus === 'running' || chatStatus === 'awaiting') commitStarted.current = true
+    else if (commitStarted.current) {
+      setCommitting(null)
+      setChosen(null)
+    }
+  }, [committing, chatStatus])
+  // Without a chat the command starts a new one.
+  const askAgent = async (command: GitCommand): Promise<void> => {
+    if (committing) return
+    setCommitting(command)
+    commitStarted.current = false
+    const { text, mentions } = gitCommandMessage(command)
+    await useStore.getState().send(text, [], mentions, false, undefined, undefined, chatId ?? null).catch(() => {})
+    // The message may not have started a turn, for example with no model chosen.
+    setTimeout(() => {
+      if (commitStarted.current) return
+      setCommitting(null)
+      setChosen(null)
+    }, 5000)
+  }
+  const push = async (): Promise<void> => {
+    if (pushing) return
+    setPushing(true)
+    try {
+      const result = await window.galaxy.review.push(tab.cwd)
+      useStore.getState().notify(`Pushed ${result.branch} to ${result.remote}.`)
+      setReload((value) => value + 1)
+    } catch (error) {
+      useStore.getState().notify(cleanError(error), 'error')
+    } finally {
+      setPushing(false)
+      setChosen(null)
+    }
+  }
+  const initialize = async (): Promise<void> => {
+    if (initializing) return
+    setInitializing(true)
+    setInitError('')
+    try {
+      await window.galaxy.review.init(tab.cwd)
+      setMode('uncommitted')
+      setReload((value) => value + 1)
+    } catch (error) {
+      setInitError(cleanError(error))
+    } finally {
+      setInitializing(false)
+    }
+  }
+  const diffs = useMemo(() => {
+    const timeline = items ?? []
+    const end = timeline.findLastIndex((item) => item.kind === 'turn' && !item.parentId)
+    const previousTurn = end < 0 ? -1 : timeline.slice(0, end).findLastIndex((item) => item.kind === 'turn' && !item.parentId)
+    // Use the agent's recorded diffs from its last completed turn. A new
+    // user message must not replace this review before the agent finishes.
+    const turnItems = end < 0 ? timeline : timeline.slice(previousTurn + 1, end)
+    const files = new Map<string, FileDiff>()
+    for (const item of turnItems) {
+      if (item.kind !== 'tool' || item.status !== 'done' || item.tool !== 'edit' && item.tool !== 'create') continue
+      for (const diff of item.meta?.diffs ?? []) {
+        if (!isReviewTextDiff(diff)) continue
+        files.set(diff.path, diff)
+      }
+    }
+    return [...files.values()]
+  }, [items])
+  useEffect(() => {
+    if (!visible || mode !== 'commit') return
+    let cancelled = false
+    setCommits(null)
+    setCommitError('')
+    void window.galaxy.review.commits(tab.cwd).then((list) => {
+      if (cancelled) return
+      setCommits(list)
+      setCommit((selected) => list.some((entry) => entry.hash === selected) ? selected : list[0]?.hash ?? '')
+    }).catch((error) => { if (!cancelled) setCommitError(cleanError(error)) })
+    return () => { cancelled = true }
+  }, [tab.cwd, visible, mode, reload, tab.nonce])
+  useEffect(() => {
+    if (!visible || mode === 'last-turn' || mode === 'commit' && !commit) return
+    let cancelled = false
+    setIsRepo(null)
+    setRepoError('')
+    setInitError('')
+    setReview(null)
+    setError('')
+    void window.galaxy.review.read(tab.cwd, { mode, ...(mode === 'commit' ? { commit } : {}) }).then((value) => {
+      if (!cancelled) {
+        setReview(value)
+        setIsRepo(value.isRepo)
+      }
+    }).catch((error) => { if (!cancelled) setError(cleanError(error)) })
+    return () => { cancelled = true }
+  }, [tab.cwd, visible, reload, tab.nonce, mode, commit])
+  // Main action: Commit & Push, Commit when there is no remote, Push once everything is committed.
+  const gitBusy = pushing || committing !== null
+  const gitActions = {
+    'commit-push': { label: 'Commit & Push', icon: committing === 'commit-push' ? <Spinner size={12} /> : <GitCommitHorizontal size={13} />, run: () => void askAgent('commit-push') },
+    commit: { label: 'Commit', icon: committing === 'commit' ? <Spinner size={12} /> : <GitCommitHorizontal size={13} />, run: () => void askAgent('commit') },
+    push: { label: 'Push', icon: pushing ? <Spinner size={12} /> : <ArrowUpFromLine size={12.5} />, run: () => void push() }
+  }
+  // Committing needs uncommitted changes, and pushing needs a remote.
+  const gitDisabled = (action: keyof typeof gitActions): boolean =>
+    action !== 'push' && !git?.dirty || action !== 'commit' && !git?.hasRemote || gitBusy
+  // With nothing to commit and no remote, all three are off and Commit shows.
+  const primaryAction: keyof typeof gitActions = chosen ?? committing ?? (git?.dirty ? (git.hasRemote ? 'commit-push' : 'commit') : git?.hasRemote ? 'push' : 'commit')
+  const lastTurn = mode === 'last-turn'
+  const displayError = lastTurn ? '' : repoError || (mode === 'commit' ? commitError : '') || error
+  const needsRepository = !lastTurn && isRepo === false
+  const noCommits = mode === 'commit' && commits?.length === 0
+  const loading = !lastTurn && !displayError && !needsRepository && (
+    isRepo === null || (mode === 'commit' && commits === null) || (!noCommits && !review)
+  )
+  const displayedDiffs = lastTurn ? diffs : review?.diffs ?? []
+  const centered = !!displayError || needsRepository || loading || noCommits || displayedDiffs.length === 0
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3"><span className="min-w-0 flex-1 truncate text-[12px] text-muted" title={tab.cwd}>Changes</span><IconButton label="Refresh changes" onClick={() => setReload((value) => value + 1)}><RotateCw size={13} /></IconButton></div>
-      <div className="selectable min-h-0 flex-1 overflow-auto px-4 py-3">
-        {error ? <div className="text-[12px] text-danger">{error}</div> : !review ? <Spinner className="text-subtle" /> : review.isRepo ? <>
-          {review.patch ? <pre className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-[1.6]">{review.patch}</pre> : <div className="text-[12px] text-subtle">No tracked changes.</div>}
-          {review.untracked.length > 0 && <div className="mt-4"><div className="mb-2 text-[12px] text-muted">New files</div>{review.untracked.map((path) => <button key={path} type="button" onClick={() => useStore.getState().openFile(`${tab.cwd}/${path}`)} className="block text-left font-mono text-[11.5px] text-ok hover:underline">{path}</button>)}</div>}
-        </> : diffs.length ? diffs.map((diff) => <div key={diff.path} className="mb-3 overflow-hidden rounded-lg border border-line"><div className="flex items-center gap-2 px-3 py-2 text-[12px]"><span className="min-w-0 flex-1 truncate">{basename(diff.path)}</span><DiffStat added={diff.added} removed={diff.removed} /></div><DiffView diff={diff} maxHeight={null} /></div>) : <div className="text-[12px] text-subtle">No recorded file changes.</div>}
+      <div className="flex min-h-10 shrink-0 items-center gap-2 border-b border-line px-3 py-1">
+        <select aria-label="Review changes" value={mode} onChange={(event) => setMode(event.target.value as ReviewMode)} className="w-auto max-w-full shrink-0 rounded-md bg-elev px-2 py-1 text-[12px] text-fg">
+          <option value="last-turn">Last turn</option>
+          <option value="uncommitted">Uncommitted</option>
+          <option value="unstaged">Unstaged</option>
+          <option value="staged">Staged</option>
+          <option value="commit">Commit…</option>
+        </select>
+        <IconButton label="Refresh changes" onClick={() => setReload((value) => value + 1)}><RotateCw size={13} /></IconButton>
+        {mode === 'commit' && isRepo === true && !!commits?.length && !commitError && (
+          <select aria-label="Select commit" value={commit} onChange={(event) => setCommit(event.target.value)} className="w-0 min-w-0 flex-1 truncate rounded-md bg-elev px-2 py-1 text-[12px] text-fg" title={commits.find((entry) => entry.hash === commit)?.subject}>
+            {commits.map((entry) => <option key={entry.hash} value={entry.hash}>{entry.shortHash} · {entry.subject} · {entry.author}</option>)}
+          </select>
+        )}
+        {git?.isRepo && (
+          <div ref={gitMenuAnchor} className="ml-auto flex shrink-0 items-center">
+            <Button size="sm" variant="primary" disabled={gitDisabled(primaryAction)} title={gitBusy || !gitDisabled(primaryAction) ? undefined : !git?.dirty ? 'There are no changes to commit.' : 'This repository has no remote.'} onClick={gitActions[primaryAction].run} className={cn('gap-1! rounded-r-none px-1.5!', gitBusy && 'disabled:opacity-100!')}>{gitActions[primaryAction].icon} {gitActions[primaryAction].label}</Button>
+            <Button size="sm" variant="primary" aria-label="More Git actions" onClick={() => setGitMenu((open) => !open)} className={cn('w-4 rounded-l-none border-l border-white/20 px-0!', gitDisabled(primaryAction) && !gitBusy && 'opacity-45')}><ChevronDown size={12} /></Button>
+            <Popover open={gitMenu} onClose={() => setGitMenu(false)} anchor={gitMenuAnchor} placement="bottom-end" className="w-48">
+              {(Object.keys(gitActions) as (keyof typeof gitActions)[]).filter((action) => action !== primaryAction).map((action) => (
+                <MenuItem key={action} icon={gitActions[action].icon} label={gitActions[action].label} disabled={gitDisabled(action)} onClick={() => { setGitMenu(false); setChosen(action); gitActions[action].run() }} />
+              ))}
+            </Popover>
+          </div>
+        )}
+      </div>
+      <div className={cn('selectable min-h-0 flex-1 overflow-auto px-4 py-3', centered && 'flex items-center justify-center text-center')}>
+        {displayError ? <div role="alert" className="max-w-md whitespace-pre-wrap break-words text-[12px] text-danger">{displayError}</div>
+          : needsRepository ? <div className="flex max-w-md flex-col items-center gap-3">
+            <div className="text-[12px] text-subtle">This folder is not a Git repository.</div>
+            {initError && <div role="alert" className="whitespace-pre-wrap break-words text-[12px] text-danger">{initError}</div>}
+            <Button size="sm" disabled={initializing} onClick={() => void initialize()}>{initializing ? <><Spinner size={12} /> Initializing…</> : 'Initialize Repository'}</Button>
+          </div>
+          : loading ? <Spinner className="text-subtle" />
+          : noCommits ? <div className="text-[12px] text-subtle">No commits yet.</div>
+          : displayedDiffs.length ? displayedDiffs.map((diff) => <div key={diff.path} className="mb-3 overflow-clip rounded-lg border border-line">
+              <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-line bg-bg px-3 py-2 text-[12px]">
+                <button type="button" onClick={() => useStore.getState().openFile(diff.path)} className="min-w-0 flex-1 truncate text-left hover:text-link" title={diff.path}>{relativeTo(tab.cwd, diff.path, '')}</button>
+                {diff.created && <span className="text-[11px] text-ok">new</span>}
+                {diff.deleted && <span className="text-[11px] text-danger">deleted</span>}
+                <DiffStat added={diff.added} removed={diff.removed} />
+              </div>
+              <DiffView diff={diff} maxHeight={null} />
+            </div>) : <div className="text-[12px] text-subtle">{lastTurn ? 'No file changes in the last turn.' : 'No changes in this view.'}</div>}
       </div>
     </div>
   )
@@ -417,6 +779,7 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
   const moveTab = useStore((s) => s.movePanelTab)
   const duplicateTab = useStore((s) => s.duplicatePanelTab)
   const reloadTab = useStore((s) => s.reloadPanelTab)
+  const chats = useStore((s) => s.chats)
   const strip = useRef<HTMLDivElement>(null)
   const contextAnchor = useRef<HTMLDivElement>(null)
   const [context, setContext] = useState<{ id: string; x: number; y: number } | null>(null)
@@ -429,9 +792,9 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
     const titles = Object.fromEntries(browserTabs.filter((entry) => entry.customTitle).map((entry) => [entry.id, entry.customTitle!]))
     void window.galaxy.browser.setTabOrder(browserTabs.map((entry) => entry.id), titles).catch(() => {})
   }, [tabs])
-  const icons = { browser: Globe, file: FileText, files: FolderOpen, terminal: SquareTerminal, review: GitCompare, agent: PanelRight }
+  const icons = { browser: Globe, file: FileText, files: FolderOpen, terminal: SquareTerminal, review: GitCompare, agent: PanelRight, side: MessagesSquare }
   const contextTab = tabs.find((entry) => entry.id === context?.id)
-  const titleFor = (entry: PanelTab): string => entry.customTitle ?? (entry.type === 'browser' ? browserStates[entry.id]?.title || (browserStates[entry.id]?.url ? browserStates[entry.id].url : 'New tab') : entry.title)
+  const titleFor = (entry: PanelTab): string => entry.customTitle ?? (entry.type === 'browser' ? browserStates[entry.id]?.title || (browserStates[entry.id]?.url ? browserStates[entry.id].url : 'New tab') : entry.type === 'side' && chats[entry.chatId] && chats[entry.chatId].title !== 'New chat' ? chats[entry.chatId].title : entry.title)
   const commitRename = (): void => { if (renaming && renameValue.trim()) updateTab(renaming, { customTitle: renameValue.trim() }); setRenaming(null) }
   const act = (action: () => void): void => { setContext(null); action() }
   useEffect(() => {
@@ -498,7 +861,7 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
             <MenuSeparator />
             <MenuItem icon={<Plus size={14} />} label="New tab to the right" onClick={() => act(() => { void createTab('browser', root, undefined, contextTab.id) })} />
             <MenuItem icon={<RotateCw size={14} />} label="Reload" disabled={contextTab.type === 'terminal'} onClick={() => act(() => { void reloadTab(contextTab.id).catch((error) => useStore.getState().notify(String(error), 'error')) })} />
-            <MenuItem icon={<Copy size={14} />} label="Duplicate" onClick={() => act(() => { void duplicateTab(contextTab.id) })} />
+            <MenuItem icon={<Copy size={14} />} label="Duplicate" disabled={contextTab.type === 'side'} onClick={() => act(() => { void duplicateTab(contextTab.id) })} />
             <MenuSeparator />
             <MenuItem icon={<Pencil size={14} />} label="Rename" onClick={() => act(() => { setPanel(true, contextTab.id); setRenameValue(titleFor(contextTab)); setRenaming(contextTab.id) })} />
             <MenuSeparator />
@@ -517,11 +880,12 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
           if (entry.type === 'files') return <div key={entry.id} className={cn('h-full', activeTab !== entry.id && 'hidden')}><ProjectFilesPane tab={entry} available={!!root} renderFile={(file) => <FilePane file={file} visible={activeTab === entry.id} root={entry.root} />} /></div>
           if (entry.type === 'file') { const file = openFiles.find((file) => file.path === entry.path); return file ? <FilePane key={entry.id} file={file} visible={activeTab === entry.id} root={root} /> : null }
           return <div key={entry.id} className={cn('h-full', activeTab !== entry.id && 'hidden')}>
-            {entry.type === 'terminal' ? <TerminalPane tab={entry} visible={activeTab === entry.id} /> : entry.type === 'review' ? <ReviewPane tab={entry} visible={activeTab === entry.id} /> : <AgentTimeline chatId={entry.chatId} agentId={entry.agentId} root={entry.root} />}
+            {entry.type === 'side' ? <SideChatPane tab={entry} /> : entry.type === 'terminal' ? <TerminalPane tab={entry} visible={activeTab === entry.id} /> : entry.type === 'review' ? <ReviewPane tab={entry} visible={activeTab === entry.id} /> : <AgentTimeline chatId={entry.chatId} agentId={entry.agentId} root={entry.root} />}
           </div>
         })}
         {!activeTab && <Placeholder icon={<Plus size={22} />} title="Open a tab" detail="Select a tab above, or use + to open a new tab." />}
       </div>
+      <CloseSideChatDialog />
     </div>
   )
 }

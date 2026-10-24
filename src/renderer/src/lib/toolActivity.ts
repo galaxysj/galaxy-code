@@ -60,12 +60,26 @@ export function isToolInProgress(item: ToolItem): boolean {
 }
 
 /** Display tense follows the current status, including the permission wait. */
+/** The path a read tool opened, if any. */
+export function readPath(item: ToolItem): string {
+  if (item.tool !== 'read') return ''
+  const input = item.input as { path?: unknown; file_path?: unknown } | null
+  return String(input?.path ?? input?.file_path ?? '')
+}
+
+/** Reads of a background command's log file. */
+export function isTerminalRead(item: ToolItem): boolean {
+  return /[/\\]galaxy-code[/\\]bg-[^/\\]+\.log$/.test(readPath(item))
+}
+
 export function toolActivityTitle(item: ToolItem): string {
   if (item.tool === 'bash') {
     if (!/^(?:Run|Ran|Running)\s+/i.test(item.title)) return item.title
     const title = item.title.replace(/^(?:Run|Ran|Running)\s+/i, '').trim()
     return title ? title.charAt(0).toUpperCase() + title.slice(1) : 'Terminal command'
   }
+  // Background command logs read as the terminal they came from.
+  if (isTerminalRead(item)) return isToolInProgress(item) ? 'Reading terminal' : 'Read terminal'
   // These titles are names, questions or user-provided artifact labels.
   if (item.tool === 'agent' || item.tool === 'ask' || item.tool === 'mcp') return item.title
   if (item.tool === 'present' && (item.input as { title?: unknown } | null)?.title) return item.title

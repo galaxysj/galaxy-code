@@ -268,7 +268,7 @@ export function Sidebar(): ReactNode {
   const { byProject, recents } = useMemo(() => {
     const needle = query.trim().toLowerCase()
     const all = Object.values(chatMap)
-      .filter((chat) => !needle || chat.title.toLowerCase().includes(needle))
+      .filter((chat) => !chat.side && (!needle || chat.title.toLowerCase().includes(needle)))
       .sort((a, b) => b.updatedAt - a.updatedAt)
     const known = new Set(projects.map((p) => p.id))
     const byProject = new Map<string, Chat[]>()

@@ -2,7 +2,7 @@ import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ACP_MODEL_ID, modelKey } from '@shared/catalog'
-import { ACP_ACCOUNTS, acpAgentFor, type AccountId, type Chat, type Item, type Project, type SecretState, type Settings } from '@shared/types'
+import { ACP_ACCOUNTS, acpAgentFor, applyCustomAcpAgents, type AccountId, type Chat, type Item, type Project, type SecretState, type Settings } from '@shared/types'
 import { writeJsonAtomic } from './util'
 
 /** Per-chat state that engines need to continue a conversation. */
@@ -15,6 +15,16 @@ export interface EngineState {
   acpAccount?: AccountId
   /** Approval keys the user allowed for the rest of the chat. */
   sessionAllow?: string[]
+  /** File snapshots around each user message, by user item id. */
+  checkpoints?: Record<string, { before: string; after?: string }>
+  /** After a revert the agent's own session no longer matches the chat, so the next turn replays it. */
+  replay?: boolean
+  /** Side chats: how many of the parent chat's items the agent has already been shown. */
+  parentSeen?: number
+  /** Side chats: the Claude session was copied from the main chat; the first run forks it instead of continuing it. */
+  forkClaude?: boolean
+  /** What a revert removed, kept until the next message so it can be redone. */
+  undone?: { items: Item[]; engine: Omit<EngineState, 'undone'>; files: string[]; target: string; source: string }
 }
 
 export interface ChatDoc {
@@ -33,15 +43,24 @@ function defaultSettings(): Settings {
   for (const id of ACCOUNT_IDS) accounts[id] = { enabled: true, binaryPath: '' }
   return {
     theme: 'system',
+    terminalOutput: 'foreground',
+    toolDensity: 'default',
+    foldWork: true,
+    expandToolCalls: true,
     defaultPermissionMode: 'auto',
     permissionDefaultsVersion: 1,
     defaultModelKey: null,
     disabledModels: [],
+    enabledModels: [],
     customModels: [],
     imageModelKey: null,
+    tabCompletion: true,
+    completionModelId: null,
+    inlineModelId: null,
     openRouterBaseUrl: 'https://openrouter.ai/api/v1',
     accounts,
     acpEnabled: true,
+    customAcpAgents: [],
     mcpServers: [],
     sidebarWidth: 272,
     panelWidth: 560,
@@ -75,6 +94,7 @@ class Store {
     const saved = readJson<Partial<Settings>>(this.file('settings.json'), {})
     const base = defaultSettings()
     this.settings = { ...base, ...saved, accounts: { ...base.accounts, ...(saved.accounts ?? {}) } }
+    applyCustomAcpAgents(this.settings.customAcpAgents)
     if (!saved.permissionDefaultsVersion) {
       this.settings.defaultPermissionMode = 'auto'
       this.settings.permissionDefaultsVersion = 1
@@ -83,9 +103,15 @@ class Store {
 
     this.projects = readJson<Project[]>(this.file('projects.json'), [])
     for (const chat of readJson<Chat[]>(this.file('chats.json'), [])) {
+      // Side chats do not outlive the window they were opened in.
+      if (chat.side) {
+        rmSync(join(this.dir, 'chats', `${chat.id}.json`), { force: true })
+        continue
+      }
       // A crash or quit mid-turn leaves stale activity flags behind.
       if (chat.status !== 'idle') chat.status = 'idle'
       chat.queued = []
+      chat.initialSubscription ??= chat.modelKey.split(':', 1)[0]
       // ACP agents used to list fixed models; they now have one entry and pick the model in the session.
       const [subscription, modelId] = [chat.modelKey.slice(0, chat.modelKey.indexOf(':')), chat.modelKey.slice(chat.modelKey.indexOf(':') + 1)]
       if (acpAgentFor(subscription) && modelId !== ACP_MODEL_ID) chat.modelKey = modelKey(subscription, ACP_MODEL_ID)
@@ -106,6 +132,7 @@ class Store {
 
   saveSettings(patch: Partial<Settings>): Settings {
     this.settings = { ...this.settings, ...patch }
+    if (patch.customAcpAgents) applyCustomAcpAgents(this.settings.customAcpAgents)
     void writeJsonAtomic(this.file('settings.json'), this.settings)
     return this.settings
   }

@@ -1,5 +1,7 @@
 import type {
   AccountId,
+  AnalyticsRow,
+  UsageReport,
   AccountStatus,
   AcpConfigOption,
   Attachment,
@@ -9,6 +11,7 @@ import type {
   ChatEvent,
   CreateProjectInput,
   FileView,
+  FileDiff,
   GitInfo,
   Item,
   NewChatInput,
@@ -19,6 +22,19 @@ import type {
   SkillInfo,
   UiEvent
 } from './types'
+
+export interface ReviewOptions {
+  mode: 'uncommitted' | 'unstaged' | 'staged' | 'commit'
+  commit?: string
+}
+
+export interface ReviewCommit {
+  hash: string
+  shortHash: string
+  subject: string
+  author: string
+  date: string
+}
 
 export interface Rect {
   x: number
@@ -40,6 +56,9 @@ export interface GalaxyApi {
     update(patch: Partial<Settings>): Promise<Settings>
     setOpenRouterKey(key: string | null): Promise<void>
     testOpenRouterKey(): Promise<{ ok: boolean; message: string }>
+    /** OpenRouter credits and Claude / Codex plan limits. */
+    usage(): Promise<UsageReport>
+    analytics(): Promise<AnalyticsRow[]>
     signInOpenRouter(): Promise<{ ok: boolean; message: string }>
   }
 
@@ -49,6 +68,7 @@ export interface GalaxyApi {
   }
 
   acp: {
+    answerConsent(requestId: string, allow: boolean): Promise<void>
     /** Session options an ACP agent offers, read before a chat exists. */
     options(id: AccountId, projectId: string | null, fresh?: boolean): Promise<AcpConfigOption[]>
   }
@@ -76,6 +96,10 @@ export interface GalaxyApi {
     approve(chatId: string, approvalId: string, decision: 'allow' | 'allow-session' | 'deny', note?: string): Promise<void>
     answer(chatId: string, itemId: string, answers: Record<string, string> | null): Promise<void>
     unqueue(chatId: string, messageId: string): Promise<void>
+    /** Puts files and the timeline back to before a user message. Rejects on conflicts. */
+    revert(chatId: string, itemId: string): Promise<void>
+    /** Undoes the last revert. */
+    redo(chatId: string): Promise<void>
   }
 
   files: {
@@ -85,9 +109,17 @@ export interface GalaxyApi {
     attachFromPaths(paths: string[]): Promise<Attachment[]>
     attachFromData(name: string, mime: string, base64: string): Promise<Attachment>
     read(path: string, chatId?: string): Promise<FileView>
+    write(path: string, content: string): Promise<void>
     reveal(path: string): Promise<void>
     openExternal(target: string): Promise<void>
     pathForFile(file: File): string
+  }
+
+  editor: {
+    complete(request: { path: string; prefix: string; suffix: string }): Promise<{ text: string; offset: number; next: string | null }>
+    inlineEdit(request: { path: string; before: string; selection: string; after: string; instruction: string; modelId: string; requestId: string }): Promise<string>
+    cancelInlineEdit(requestId: string): Promise<void>
+    terminalCommand(request: { instruction: string; cwd: string; output: string; modelId: string; requestId: string }): Promise<string>
   }
 
   skills: {
@@ -119,7 +151,14 @@ export interface GalaxyApi {
     interrupt(tabId: string): Promise<void>
     close(tabId: string): Promise<void>
   }
-  review: { read(cwd: string): Promise<{ isRepo: boolean; patch: string; untracked: string[] }> }
+  review: {
+    status(cwd: string): Promise<{ isRepo: boolean }>
+    init(cwd: string): Promise<void>
+    read(cwd: string, options?: ReviewOptions): Promise<{ isRepo: boolean; diffs: FileDiff[] }>
+    commits(cwd: string): Promise<ReviewCommit[]>
+    push(cwd: string): Promise<{ branch: string; remote: string }>
+    state(cwd: string): Promise<{ isRepo: boolean; dirty: boolean; hasRemote: boolean }>
+  }
 
   onChatEvent(listener: (event: ChatEvent) => void): () => void
   onUiEvent(listener: (event: UiEvent) => void): () => void

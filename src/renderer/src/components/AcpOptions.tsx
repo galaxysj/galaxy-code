@@ -2,7 +2,7 @@ import { Brain, Check, ChevronDown, CircleAlert, Cpu, ListTodo, RefreshCw, Searc
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AcpConfigOption } from '@shared/types'
 import { cn } from '../lib/utils'
-import { useRunConfig, useStore } from '../store'
+import { useChatId, useRunConfig, useStore } from '../store'
 import { Popover, Spinner } from './ui'
 
 const CATEGORY_ORDER = ['model', 'thought_level', 'mode']
@@ -117,10 +117,11 @@ export function AcpOptions(): ReactNode {
   const { model, acp } = useRunConfig()
   const load = useStore((s) => s.loadAcpOptions)
   const setOption = useStore((s) => s.setAcpOption)
+  const chatId = useChatId()
   const agentId = acp?.agentId
 
   useEffect(() => {
-    if (agentId) void load(agentId)
+    if (agentId) void load(agentId, false, chatId)
   }, [agentId, load])
 
   const options = useMemo(() => {
@@ -144,7 +145,7 @@ export function AcpOptions(): ReactNode {
       <button
         type="button"
         title={acp.error ? `${acp.error}. Click to try again.` : 'Ask the agent for its options again'}
-        onClick={() => void load(acp.agentId, true)}
+        onClick={() => void load(acp.agentId, true, chatId)}
         className="flex h-7 min-w-0 items-center gap-1.5 rounded-lg px-2 text-[12.5px] text-muted transition-colors hover:bg-hover hover:text-fg"
       >
         {acp.error ? <CircleAlert size={13} className="shrink-0 text-warn" /> : <RefreshCw size={12} className="shrink-0 text-subtle" />}
@@ -155,7 +156,7 @@ export function AcpOptions(): ReactNode {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-0.5">
       {options.map((option) => (
-        <OptionPicker key={option.id} option={option} value={acp.values[option.id] ?? option.currentValue} onPick={(value) => setOption(option.id, value)} />
+        <OptionPicker key={option.id} option={option} value={acp.values[option.id] ?? option.currentValue} onPick={(value) => setOption(option.id, value, chatId)} />
       ))}
     </div>
   )

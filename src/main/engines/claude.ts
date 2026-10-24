@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { query, type CanUseTool, type Options, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AskQuestion, FileDiff, SkillInfo, TaskEntry, ToolItem, ToolKind, ToolMeta } from '@shared/types'
-import { commandPrefix, gate } from '../agent/approval'
+import { commandPrefix, gate, outsideReadApproval } from '../agent/approval'
 import { buildBridgeInstructions, gatherContext } from '../agent/prompt'
 import { TurnWriter, type Session, type Turn } from '../agent/session'
 import { bridge, BRIDGE_SERVER_NAME } from '../services/bridge'
@@ -40,6 +40,9 @@ interface Presented {
 }
 
 const READ_ONLY = new Set(['Read', 'Grep', 'Glob', 'LS', 'WebSearch', 'WebFetch', 'NotebookRead', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'BashOutput', 'ExitPlanMode', 'EnterPlanMode', 'Skill', 'Task', 'Agent', 'ToolSearch', 'ListMcpResources', 'ReadMcpResource'])
+
+/** Read-only tools that still ask when they reach outside the working directory. */
+const OUTSIDE_READ = new Set(['Read', 'Grep', 'Glob', 'LS', 'NotebookRead'])
 
 /** Maps a Claude Code tool call onto Galaxy Code's tool vocabulary. */
 function presentTool(name: string, input: Input, cwd: string, skills: SkillInfo[]): Presented {
@@ -293,6 +296,13 @@ export async function runClaude(session: Session, turn: Turn): Promise<void> {
       return { behavior: 'allow', updatedInput: { ...input, answers } }
     }
 
+    const outside = OUTSIDE_READ.has(toolName) ? outsideReadApproval(cwd, input.file_path ?? input.path ?? input.notebook_path, toolName, input) : null
+    if (outside) {
+      const verdict = await gate(session, turn.permissionMode, { itemId, kind: session.item<ToolItem>(itemId)?.tool ?? 'read', ...outside })
+      if (!verdict.allowed) return { behavior: 'deny', message: verdict.message }
+      session.update<ToolItem>(itemId, { status: 'running' })
+      return { behavior: 'allow', updatedInput: input }
+    }
     if (READ_ONLY.has(toolName)) return { behavior: 'allow', updatedInput: input }
 
     const kind = session.item<ToolItem>(itemId)?.tool ?? 'other'
@@ -337,7 +347,7 @@ export async function runClaude(session: Session, turn: Turn): Promise<void> {
     ...(effort ? { effort } : {}),
     ...(turn.fast && turn.model.fastMode ? { settings: { fastMode: true } } : {}),
     ...(executable ? { pathToClaudeCodeExecutable: executable } : {}),
-    ...(session.doc.engine.claudeSessionId ? { resume: session.doc.engine.claudeSessionId } : {})
+    ...(session.doc.engine.claudeSessionId ? { resume: session.doc.engine.claudeSessionId, ...(session.doc.engine.forkClaude ? { forkSession: true } : {}) } : {})
   }
 
   let finished: () => void = () => {}
@@ -359,6 +369,7 @@ export async function runClaude(session: Session, turn: Turn): Promise<void> {
       case 'system': {
         if (message.subtype === 'init' && message.session_id) {
           session.doc.engine.claudeSessionId = message.session_id
+          delete session.doc.engine.forkClaude
           store.touchDoc(session.id)
         }
         break

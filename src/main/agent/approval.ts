@@ -1,9 +1,12 @@
 import { AutoApprovalModel } from '@shared/models'
-import { readFile } from 'node:fs/promises'
+import { lstat, readFile, realpath } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
+import { app } from 'electron'
 import type { PermissionMode, ToolItem, ToolKind } from '@shared/types'
 import { decideRisk, MissingKeyError } from '../services/openrouter'
 import { makeDiff } from '../tools/diff'
-import { previewEditPatch } from '../tools/patch'
+import { parseEditPatch, patchFiles, previewEditPatch } from '../tools/patch'
 import { errorMessage, resolvePath } from '../util'
 import type { Session } from './session'
 
@@ -64,6 +67,87 @@ function denial(note?: string): GateResult {
   }
 }
 
+function inside(root: string, path: string): boolean {
+  const rel = relative(root, path)
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+/** Resolve existing ancestors too, so new files under symlinked directories are checked. */
+async function physicalPath(path: string): Promise<string> {
+  try {
+    return await realpath(path)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || dirname(path) === path) throw error
+    const entry = await lstat(path).catch((entryError: NodeJS.ErrnoException) => {
+      if (entryError.code !== 'ENOENT') throw entryError
+      return null
+    })
+    if (entry?.isSymbolicLink()) throw error
+    return join(await physicalPath(dirname(path)), basename(path))
+  }
+}
+
+async function workspaceEdit(session: Session, request: GateRequest): Promise<boolean> {
+  if (request.kind !== 'edit' && request.kind !== 'create') return false
+  try {
+    const cwd = await session.cwd()
+    const paths: string[] = []
+    const collect = (value: Record<string, unknown>): void => {
+      for (const key of ['file', 'path', 'file_path', 'notebook_path', 'moveTo']) {
+        if (typeof value[key] === 'string' && value[key]) paths.push(value[key] as string)
+      }
+      if (typeof value.patch === 'string' && value.patch.startsWith('*** Begin Patch')) {
+        paths.push(...patchFiles(parseEditPatch(value.patch, cwd), cwd))
+      }
+    }
+    collect(request.action)
+    if (Array.isArray(request.action.files)) {
+      for (const file of request.action.files) {
+        if (file && typeof file === 'object') collect(file as Record<string, unknown>)
+      }
+    }
+    const input = request.action.input
+    if (input && typeof input === 'object') collect(input as Record<string, unknown>)
+    // Unspecified targets still require approval.
+    if (paths.length === 0) return false
+    const root = await realpath(cwd)
+    for (const path of paths) {
+      const absolute = resolvePath(cwd, path)
+      if (!inside(cwd, absolute) || !inside(root, await physicalPath(absolute))) return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Places agents read as part of how Galaxy Code works rather than to look at the user's files:
+ * memory and skills, background terminal logs, the app's own data, and the agent CLIs' own memory.
+ */
+function specialRead(path: string): boolean {
+  const home = homedir()
+  return [
+    join(home, '.galaxy'),
+    join(tmpdir(), 'galaxy-code'),
+    app.getPath('userData'),
+    join(home, '.claude', 'skills'),
+    join(home, '.codex', 'skills')
+  ].some((root) => inside(root, path)) || /[/\\]\.claude[/\\]projects[/\\][^/\\]+[/\\]memory([/\\]|$)/.test(path)
+}
+
+/** Reads, searches and listings outside the working directory go through the gate, except the special places above. */
+export function outsideReadApproval(cwd: string, rawPath: unknown, tool: string, input: Record<string, unknown>): Omit<GateRequest, 'itemId' | 'kind'> | null {
+  if (typeof rawPath !== 'string' || !rawPath.trim()) return null
+  const path = resolvePath(cwd, rawPath)
+  if (inside(cwd, path) || specialRead(path)) return null
+  return {
+    action: { tool, working_directory: cwd, path, inside_workspace: false, ...input },
+    sessionKey: 'read-outside',
+    sessionLabel: 'Allow reads outside the project in this chat'
+  }
+}
+
 /** First words of a shell command, used to group similar commands for "allow in this chat". */
 export function commandPrefix(command: string): string {
   const first = command
@@ -89,6 +173,7 @@ export function commandPrefix(command: string): string {
  */
 export async function gate(session: Session, mode: PermissionMode, request: GateRequest): Promise<GateResult> {
   if (mode === 'full') return { allowed: true }
+  if (mode === 'accept-edits' && await workspaceEdit(session, request)) return { allowed: true }
   if (session.isSessionAllowed(request.sessionKey)) return { allowed: true }
 
   let source: 'ask' | 'auto' = 'ask'

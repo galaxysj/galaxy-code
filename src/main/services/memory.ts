@@ -2,9 +2,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-/** Project chats remember in <project>/.galaxy/MEMORY.md, projectless chats in ~/.galaxy/MEMORY.md. */
-export function memoryPath(projectPath: string | null): string {
-  return join(projectPath ?? homedir(), '.galaxy', 'MEMORY.md')
+/** Every chat shares one memory file, ~/.galaxy/MEMORY.md, whatever its project. */
+export function memoryPath(_projectPath?: string | null): string {
+  return join(homedir(), '.galaxy', 'MEMORY.md')
 }
 
 export async function readMemory(projectPath: string | null): Promise<string> {

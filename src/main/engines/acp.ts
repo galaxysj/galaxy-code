@@ -3,9 +3,10 @@ import { basename, dirname } from 'node:path'
 import { AcpAgents, type AcpAgentSpec } from '@shared/acp-registry'
 import { ACCOUNT_LABELS, type AccountId, type AcpConfigChoice, type AcpConfigOption, type FileDiff, type TaskEntry, type ToolItem, type ToolKind, type ToolMeta } from '@shared/types'
 import { commandPrefix, gate } from '../agent/approval'
-import { buildBridgeInstructions, gatherContext, inlineMentionsBlock } from '../agent/prompt'
+import { gatherContext, inlineMentionsBlock } from '../agent/prompt'
 import { TurnWriter, type Session, type Turn } from '../agent/session'
 import { bridge, BRIDGE_SERVER_NAME, type BridgeHandle } from '../services/bridge'
+import { confirmAntigravityUse } from '../services/antigravityConsent'
 import { store } from '../store'
 import { BRIDGE_TOOLS, type ToolEnv } from '../tools'
 import { makeDiff } from '../tools/diff'
@@ -51,7 +52,24 @@ export async function acpBinary(id: AccountId): Promise<string | null> {
     const found = await which(name)
     if (found) return found
   }
+  if (id === 'antigravity') return which(process.platform === 'win32' ? 'npx.cmd' : 'npx')
   return null
+}
+
+/** Use a pinned community adapter when it has not been installed globally. */
+export async function acpLaunch(id: AccountId, mode: Turn['permissionMode']): Promise<{ command: string; args: string[]; env: NodeJS.ProcessEnv }> {
+  if (id === 'antigravity') await confirmAntigravityUse()
+  const agent = requireAgent(id)
+  const command = await acpBinary(id)
+  if (!command) throw new Error(`${agent.DisplayName} CLI was not found. Install it or set its path in Settings → ACP agents.`)
+  if (id === 'antigravity' && /^agy_acp_server(?:\.par|\.exe)?$/i.test(basename(command))) {
+    throw new Error('Antigravity now uses the unofficial agy-acp adapter. Clear the old CLI path in Settings → ACP agents to use the bundled launch command, or set it to an agy-acp executable.')
+  }
+  const launch = launchFor(agent, mode)
+  if (id === 'antigravity' && /^npx(?:\.cmd)?$/i.test(basename(command))) {
+    launch.args = ['--yes', 'agy-acp@0.5.2', ...launch.args]
+  }
+  return { command, ...launch }
 }
 
 // Session config options
@@ -148,13 +166,10 @@ export function probeAcpOptions(id: AccountId, cwd: string, fresh = false): Prom
   const cached = probes.get(id)
   if (cached && !fresh) return cached
   const probe = (async () => {
-    const agent = requireAgent(id)
-    const binary = await acpBinary(id)
-    if (!binary) throw new Error(`${agent.DisplayName} CLI was not found`)
-    const launch = launchFor(agent, 'ask')
-    const rpc = new RpcProcess({ command: binary, args: launch.args, cwd, env: launch.env, strict: true })
+    const launch = await acpLaunch(id, 'ask')
+    const rpc = new RpcProcess({ ...launch, cwd, strict: true })
     try {
-      await rpc.request('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'galaxy-code', title: 'Galaxy Code', version: '0.1.0' } }, 30000)
+      await rpc.request('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'galaxy-code', title: 'Galaxy Code', version: '0.1.0' } }, id === 'antigravity' ? 180000 : 30000)
       const opened = await rpc.request<Json>('session/new', { cwd, mcpServers: [] }, 60000)
       return optionsOf(opened).options
     } finally {
@@ -199,10 +214,10 @@ export function disposeAllAcp(): void {
   for (const id of [...connections.keys()]) disposeAcp(id)
 }
 
-function mcpServerList(bridgeUrl: string, capabilities: Json): Json[] {
+function mcpServerList(capabilities: Json): Json[] {
   const mcpCaps = (capabilities.mcpCapabilities ?? {}) as Json
   const servers: Json[] = []
-  if (mcpCaps.http) servers.push({ type: 'http', name: BRIDGE_SERVER_NAME, url: bridgeUrl, headers: [] })
+  // ACP agents run on their own tools; Galaxy Code's bridge is not offered to them.
   for (const config of store.settings.mcpServers) {
     if (!config.enabled) continue
     if (config.transport === 'stdio' && config.command) {
@@ -235,13 +250,10 @@ async function connect(account: AccountId, session: Session, env: ToolEnv, mode:
   if (existing) disposeAcp(session.id)
 
   const label = ACCOUNT_LABELS[account]
-  const binary = await acpBinary(account)
-  if (!binary) throw new Error(`${label} CLI was not found. Install it or set its path in Settings → ACP agents.`)
-
+  const launch = await acpLaunch(account, mode)
   const handle = await bridge.register(BRIDGE_TOOLS, env)
-  const launch = launchFor(agent, mode)
   const rpc = new RpcProcess({
-    command: binary,
+    command: launch.command,
     args: launch.args,
     cwd: env.cwd,
     env: launch.env,
@@ -255,7 +267,7 @@ async function connect(account: AccountId, session: Session, env: ToolEnv, mode:
         clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false },
         clientInfo: { name: 'galaxy-code', title: 'Galaxy Code', version: '0.1.0' }
       },
-      30000
+      account === 'antigravity' ? 180000 : 30000
     )
     const connection: Connection = {
       account,
@@ -547,7 +559,7 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
   // Session setup
 
   if (!connection.sessionId) {
-    const servers = mcpServerList(connection.handle.url, connection.capabilities)
+    const servers = mcpServerList(connection.capabilities)
     const saved = session.doc.engine.acpAccount === account ? session.doc.engine.acpSessionId : undefined
     const open = async (): Promise<Json & { sessionId?: string }> => {
       if (saved && connection.capabilities.loadSession) {
@@ -590,10 +602,6 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
   session.patchChat({ acpOptions: connection.options })
   store.touchDoc(session.id)
 
-  // ACP has no system prompt channel, so app guidance rides along with the first message.
-  const first = !session.doc.items.some((i) => i.kind === 'assistant')
-  const bridged = (connection.capabilities.mcpCapabilities as Json | undefined)?.http ? BRIDGE_TOOLS.map((t) => t.name) : []
-  const preface = first ? `<galaxy-code-context>\n${buildBridgeInstructions(ctx, bridged)}\n</galaxy-code-context>\n\n` : ''
   const prompt: Json[] = []
   const others: string[] = []
   const acceptsImages = ((connection.capabilities.promptCapabilities ?? {}) as Json).image === true
@@ -608,7 +616,7 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
     others.push(attachment.path)
   }
   const note = others.length ? `\n\nAttached files:\n${others.map((p) => `- ${p}`).join('\n')}` : ''
-  prompt.unshift({ type: 'text', text: preface + inlineMentionsBlock(turn.mentions) + '\n\n' + (turn.text || 'See the attached files.') + note })
+  prompt.unshift({ type: 'text', text: inlineMentionsBlock(turn.mentions) + '\n\n' + (turn.text || 'See the attached files.') + note })
 
   const onAbort = (): void => rpc.notify('session/cancel', { sessionId })
   turn.signal.addEventListener('abort', onAbort, { once: true })

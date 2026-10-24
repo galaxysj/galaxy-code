@@ -17,6 +17,37 @@ export async function gitInfo(path: string): Promise<GitInfo> {
   return { isRepo: true, branch: branch.ok ? branch.out : null }
 }
 
+/** What the review panel needs to pick its main Git action. */
+export async function gitState(cwd: string): Promise<{ isRepo: boolean; dirty: boolean; hasRemote: boolean }> {
+  if (!(await gitInfo(cwd)).isRepo) return { isRepo: false, dirty: false, hasRemote: false }
+  const [status, remotes] = await Promise.all([git(cwd, ['status', '--porcelain']), git(cwd, ['remote'])])
+  return { isRepo: true, dirty: status.ok && status.out !== '', hasRemote: remotes.ok && remotes.out !== '' }
+}
+
+/**
+ * Pushes the current branch. A branch without an upstream goes to origin, or the
+ * only remote, and becomes tracked there. Never prompts for credentials.
+ */
+export async function pushBranch(cwd: string): Promise<{ branch: string; remote: string }> {
+  const branch = await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  if (!branch.ok || branch.out === 'HEAD') throw new Error('No branch is checked out, so there is nothing to push.')
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+  const push = async (args: string[]): Promise<void> => {
+    const result = await run('git', ['push', ...args], { cwd, timeout: 120000, env })
+    if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || 'git push failed.')
+  }
+  const upstream = await git(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
+  if (upstream.ok && upstream.out) {
+    await push([])
+    return { branch: branch.out, remote: upstream.out.split('/')[0] }
+  }
+  const remotes = (await git(cwd, ['remote'])).out.split('\n').filter(Boolean)
+  const remote = remotes.includes('origin') ? 'origin' : remotes.length === 1 ? remotes[0] : null
+  if (!remote) throw new Error(remotes.length ? 'This branch has no upstream and there are several remotes. Set an upstream first.' : 'This repository has no remote to push to.')
+  await push(['-u', remote, branch.out])
+  return { branch: branch.out, remote }
+}
+
 /**
  * Creates an isolated checkout for a chat on its own branch, under
  * ~/.galaxy/worktrees/<project>/<slug>. Fails if the repo has no commits yet.

@@ -9,6 +9,7 @@ export interface BrowserAction {
   /** navigate only: true keeps the user's panel selection, false reveals the tab. */
   background?: boolean
   action:
+    | 'create'
     | 'tabs'
     | 'close'
     | 'navigate'
@@ -614,16 +615,24 @@ class BrowserTabs {
   reload(id?: string, window?: BrowserWindow): void { this.get(id, window).reload() }
   stop(id?: string, window?: BrowserWindow): void { this.get(id, window).stop() }
   async act(chatId: string, action: BrowserAction, signal?: AbortSignal): Promise<BrowserResult> {
+    if (action.action === 'create') {
+      action = { ...action, action: 'navigate', url: action.url || 'about:blank', tabIndex: undefined, background: action.background ?? false }
+    }
     const window = this.windowFor(undefined, this.windowForChat(chatId) ?? undefined)
-    if (action.action === 'tabs') return { text: JSON.stringify(this.listTabs(window).map(({ title, url, tabIndex }) => ({ tabIndex, title, url }))) }
+    if (action.action === 'tabs') {
+      const tabs = this.listTabs(window).map(({ title, url, tabIndex }) => ({ tabIndex, title, url }))
+      return { text: tabs.length ? JSON.stringify(tabs) : 'No open browser tabs. Call Browser with action "create" and the requested url to open one now. Use background:false to show it to the user.' }
+    }
     if (action.action === 'navigate' && !action.url) throw new Error('url is required for navigate.')
     if (action.background !== undefined && typeof action.background !== 'boolean') throw new Error('background must be true or false.')
     let id: string
     if (action.tabIndex !== undefined) {
       if (!Number.isInteger(action.tabIndex) || action.tabIndex < 1) throw new Error('tabIndex must be a positive integer (1-based).')
       const selected = this.tabIds(window)[action.tabIndex - 1]
-      if (!selected) throw new Error(`No browser tab at index ${action.tabIndex}. Use ListTabs to list the current indices.`)
-      id = selected
+      if (!selected) {
+        if (action.action === 'navigate' && this.tabIds(window).length === 0) id = this.create(window)
+        else throw new Error(`No browser tab at index ${action.tabIndex}. Use Browser with action "create" and a url to open a new tab, or ListTabs to find an existing tab.`)
+      } else id = selected
     } else {
       if (action.action !== 'navigate') throw new Error('tabIndex is required. Use ListTabs to find a tab, then pass its tabIndex.')
       id = this.create(window)

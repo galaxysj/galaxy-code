@@ -1,16 +1,46 @@
-import { ChevronRight, Code, FileImage, FileText, Folder, FolderOpen, Search, RotateCw } from 'lucide-react'
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { ChevronRight, Code, FileImage, FileText, Folder, FolderOpen, PanelRight, Search, RotateCw } from 'lucide-react'
+import { useCallback, useEffect, useId, useState, type ReactNode } from 'react'
 import type { ProjectFileEntry } from '@shared/types'
 import { basename, cn } from '../lib/utils'
 import type { OpenFile, PanelTab } from '../store'
 import { useStore } from '../store'
 import { IconButton, Spinner } from './ui'
 
-function FileIcon({ name }: { name: string }): ReactNode {
-  if (/\.(tsx?|jsx?)$/i.test(name)) return <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-blue-500/10 text-[8px] font-semibold text-blue-500">{name.match(/\.([^.]+)$/)?.[1].slice(0, 2).toUpperCase()}</span>
-  if (/\.json$/i.test(name)) return <Code size={14} className="shrink-0 text-orange-500" />
-  if (/\.(png|jpe?g|gif|svg|webp)$/i.test(name)) return <FileImage size={14} className="shrink-0 text-pink-500" />
-  return <FileText size={14} className="shrink-0 text-subtle" />
+/** Two-letter badges for common source files, keyed by extension. */
+const BADGES: Record<string, [string, string]> = {
+  ts: ['TS', 'bg-blue-500/12 text-blue-500'],
+  tsx: ['TS', 'bg-blue-500/12 text-blue-500'],
+  mts: ['TS', 'bg-blue-500/12 text-blue-500'],
+  js: ['JS', 'bg-yellow-500/15 text-yellow-600'],
+  jsx: ['JS', 'bg-yellow-500/15 text-yellow-600'],
+  mjs: ['JS', 'bg-yellow-500/15 text-yellow-600'],
+  py: ['PY', 'bg-sky-500/12 text-sky-600'],
+  rs: ['RS', 'bg-orange-500/12 text-orange-600'],
+  go: ['GO', 'bg-cyan-500/12 text-cyan-600'],
+  swift: ['SW', 'bg-orange-500/12 text-orange-500'],
+  java: ['JV', 'bg-red-500/12 text-red-500'],
+  kt: ['KT', 'bg-violet-500/12 text-violet-500'],
+  rb: ['RB', 'bg-red-500/12 text-red-500'],
+  css: ['CS', 'bg-indigo-500/12 text-indigo-500'],
+  scss: ['SC', 'bg-pink-500/12 text-pink-500'],
+  html: ['<>', 'bg-orange-500/12 text-orange-500'],
+  md: ['MD', 'bg-zinc-500/12 text-muted'],
+  sh: ['SH', 'bg-green-500/12 text-green-600']
+}
+
+export function FileIcon({ name, size = 14 }: { name: string; size?: number }): ReactNode {
+  const ext = name.match(/\.([^.]+)$/)?.[1].toLowerCase() ?? ''
+  const badge = BADGES[ext]
+  if (badge) {
+    return (
+      <span className={cn('inline-flex shrink-0 items-center justify-center rounded-[3px] font-semibold leading-none', badge[1])} style={{ width: size + 2, height: size + 2, fontSize: Math.round(size * 0.55) }}>
+        {badge[0]}
+      </span>
+    )
+  }
+  if (/^(json|jsonc|yaml|yml|toml)$/.test(ext)) return <Code size={size} className="shrink-0 text-orange-500" />
+  if (/^(png|jpe?g|gif|svg|webp|ico)$/.test(ext)) return <FileImage size={size} className="shrink-0 text-pink-500" />
+  return <FileText size={size} className="shrink-0 text-subtle" />
 }
 
 export function ProjectFilesPane({ tab, available, renderFile }: { tab: Extract<PanelTab, { type: 'files' }>; available: boolean; renderFile(file: OpenFile): ReactNode }): ReactNode {
@@ -22,6 +52,8 @@ export function ProjectFilesPane({ tab, available, renderFile }: { tab: Extract<
   const [searching, setSearching] = useState(false)
   const [error, setError] = useState('')
   const [selected, setSelected] = useState<OpenFile | null>(null)
+  const [treeOpen, setTreeOpen] = useState(true)
+  const treeId = useId()
   const [revision, setRevision] = useState(0)
   const load = useCallback(async (relativePath: string) => {
     setLoading((previous) => new Set(previous).add(relativePath))
@@ -66,10 +98,21 @@ export function ProjectFilesPane({ tab, available, renderFile }: { tab: Extract<
   })
   if (!available) return <div className="flex h-full items-center justify-center text-[12px] text-subtle">Choose a project to browse files.</div>
   return <div className="flex h-full min-w-0 flex-col">
-    <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-line px-3 text-[11.5px] text-muted"><FolderOpen size={13} /><span className="truncate" title={tab.root}>{basename(tab.root)}</span>{selected && <><ChevronRight size={11} className="shrink-0 text-subtle" /><span className="min-w-0 flex-1 truncate font-mono">{selected.path.slice(tab.root.length + 1)}</span></>}</div>
+    <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-line px-3 text-[11.5px] text-muted">
+      <FolderOpen size={13} className="shrink-0" /><span className="truncate" title={tab.root}>{basename(tab.root)}</span>
+      {selected && <><ChevronRight size={11} className="shrink-0 text-subtle" /><span className="min-w-0 flex-1 truncate font-mono">{selected.path.slice(tab.root.length + 1)}</span></>}
+      <button type="button" aria-label={treeOpen ? 'Hide file tree' : 'Show file tree'} title={treeOpen ? 'Hide file tree' : 'Show file tree'} aria-expanded={treeOpen} aria-controls={treeId} onClick={() => setTreeOpen((open) => !open)} className={cn('ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-hover hover:text-fg', treeOpen && 'bg-hover text-fg')}><PanelRight size={14} /></button>
+    </div>
     <div className="flex min-h-0 flex-1">
-      {selected && <div className="min-w-0 flex-1">{renderFile(selected)}</div>}
-      <div className={cn('flex min-h-0 flex-col', selected ? 'w-[40%] min-w-[150px] max-w-[220px] shrink-0 border-l border-line' : 'w-full')}>
+      <div className="min-w-0 flex-1">
+        {selected ? renderFile(selected) : <div className="flex h-full flex-col items-center justify-center gap-2 px-5 text-center">
+          <FileText size={24} className="text-subtle" />
+          <span className="text-[13px] font-medium text-muted">Open a file</span>
+          <span className="max-w-[240px] text-[12px] leading-relaxed text-subtle">Select a file from the file tree to view or edit it here.</span>
+          {!treeOpen && <button type="button" onClick={() => setTreeOpen(true)} className="mt-1 rounded-md px-2 py-1 text-[12px] text-muted hover:bg-hover hover:text-fg">Show file tree</button>}
+        </div>}
+      </div>
+      <div id={treeId} hidden={!treeOpen} className={cn('min-h-0 w-[40%] min-w-[150px] max-w-[220px] shrink-0 flex-col border-l border-line', treeOpen ? 'flex' : 'hidden')}>
         <div className="flex shrink-0 items-center gap-1 p-2"><div className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-line px-2"><Search size={12} className="shrink-0 text-subtle" /><input aria-label="Filter project files" placeholder="Filter files…" value={filter} onChange={(event) => setFilter(event.target.value)} className="min-w-0 flex-1 bg-transparent text-[11.5px] placeholder:text-subtle" /></div><IconButton label="Refresh files" size="sm" onClick={() => setRevision((value) => value + 1)}><RotateCw size={12} /></IconButton></div>
         <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-3">{error && <div className="p-2 text-[11.5px] text-danger">{error}</div>}{loading.has('') || searching ? <div className="p-2"><Spinner size={13} className="text-subtle" /></div> : rows(filter.trim() ? results : folders[''] ?? [])}{filter.trim() && !searching && !results.length && <div className="p-2 text-[11.5px] text-subtle">No matching files.</div>}</div>
       </div>

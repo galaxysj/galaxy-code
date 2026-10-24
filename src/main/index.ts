@@ -127,7 +127,10 @@ function buildMenu(): void {
     {
       label: 'View',
       submenu: [
-        { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+B', click: () => dispatchMenu('toggle-sidebar') },
+        { label: 'Open Files', accelerator: 'CmdOrCtrl+B', click: () => dispatchMenu('open-files') },
+        { label: 'Open Browser', accelerator: 'CmdOrCtrl+Shift+B', click: () => dispatchMenu('open-browser') },
+        { label: 'Open Terminal', accelerator: 'CmdOrCtrl+J', click: () => dispatchMenu('open-terminal') },
+        { label: 'Toggle Sidebar', click: () => dispatchMenu('toggle-sidebar') },
         { label: 'Toggle Side Panel', accelerator: 'CmdOrCtrl+Alt+B', click: () => dispatchMenu('toggle-panel') },
         { type: 'separator' },
         { role: 'resetZoom' },

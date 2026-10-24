@@ -8,13 +8,20 @@ export function modelKey(subscription: string, id: string): string {
   return `${subscription}:${id}`
 }
 
+/** Existing chats stay within the native engines or their original ACP agent. */
+export function canUseChatSubscription(chat: { modelKey: string; initialSubscription?: Subscription } | null | undefined, subscription: Subscription): boolean {
+  if (!chat) return true
+  const initial = chat.initialSubscription ?? chat.modelKey.split(':', 1)[0]
+  return initial === subscription
+}
+
 function pickDefaultEffort(spec: AgentModelSpec): Effort | null {
   if (spec.Efforts.length === 0) return null
   if (spec.DefaultEffort && spec.Efforts.includes(spec.DefaultEffort)) return spec.DefaultEffort
   return spec.Efforts[Math.floor((spec.Efforts.length - 1) / 2)]
 }
 
-function fromSpec(spec: AgentModelSpec, disabled: Set<string>): ResolvedModel {
+function fromSpec(spec: AgentModelSpec, disabled: Set<string>, enabled: Set<string>): ResolvedModel {
   const key = modelKey(spec.Subscription, spec.ID)
   const efforts = [...spec.Efforts].sort((a, b) => EFFORT_ORDER.indexOf(a) - EFFORT_ORDER.indexOf(b))
   return {
@@ -28,7 +35,8 @@ function fromSpec(spec: AgentModelSpec, disabled: Set<string>): ResolvedModel {
     fastMode: spec.FastMode,
     vision: spec.Vision !== false,
     custom: false,
-    enabled: !disabled.has(key)
+    enabled: spec.Off ? enabled.has(key) : !disabled.has(key),
+    defaultOff: spec.Off === true
   }
 }
 
@@ -47,6 +55,22 @@ function fromCustom(model: CustomModel, disabled: Set<string>): ResolvedModel {
     custom: true,
     enabled: !disabled.has(key)
   }
+}
+
+/** OpenRouter's Auto Router: it chooses a model for each request, so it has no effort or Fast. */
+export const AUTO_MODEL: ResolvedModel = {
+  key: modelKey('Default', 'openrouter/auto'),
+  name: 'Auto',
+  id: 'openrouter/auto',
+  subscription: 'Default',
+  efforts: [],
+  defaultEffort: null,
+  ultraEffort: null,
+  fastMode: false,
+  vision: true,
+  custom: false,
+  enabled: true,
+  auto: true
 }
 
 /** ACP agents pick their model inside the session, so each gets one entry that stands for the agent. */
@@ -69,12 +93,14 @@ function fromAcpAgent(name: string): ResolvedModel {
 /** The model id of an ACP agent's entry. The agent's own config options choose the real model. */
 export const ACP_MODEL_ID = 'default'
 
-export function resolveModels(settings: Pick<Settings, 'customModels' | 'disabledModels'>): ResolvedModel[] {
+export function resolveModels(settings: Pick<Settings, 'customModels' | 'disabledModels' | 'enabledModels'>): ResolvedModel[] {
   const disabled = new Set(settings.disabledModels)
+  const enabled = new Set(settings.enabledModels ?? [])
   const seen = new Set<string>()
   const out: ResolvedModel[] = []
   for (const model of [
-    ...AgentModel.map((spec) => fromSpec(spec, disabled)),
+    AUTO_MODEL,
+    ...AgentModel.map((spec) => fromSpec(spec, disabled, enabled)),
     ...AcpAgents.map((agent) => fromAcpAgent(agent.DisplayName)),
     ...settings.customModels.filter((custom) => !ACP_ACCOUNTS.includes(SUBSCRIPTION_ACCOUNT[custom.subscription] ?? '')).map((custom) => fromCustom(custom, disabled))
   ]) {
@@ -101,7 +127,7 @@ export function findModel(models: ResolvedModel[], key: string | null | undefine
 
 /** An account is usable only when its own switch is on, and for ACP agents the ACP switch too. */
 export function accountEnabled(settings: Pick<Settings, 'accounts' | 'acpEnabled'>, id: AccountId): boolean {
-  if (!settings.accounts[id]?.enabled) return false
+  if (settings.accounts[id]?.enabled === false) return false
   return settings.acpEnabled !== false || !ACP_ACCOUNTS.includes(id)
 }
 

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type { Attachment, Effort } from '@shared/types'
 import { buildSystemPrompt, gatherContext } from '../agent/prompt'
@@ -9,11 +10,12 @@ import {
   type ChatMessage,
   type ChatToolCall
 } from '../services/openrouter'
-import { ALL_TOOLS, mcpTools, runTool, toolsForSubagent, toSpecs, type ToolDef, type ToolEnv } from '../tools'
+import { ALL_TOOLS, mcpTools, runTool, toolsForMode, toolsForSubagent, toSpecs, type ToolDef, type ToolEnv } from '../tools'
 import type { ToolImage } from '../tools/types'
 import { isImagePath, truncateEnd, truncateMiddle } from '../util'
 
 const MAX_STEPS = 250
+const PLAN_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789'
 const MAX_TOOL_RESULT = 60_000
 /** Prompt size at which older history is folded into a summary. */
 const COMPACT_AT_TOKENS = 180_000
@@ -223,9 +225,14 @@ async function loop(options: LoopOptions): Promise<string> {
   return finalText
 }
 
+/** Eight random lowercase letters and digits that keep plan file names unique. */
+function planId(): string {
+  return Array.from(randomBytes(8), (byte) => PLAN_ID_CHARS[byte % PLAN_ID_CHARS.length]).join('')
+}
+
 /** Runs a turn against OpenRouter (or the BYOK endpoint) with Galaxy Code's own tools. */
 export async function runNative(session: Session, turn: Turn): Promise<void> {
-  const ctx = await gatherContext(session, { permissionMode: turn.permissionMode, modelName: turn.model.name, ultra: turn.ultra })
+  const ctx = await gatherContext(session, { permissionMode: turn.permissionMode, modelName: turn.model.name, ultra: turn.ultra && !turn.mode, mode: turn.mode, planId: turn.mode === 'plan' ? planId() : undefined })
   const history = (session.doc.engine.history ?? []) as ChatMessage[]
   session.doc.engine.history = history
   repairHistory(history)
@@ -247,7 +254,7 @@ export async function runNative(session: Session, turn: Turn): Promise<void> {
       turn,
       system: buildSystemPrompt(ctx, turn.mentions),
       messages: history,
-      tools: [...(session.agentId === 'main' ? ALL_TOOLS : toolsForSubagent('general')), ...mcpTools()],
+      tools: turn.mode ? toolsForMode(turn.mode) : [...(session.agentId === 'main' ? ALL_TOOLS : toolsForSubagent('general')), ...mcpTools()],
       env,
       writer,
       effort: turn.effort,

@@ -274,11 +274,11 @@ export async function streamChat(req: StreamRequest): Promise<StreamResult> {
 }
 
 /** One-shot completion for short utility prompts. */
-export async function complete(model: string, messages: ChatMessage[], signal?: AbortSignal): Promise<string> {
+export async function complete(model: string, messages: ChatMessage[], signal?: AbortSignal, extra: Record<string, unknown> = {}): Promise<string> {
   const res = await fetch(`${baseUrl()}/chat/completions`, {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ model, messages, stream: false }),
+    body: JSON.stringify({ model, messages, stream: false, ...extra }),
     signal
   })
   if (!res.ok) throw new Error(await readError(res))
@@ -447,6 +447,18 @@ export async function testKey(): Promise<{ ok: boolean; message: string }> {
   } catch (err) {
     return { ok: false, message: errorMessage(err) }
   }
+}
+
+/** Account balance: credits bought and spent, and the key's own limit when it has one. */
+export async function openRouterCredits(): Promise<{ total: number; used: number; keyLimit: number | null; keyRemaining: number | null }> {
+  const [credits, key] = await Promise.all([
+    fetch(`${baseUrl()}/credits`, { headers: authHeaders(), signal: AbortSignal.timeout(15000) }),
+    fetch(`${baseUrl()}/key`, { headers: authHeaders(), signal: AbortSignal.timeout(15000) })
+  ])
+  if (!credits.ok) throw new Error(await readError(credits))
+  const balance = ((await credits.json()) as { data?: { total_credits?: number; total_usage?: number } }).data ?? {}
+  const info = key.ok ? (((await key.json()) as { data?: { limit?: number | null; limit_remaining?: number | null } }).data ?? {}) : {}
+  return { total: balance.total_credits ?? 0, used: balance.total_usage ?? 0, keyLimit: info.limit ?? null, keyRemaining: info.limit_remaining ?? null }
 }
 
 /** Browser sign-in: OpenRouter mints a key for this app and hands it to a loopback callback. */

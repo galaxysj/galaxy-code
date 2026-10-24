@@ -13,6 +13,7 @@
  *   UltraEffort   Effort used when Ultra is selected. Empty string means the
  *                 model cannot run Ultra.
  *   FastMode      true lets the user switch Fast on for this model.
+ *   Off           true ships the model switched off; users turn it on in Settings.
  */
 
 /** 'Default', 'Claude', 'Codex', or an ACP agent's DisplayName from acp-registry.ts. */
@@ -31,6 +32,8 @@ export interface AgentModelSpec {
   DefaultEffort?: Effort
   /** Set false for models that cannot take image input. Defaults to true. */
   Vision?: boolean
+  /** true ships the model switched off until the user turns it on in Settings. */
+  Off?: boolean
 }
 
 export interface ImageModelSpec {
@@ -62,7 +65,8 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
     UltraEffort: 'xhigh',
-    FastMode: false
+    FastMode: false,
+    Off: true
   },
   {
     DisplayName: 'Sonnet 5.5',
@@ -79,7 +83,8 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     UltraEffort: '',
-    FastMode: false
+    FastMode: false,
+    Off: true
   },
 // OpenRouter Claude Legacy
   {
@@ -89,7 +94,8 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
     UltraEffort: 'xhigh',
-    FastMode: false
+    FastMode: false,
+    Off: true
   },
   {
     DisplayName: 'Haiku 4.5',
@@ -97,7 +103,8 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: [],
     UltraEffort: '',
-    FastMode: false
+    FastMode: false,
+    Off: true
   },
   {
     DisplayName: 'Opus 5',
@@ -106,7 +113,8 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
     UltraEffort: 'xhigh',
-    FastMode: true
+    FastMode: true,
+    Off: true
   },
   {
     DisplayName: 'Opus 4.8',
@@ -114,7 +122,62 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     UltraEffort: 'xhigh',
-    FastMode: false
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Opus 4.7',
+    ID: 'anthropic/claude-opus-4.7',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Opus 4.6',
+    ID: 'anthropic/claude-opus-4.6',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Opus 4.5',
+    ID: 'anthropic/claude-opus-4.5',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh'],
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Opus 4.1',
+    ID: 'anthropic/claude-opus-4.1',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh'],
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Sonnet 4.6',
+    ID: 'anthropic/claude-sonnet-4.6',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh'],
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Sonnet 4.5',
+    ID: 'anthropic/claude-sonnet-4.5',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh'],
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
   },
   {
     DisplayName: 'Fable 5',
@@ -122,7 +185,8 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     UltraEffort: 'xhigh',
-    FastMode: false
+    FastMode: false,
+    Off: true
   },
 
 
@@ -165,7 +229,8 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
     DefaultEffort: 'medium',
     UltraEffort: 'xhigh',
-    FastMode: false
+    FastMode: false,
+    Off: true
   },
   {
     DisplayName: 'GPT-5.6 Sol',
@@ -174,7 +239,8 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'medium',
     UltraEffort: 'xhigh',
-    FastMode: true
+    FastMode: true,
+    Off: true
   },
   {
     DisplayName: 'GPT-5.6 Terra',
@@ -183,16 +249,18 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'medium',
     UltraEffort: 'xhigh',
-    FastMode: true
+    FastMode: true,
+    Off: true
   },
   {
     DisplayName: 'GPT-5.6 Luna',
-    ID: 'openai/gpt-5.6-terra',
+    ID: 'openai/gpt-5.6-luna',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'medium',
     UltraEffort: 'max',
-    FastMode: true
+    FastMode: true,
+    Off: true
   },
   {
     DisplayName: 'GPT-5.5',
@@ -201,18 +269,200 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
     DefaultEffort: 'medium',
     UltraEffort: 'xhigh',
-    FastMode: true
+    FastMode: true,
+    Off: true
+  },
+  {
+    DisplayName: 'GPT-6 Sol',
+    ID: 'openai/gpt-6-sol',
+    Subscription: 'Default',
+    Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'GPT-5.4',
+    ID: 'openai/gpt-5.4',
+    Subscription: 'Default',
+    Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'GPT-5.4 Mini',
+    ID: 'openai/gpt-5.4-mini',
+    Subscription: 'Default',
+    Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'GPT-5.4 Nano',
+    ID: 'openai/gpt-5.4-nano',
+    Subscription: 'Default',
+    Efforts: ['none', 'low', 'medium', 'high'],
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Codex 5.2',
+    ID: 'openai/gpt-5.2-codex',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh'],
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'GPT-5.2',
+    ID: 'openai/gpt-5.2',
+    Subscription: 'Default',
+    Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Codex 5.1 Max',
+    ID: 'openai/gpt-5.1-codex-max',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh'],
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Codex 5.1',
+    ID: 'openai/gpt-5.1-codex',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Codex 5.1 Mini',
+    ID: 'openai/gpt-5.1-codex-mini',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'GPT-5.1',
+    ID: 'openai/gpt-5.1',
+    Subscription: 'Default',
+    Efforts: ['none', 'low', 'medium', 'high'],
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'GPT-5',
+    ID: 'openai/gpt-5',
+    Subscription: 'Default',
+    Efforts: ['minimal', 'low', 'medium', 'high'],
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'GPT-5 Mini',
+    ID: 'openai/gpt-5-mini',
+    Subscription: 'Default',
+    Efforts: ['minimal', 'low', 'medium', 'high'],
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'GPT-5 Nano',
+    ID: 'openai/gpt-5-nano',
+    Subscription: 'Default',
+    Efforts: ['minimal', 'low', 'medium', 'high'],
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
   },
 
 
   
+  {
+    DisplayName: 'Gemini 4 Argon',
+    ID: 'google/gemini-4-argon',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    DefaultEffort: 'high',
+    UltraEffort: 'high',
+    FastMode: false,
+  },
+  {
+    DisplayName: 'Gemini 3.7 Flash',
+    ID: 'google/gemini-3.7-flash',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Gemini 3.6 Flash',
+    ID: 'google/gemini-3.6-flash',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Gemini 3.5 Flash',
+    ID: 'google/gemini-3.5-flash',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Gemini 3.5 Flash Lite',
+    ID: 'google/gemini-3.5-flash-lite',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Gemini 3.1 Flash Lite',
+    ID: 'google/gemini-3.1-flash-lite',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Gemini 3 Flash',
+    ID: 'google/gemini-3-flash-preview',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
   {
     DisplayName: 'Gemini 3.8 Flash',
     ID: 'google/gemini-3.8-flash',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
     UltraEffort: 'high',
-    FastMode: false
+    FastMode: false,
+    Off: true
   },
   {
     DisplayName: 'Gemini 3.1 Pro',
@@ -220,7 +470,8 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
     UltraEffort: 'high',
-    FastMode: false
+    FastMode: false,
+    Off: true
   },
   {
     DisplayName: 'Grok 4.7',
@@ -229,7 +480,8 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['low', 'medium', 'high', 'xhigh'],
     DefaultEffort: 'high',
     UltraEffort: 'xhigh',
-    FastMode: false
+    FastMode: false,
+    Off: true
   },
   {
     DisplayName: 'Kimi K3',
@@ -238,7 +490,18 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
     UltraEffort: 'high',
-    FastMode: false
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Kimi K3.1 Pro',
+    ID: 'moonshotai/kimi-k3.1-pro',
+    Subscription: 'Default',
+    Efforts: ['low', 'high', 'max'],
+    DefaultEffort: 'high',
+    UltraEffort: 'high',
+    FastMode: true,
+    Off: true
   },
   {
     DisplayName: 'DeepSeek V4 Pro',
@@ -248,7 +511,8 @@ export const AgentModel: AgentModelSpec[] = [
     DefaultEffort: 'high',
     UltraEffort: 'max',
     FastMode: false,
-    Vision: false
+    Vision: false,
+    Off: true
   },
   {
     DisplayName: 'GLM 5.3',
@@ -258,7 +522,79 @@ export const AgentModel: AgentModelSpec[] = [
     DefaultEffort: 'high',
     UltraEffort: 'max',
     FastMode: false,
-    Vision: false
+    Vision: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Grok 4.6',
+    ID: 'x-ai/grok-4.6',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh'],
+    DefaultEffort: 'high',
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Grok 4.5',
+    ID: 'x-ai/grok-4.5',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh'],
+    DefaultEffort: 'high',
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Muse Wonder',
+    ID: 'meta/muse-wonder',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    DefaultEffort: 'medium',
+    UltraEffort: 'high',
+    FastMode: false,
+  },
+  {
+    DisplayName: 'Muse Spark 1.3',
+    ID: 'meta/muse-spark-1.3',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    DefaultEffort: 'medium',
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Kimi K2.7 Code',
+    ID: 'moonshotai/kimi-k2.7-code',
+    Subscription: 'Default',
+    Efforts: ['low', 'high', 'max'],
+    DefaultEffort: 'high',
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'GLM 5.3 Flash',
+    ID: 'z-ai/glm-5.3-flash',
+    Subscription: 'Default',
+    Efforts: ['low', 'high', 'max'],
+    DefaultEffort: 'high',
+    UltraEffort: 'max',
+    FastMode: false,
+    Vision: false,
+    Off: true
+  },
+  {
+    DisplayName: 'GLM 5.2',
+    ID: 'z-ai/glm-5.2',
+    Subscription: 'Default',
+    Efforts: ['low', 'high', 'max'],
+    DefaultEffort: 'high',
+    UltraEffort: 'max',
+    FastMode: false,
+    Vision: false,
+    Off: true
   },
 
 
@@ -342,6 +678,22 @@ export const ImageModel: ImageModelSpec[] = [
   { DisplayName: 'Nano Banana 2.1', ID: 'google/gemini-nano-banana-2.1', Subscription: 'Default' },
   { DisplayName: 'Nano Banana Pro', ID: 'google/gemini-3-pro-image', Subscription: 'Default' },
 
+]
+
+/** Tab completion in the file editor. Settings picks one; the first entry is the default. Runs on OpenRouter. */
+export const CompletionModel: UtilityModelSpec[] = [
+  { DisplayName: 'Haiku', ID: '~anthropic/claude-haiku-latest' },
+  { DisplayName: 'Luna', ID: '~openai/gpt-luna-latest' },
+  { DisplayName: 'Mercury 3', ID: 'inception/mercury-3' },
+  
+]
+
+/** Ctrl+I inline edits in the file editor. The edit box picks one; the first entry is the default. Runs on OpenRouter. */
+export const InlineModel: UtilityModelSpec[] = [
+  { DisplayName: 'Haiku', ID: '~anthropic/claude-haiku-latest' },
+  { DisplayName: 'Luna', ID: '~openai/gpt-luna-latest' },
+  { DisplayName: 'Gemini Flash', ID: '~google/gemini-flash-latest' },
+  { DisplayName: 'Sonnet', ID: '~anthropic/claude-sonnet-latest' }
 ]
 
 /** The single model Auto mode asks, through the OpenRouter Decisions API, whether an action is safe. */

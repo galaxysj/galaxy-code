@@ -3,6 +3,7 @@ import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promise
 import { basename, dirname, join } from 'node:path'
 import { rgPath as bundledRgPath } from '@vscode/ripgrep'
 import type { ToolItem } from '@shared/types'
+import { outsideReadApproval } from '../agent/approval'
 import { skillNameForPath } from '../services/skills'
 import { displayPath, exists, isImagePath, looksBinary, mimeOf, resolvePath, truncateEnd } from '../util'
 import { makeDiff } from './diff'
@@ -48,9 +49,13 @@ export const readTool: ToolDef = {
     },
     required: ['path']
   },
+  approval(input, ctx) {
+    return outsideReadApproval(ctx.cwd, input.path, 'Read', input)
+  },
   present(input, ctx) {
     const path = String(input.path ?? '')
     const abs = resolvePath(ctx.cwd, path)
+    if (/[/\\]galaxy-code[/\\]bg-[^/\\]+\.log$/.test(abs)) return { title: 'Read terminal output' }
     const skill = skillNameForPath(abs, ctx.skills)
     if (skill) return { title: `Read ${skill} skill`, meta: { skill } }
     const offset = Number(input.offset) || 0
@@ -125,6 +130,9 @@ export const grepTool: ToolDef = {
     },
     required: ['pattern']
   },
+  approval(input, ctx) {
+    return outsideReadApproval(ctx.cwd, input.path, 'Grep', input)
+  },
   present(input, ctx) {
     const scope = input.path ? ` in ${displayPath(ctx.cwd, String(input.path))}` : input.glob ? ` in ${String(input.glob)}` : ''
     return { title: `Grep ${JSON.stringify(String(input.pattern ?? ''))}${scope}`, meta: { query: String(input.pattern ?? '') } }
@@ -179,6 +187,9 @@ export const globTool: ToolDef = {
     },
     required: ['pattern']
   },
+  approval(input, ctx) {
+    return outsideReadApproval(ctx.cwd, input.path, 'Glob', input)
+  },
   present(input, ctx) {
     const scope = input.path ? ` in ${displayPath(ctx.cwd, String(input.path))}` : ''
     return { title: `Glob ${String(input.pattern ?? '')}${scope}`, meta: { query: String(input.pattern ?? '') } }
@@ -209,6 +220,9 @@ export const listTool: ToolDef = {
       path: { type: 'string', description: 'Directory to list. Defaults to the working directory.' },
       depth: { type: 'integer', description: 'How many levels to descend, 1 to 3. Defaults to 1.' }
     }
+  },
+  approval(input, ctx) {
+    return outsideReadApproval(ctx.cwd, input.path, 'List', input)
   },
   present(input, ctx) {
     return { title: `List ${displayPath(ctx.cwd, String(input.path ?? '.'))}` }

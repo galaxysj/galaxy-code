@@ -1,26 +1,64 @@
-import { ArrowDown, ChevronRight, CircleAlert, CircleStop, Clock, File as FileIcon, Info } from 'lucide-react'
+import { ArrowDown, ChevronRight, CircleAlert, CircleStop, Clock, File as FileIcon, FileText, GitCommitHorizontal, Globe, Info, MessageCircle, Package, Plug, Redo2, SquareTerminal, Undo2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { AssistantItem, Chat, FileDiff, Item, NoticeItem, ReasoningItem, ToolItem, TurnItem, UserItem } from '@shared/types'
+import type { AssistantItem, Chat, FileDiff, Item, MentionChip, NoticeItem, ReasoningItem, ToolItem, TurnItem, UserItem } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, plural } from '../../lib/utils'
+import { toolActivityTitle } from '../../lib/toolActivity'
 import { useStore } from '../../store'
 import { DiffStat } from '../DiffView'
+import { Composer } from '../Composer'
 import { Markdown } from '../Markdown'
-import { CopyButton } from '../ui'
-import { ExploreGroup, isBrowsing, isExplore, isHiddenAgentMessage, PresentTool, ToolBlock, type TimelineContext } from './Tools'
+import { FileIcon as FileTypeIcon } from '../ProjectFiles'
+import { cleanError } from '../Settings'
+import { Button, CopyButton, IconButton, Modal } from '../ui'
+import { ExploreGroup, isBrowsing, isCompactable, isExplore, isHiddenAgentMessage, PresentTool, ToolBlock, type TimelineContext } from './Tools'
 
-const UserMessage = memo(function UserMessage({ item }: { item: UserItem }): ReactNode {
+const CHIP_ICON = { skill: Package, file: FileText, chat: MessageCircle, browser: Globe, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
+
+/** Shows the / and @ picks in a sent message as inline chips. */
+function MessageText({ text, mentions }: { text: string; mentions?: MentionChip[] }): ReactNode {
+  if (!mentions?.length) return text
+  const byToken = new Map(mentions.map((chip) => [chip.token, chip]))
+  const pattern = new RegExp(`(${[...byToken.keys()].sort((a, b) => b.length - a.length).map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'g')
+  return text.split(pattern).map((part, index) => {
+    const chip = byToken.get(part)
+    if (!chip) return part
+    const Icon = CHIP_ICON[chip.kind]
+    return (
+      <span key={index} title={chip.title ?? part} className="whitespace-nowrap text-link" style={chip.kind === 'git' ? { color: 'var(--orange)' } : undefined}>
+        <span className="mr-[0.3em] inline-flex h-[1em] items-center align-[-0.15em]">{chip.kind === 'file' ? <FileTypeIcon name={chip.label} size={11} /> : <Icon size={13} />}</span>
+        {chip.label}
+      </span>
+    )
+  })
+}
+
+/** A Build message carries a one-line instruction, then the plan itself. */
+function planBody(text: string): string {
+  const split = text.indexOf('\n\n')
+  return split < 0 ? text : text.slice(split + 2)
+}
+
+const UserMessage = memo(function UserMessage({ item, chatId }: { item: UserItem; chatId: string }): ReactNode {
+  const openAttachment = useStore((s) => s.openAttachment)
   const openFile = useStore((s) => s.openFile)
+  const idle = useStore((s) => s.chats[chatId]?.status !== 'running' && s.chats[chatId]?.status !== 'awaiting')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const revert = (): void => {
+    setBusy(true)
+    window.galaxy.chats.revert(chatId, item.id).catch((err: unknown) => setError(cleanError(err))).finally(() => setBusy(false))
+  }
   return (
     <div className="group/user flex flex-col items-end pb-1 pt-5 first:pt-0">
       {item.attachments.length > 0 && (
         <div className="mb-1.5 flex max-w-[85%] flex-wrap justify-end gap-1.5">
           {item.attachments.map((file) =>
             file.preview ? (
-              <button key={file.id} type="button" onClick={() => openFile(file.path)} className="h-16 w-16 overflow-hidden rounded-lg border border-line" title={file.name}>
+              <button key={file.id} type="button" onClick={() => openAttachment(file)} className="h-16 w-16 cursor-zoom-in overflow-hidden rounded-lg border border-line" title={file.name}>
                 <img src={file.preview} alt="" className="h-full w-full object-cover" draggable={false} />
               </button>
             ) : (
-              <button key={file.id} type="button" onClick={() => openFile(file.path)} className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-elev px-2 text-[12px] text-muted hover:text-fg" title={file.path}>
+              <button key={file.id} type="button" onClick={() => openAttachment(file)} className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-elev px-2 text-[12px] text-muted hover:text-fg" title={file.path}>
                 <FileIcon size={12.5} />
                 <span className="max-w-[160px] truncate">{file.name}</span>
                 <span className="text-subtle">{formatBytes(file.size)}</span>
@@ -29,17 +67,85 @@ const UserMessage = memo(function UserMessage({ item }: { item: UserItem }): Rea
           )}
         </div>
       )}
-      {item.text && (
-        <div className="selectable max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-elev px-3.5 py-2 text-[16.2px] leading-[1.55] text-fg shadow-[0_0_0_1px_var(--border)]">
-          {item.text}
+      {item.mode && <div className="mb-1 text-[11.5px] font-medium text-subtle">{item.mode === 'plan' ? 'Plan mode' : 'Ask mode'}</div>}
+      {item.plan ? (
+        <div role="button" tabIndex={0} title="Open the plan" onClick={() => openFile(item.plan!)} onKeyDown={(event) => { if (event.key === 'Enter') openFile(item.plan!) }} className="-mx-2.5 flex flex-col self-stretch rounded-xl bg-elev py-2 pl-2.5 pr-1.5 text-left shadow-[0_0_0_1px_var(--border)]">
+          <div className="flex items-center gap-2">
+            <FileText size={14} className="shrink-0" style={{ color: 'var(--orange)' }} />
+            <span className="shrink-0 text-[13.5px] font-medium text-fg">Build plan</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-subtle" title={item.plan}>{basename(item.plan)}</span>
+            {item.revertible && idle && (
+              <IconButton label="Revert to before this message" size="sm" disabled={busy} onClick={(event) => { event.stopPropagation(); revert() }} className="shrink-0 text-subtle">
+                <Undo2 size={14} />
+              </IconButton>
+            )}
+          </div>
+          <div className="plan-preview relative mt-1.5 max-h-[6.2em] overflow-hidden pr-1 text-[13px] leading-[1.55]">
+            <Markdown text={planBody(item.text)} root={item.plan.slice(0, item.plan.lastIndexOf('/'))} />
+          </div>
+        </div>
+      ) : item.text && (
+        <div className="-mx-2.5 flex items-start gap-2 self-stretch rounded-xl bg-elev py-2 pl-2.5 pr-1.5 shadow-[0_0_0_1px_var(--border)]">
+          <div className="selectable min-w-0 flex-1 whitespace-pre-wrap break-words text-[14.7px] leading-[1.55] text-fg">
+            <MessageText text={item.text} mentions={item.mentions} />
+          </div>
+          {item.revertible && idle && (
+            <IconButton label="Revert to before this message" size="sm" disabled={busy} onClick={revert} className="shrink-0 text-subtle">
+              <Undo2 size={14} />
+            </IconButton>
+          )}
         </div>
       )}
+      {error && <ErrorDialog title="Could not revert" message={error} onClose={() => setError(null)} />}
       <div className="mt-0.5 flex h-5 items-center opacity-0 transition-opacity group-hover/user:opacity-100">
         <CopyButton text={item.text} label="Copy message" size={12} />
       </div>
     </div>
   )
 })
+
+function ErrorDialog({ title, message, onClose }: { title: string; message: string; onClose(): void }): ReactNode {
+  return (
+    <Modal onClose={onClose} className="w-[420px] max-w-full p-5">
+      <div className="flex items-start gap-3">
+        <CircleAlert size={18} className="mt-0.5 shrink-0 text-danger" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[14px] font-semibold text-fg">{title}</div>
+          <div className="selectable mt-1.5 whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-muted">{message}</div>
+        </div>
+      </div>
+      <div className="mt-5 flex justify-end">
+        <Button variant="primary" size="sm" onClick={onClose}>OK</Button>
+      </div>
+    </Modal>
+  )
+}
+
+/** After a revert: the reverted message in a message box of its own, plus redo below it. */
+function RevertedEditor({ chat }: { chat: Chat }): ReactNode {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const redo = (): void => {
+    setBusy(true)
+    window.galaxy.chats.redo(chat.id).catch((err: unknown) => setError(cleanError(err))).finally(() => setBusy(false))
+  }
+  return (
+    <div className="activity-reveal pt-5">
+      <Composer
+        edit={{ key: `revert:${chat.id}`, message: chat.reverted! }}
+        footer={
+          <div className="mt-2 flex items-center gap-2 pl-1">
+            <Button size="sm" disabled={busy} onClick={redo}>
+              <Redo2 size={13} /> Redo changes
+            </Button>
+            <span className="text-[11.5px] text-subtle">Edit and send to continue from here.</span>
+          </div>
+        }
+      />
+      {error && <ErrorDialog title="Could not redo" message={error} onClose={() => setError(null)} />}
+    </div>
+  )
+}
 
 const AssistantMessage = memo(function AssistantMessage({ item, root }: { item: AssistantItem; root: string | null }): ReactNode {
   if (!item.text.trim()) return null
@@ -86,7 +192,7 @@ function mergeDiffs(items: ToolItem[]): FileDiff[] {
   return [...merged.values()]
 }
 
-function TurnFooter({ changes, answer, root }: { changes: FileDiff[]; answer: string; root: string | null }): ReactNode {
+function TurnFooter({ item, folded, changes, answer, root }: { item: TurnItem; folded: boolean; changes: FileDiff[]; answer: string; root: string | null }): ReactNode {
   const openFile = useStore((s) => s.openFile)
   const [open, setOpen] = useState(false)
   const added = changes.reduce((n, d) => n + d.added, 0)
@@ -115,9 +221,10 @@ function TurnFooter({ changes, answer, root }: { changes: FileDiff[]; answer: st
           )}
         </div>
       )}
-      {answer && (
-        <div className="flex h-6 items-center">
-          <CopyButton text={answer} label="Copy response" size={12} className="opacity-0 transition-opacity group-hover/turn:opacity-100" />
+      {(answer || !folded) && (
+        <div className="flex h-6 items-center gap-1 text-[11.5px] text-subtle">
+          {!folded && <span>{item.interrupted ? `Stopped after ${formatDuration(item.durationMs)}` : `Worked for ${formatDuration(item.durationMs)}`}</span>}
+          {answer && <CopyButton text={answer} label="Copy response" size={12} className="opacity-0 transition-opacity group-hover/turn:opacity-100" />}
         </div>
       )}
     </div>
@@ -126,7 +233,13 @@ function TurnFooter({ changes, answer, root }: { changes: FileDiff[]; answer: st
 
 /** A finished turn's work, folded above its final response. */
 function WorkGroup({ item, blocks, ctx }: { item: TurnItem; blocks: Block[]; ctx: TimelineContext }): ReactNode {
-  const [open, setOpen] = useState(false)
+  // A turn that just ended starts open so its work visibly folds away.
+  const [open, setOpen] = useState(() => !!blocks.length && Date.now() - item.ts < 3000)
+  useEffect(() => {
+    if (!open) return
+    const frame = requestAnimationFrame(() => requestAnimationFrame(() => setOpen(false)))
+    return () => cancelAnimationFrame(frame)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const label = item.interrupted ? `Stopped after ${formatDuration(item.durationMs)}` : `Worked for ${formatDuration(item.durationMs)}`
   return (
     <div>
@@ -135,13 +248,17 @@ function WorkGroup({ item, blocks, ctx }: { item: TurnItem; blocks: Block[]; ctx
         onClick={blocks.length ? () => setOpen(!open) : undefined}
         disabled={!blocks.length}
         aria-expanded={blocks.length ? open : undefined}
-        className={cn('group/work flex h-7 items-center gap-2 text-left text-[13.8px] text-muted', blocks.length ? 'hover:text-fg' : 'cursor-default')}
+        className={cn('group/work flex h-7 items-center gap-2 text-left text-[13.8px] font-[450] text-muted', blocks.length ? 'hover:text-fg' : 'cursor-default')}
       >
         <span className="flex w-4 shrink-0 justify-center">{item.interrupted ? <CircleStop size={13.5} className="text-subtle" /> : <Clock size={13.5} className="text-subtle" />}</span>
         <span>{label}</span>
         {blocks.length > 0 && <ChevronRight size={13} className={cn('shrink-0 text-subtle opacity-0 transition-all group-hover/work:opacity-100', open && 'rotate-90 opacity-100')} />}
       </button>
-      {open && <div className="activity-reveal"><Blocks blocks={blocks} ctx={ctx} /></div>}
+      {blocks.length > 0 && (
+        <div className="fold" data-open={open} inert={!open}>
+          <div className="min-h-0 overflow-hidden"><Blocks blocks={blocks} ctx={ctx} /></div>
+        </div>
+      )}
     </div>
   )
 }
@@ -150,10 +267,11 @@ type Block =
   | { type: 'item'; item: Item }
   | { type: 'explore'; items: (ToolItem | ReasoningItem)[]; key: string; scope: string }
   | { type: 'browse'; items: (ToolItem | ReasoningItem)[]; key: string; scope: string }
-  | { type: 'turn'; item: TurnItem; changes: FileDiff[]; answer: string }
+  | { type: 'turn'; item: TurnItem; changes: FileDiff[]; answer: string; folded: boolean }
   | { type: 'work'; item: TurnItem; blocks: Block[] }
+  | { type: 'present'; items: ToolItem[]; key: string }
 
-function buildBlocks(items: Item[], all: Item[], topLevel: boolean): Block[] {
+function buildBlocks(items: Item[], all: Item[], topLevel: boolean, compact = false, fold = true): Block[] {
   const blocks: Block[] = []
   let turnStart = 0
   let turnKey = items[0]?.id ?? 'empty'
@@ -163,11 +281,19 @@ function buildBlocks(items: Item[], all: Item[], topLevel: boolean): Block[] {
     if (item.kind === 'user') turnKey = item.id
     const scope = `${item.parentId ?? 'main'}:${turnKey}`
     if (isHiddenAgentMessage(item)) continue
-    // Successful deliveries are shown together at the bottom once the run has ended.
+    // The plan shows above the message box instead of in the log.
+    if (item.kind === 'tool' && item.tool === 'task') continue
+    // Successful deliveries are collected at the bottom of their own turn.
     if (item.kind === 'tool' && item.tool === 'present' && item.status === 'done' && item.meta?.files?.length) continue
     // An empty response placeholder is not a visible boundary between activities.
     if (item.kind === 'assistant' && !item.text.trim()) continue
     if (item.kind === 'reasoning' && !item.streaming && !item.text.trim()) continue
+    if (compact && isCompactable(item)) {
+      const last = blocks[blocks.length - 1]
+      if (last?.type === 'explore') last.items.push(item)
+      else blocks.push({ type: 'explore', items: [item], key: item.id, scope })
+      continue
+    }
     if (isBrowsing(item)) {
       const last = blocks[blocks.length - 1]
       if (last?.type === 'browse') last.items.push(item)
@@ -192,14 +318,21 @@ function buildBlocks(items: Item[], all: Item[], topLevel: boolean): Block[] {
       // Fold everything before the final response under the turn's duration.
       const answerAt = blocks.findLastIndex((block, at) => at >= blockStart && block.type === 'item' && block.item.kind === 'assistant')
       const workEnd = answerAt === -1 ? blocks.length : answerAt
-      blocks.splice(blockStart, workEnd - blockStart, { type: 'work', item, blocks: blocks.slice(blockStart, workEnd) })
-      blocks.push({ type: 'turn', item, changes: mergeDiffs(tools), answer: lastAnswer?.text ?? '' })
+      if (fold) blocks.splice(blockStart, workEnd - blockStart, { type: 'work', item, blocks: blocks.slice(blockStart, workEnd) })
+      const presented = tools.filter((tool) => tool.tool === 'present' && tool.status === 'done' && !!tool.meta?.files?.length)
+      if (presented.length) blocks.push({ type: 'present', items: presented, key: item.id })
+      blocks.push({ type: 'turn', item, changes: mergeDiffs(tools), answer: lastAnswer?.text ?? '', folded: fold })
       blockStart = blocks.length
       turnStart = index + 1
       continue
     }
     blocks.push({ type: 'item', item })
     if (item.kind === 'user') blockStart = blocks.length
+  }
+  if (topLevel) {
+    const ids = new Set(items.slice(turnStart).map((item) => item.id))
+    const presented = all.filter((item): item is ToolItem => item.kind === 'tool' && item.tool === 'present' && item.status === 'done' && !!item.meta?.files?.length && (ids.has(item.id) || (!!item.parentId && ids.has(item.parentId))))
+    if (presented.length) blocks.push({ type: 'present', items: presented, key: turnKey })
   }
   return blocks
 }
@@ -211,17 +344,31 @@ function hasLiveActivity(item: Item): boolean {
   return item.kind === 'tool' && (item.status === 'running' || item.status === 'pending' || item.status === 'awaiting')
 }
 
-function Blocks({ blocks, ctx, running = false }: { blocks: Block[]; ctx: TimelineContext; running?: boolean }): ReactNode {
+function Blocks({ blocks, ctx, running = false, stickyMessages = false }: { blocks: Block[]; ctx: TimelineContext; running?: boolean; stickyMessages?: boolean }): ReactNode {
+  if (stickyMessages) {
+    const turns: { key: string; blocks: Block[] }[] = []
+    for (const block of blocks) {
+      if (block.type === 'item' && block.item.kind === 'user') turns.push({ key: block.item.id, blocks: [] })
+      if (!turns.length) turns.push({ key: 'history', blocks: [] })
+      turns[turns.length - 1].blocks.push(block)
+    }
+    return <>{turns.map((turn) => <section key={turn.key} className="chat-turn relative"><Blocks blocks={turn.blocks} ctx={ctx} running={running && turn === turns[turns.length - 1]} /></section>)}</>
+  }
   return (
     <>
       {blocks.map((block, index) => {
+        if (block.type === 'present') return (
+          <section key={`present:${block.key}`} aria-label="Presented files" className="activity-reveal mb-3 mt-4 w-full space-y-3">
+            {block.items.map((item) => <PresentTool key={item.id} item={item} />)}
+          </section>
+        )
         if (block.type === 'explore' || block.type === 'browse') return <ExploreGroup key={block.key} items={block.items} disclosureKey={`${ctx.chatId}:${block.scope}:${block.key}`} active={running && index === blocks.length - 1} browsing={block.type === 'browse'} ctx={ctx} />
         if (block.type === 'work') return <WorkGroup key={`work:${block.item.id}`} item={block.item} blocks={block.blocks} ctx={ctx} />
-        if (block.type === 'turn') return <TurnFooter key={block.item.id} changes={block.changes} answer={block.answer} root={ctx.root} />
+        if (block.type === 'turn') return <TurnFooter key={block.item.id} item={block.item} folded={block.folded} changes={block.changes} answer={block.answer} root={ctx.root} />
         const item = block.item
         switch (item.kind) {
           case 'user':
-            return <UserMessage key={item.id} item={item} />
+            return <UserMessage key={item.id} item={item} chatId={ctx.chatId} />
           case 'assistant':
             return <AssistantMessage key={item.id} item={item} root={ctx.root} />
           case 'tool':
@@ -236,7 +383,21 @@ function Blocks({ blocks, ctx, running = false }: { blocks: Block[]; ctx: Timeli
   )
 }
 
-function WorkingIndicator({ since }: { since: number }): ReactNode {
+/** What the agent is doing right now, in a few words, for the collapsed status line. */
+function liveStatus(items: Item[]): string {
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index]
+    if (item.kind === 'reasoning' && item.streaming) return 'Thinking'
+    if (item.kind === 'assistant' && item.streaming && item.text.trim()) return 'Writing a response'
+    if (item.kind === 'tool' && (item.status === 'running' || item.status === 'pending')) {
+      const title = toolActivityTitle(item)
+      return item.tool === 'bash' ? `Running ${title.charAt(0).toLowerCase()}${title.slice(1)}` : title
+    }
+  }
+  return 'Planning Next Moves'
+}
+
+function WorkingIndicator({ since, status = 'Planning Next Moves' }: { since: number; status?: string }): ReactNode {
   const [, tick] = useState(0)
   useEffect(() => {
     const timer = setInterval(() => tick((n) => n + 1), 1000)
@@ -244,8 +405,9 @@ function WorkingIndicator({ since }: { since: number }): ReactNode {
   }, [])
   const elapsed = Date.now() - since
   return (
-    <div className="activity-reveal flex h-7 items-center gap-2 text-[12.5px]">
-      <span className="shimmer">Planning Next Moves</span>
+    <div className="activity-reveal flex h-7 items-center gap-2 overflow-hidden text-[13.8px] font-[450]">
+      {/* Each new status rolls up into place. */}
+      <span key={status} className="status-roll min-w-0 truncate"><span className="shimmer">{status}</span></span>
       {elapsed > 5000 && <span className="font-mono text-[11px] tabular-nums text-subtle">{formatDuration(elapsed)}</span>}
     </div>
   )
@@ -259,6 +421,7 @@ interface TimelineProps {
 
 export function AgentTimeline({ chatId, agentId, root }: { chatId: string; agentId: string; root: string | null }): ReactNode {
   const items = useStore((s) => s.items[chatId])
+  const compact = useStore((s) => s.settings.toolDensity === 'compact')
   const scroller = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
   const { ctx, activity, agent } = useMemo(() => {
@@ -269,10 +432,10 @@ export function AgentTimeline({ chatId, agentId, root }: { chatId: string; agent
       if (item.kind === 'tool' && item.tool === 'agent') agentNames.set(item.id, item.title)
       if (item.parentId) children.set(item.parentId, [...(children.get(item.parentId) ?? []), item])
     }
-    const ctx: TimelineContext = { chatId, root, children, agentNames, latestTaskId: null, renderBlocks: (list) => <Blocks blocks={buildBlocks(list, all, false)} ctx={ctx} running={agent?.status === 'running'} /> }
+    const ctx: TimelineContext = { chatId, root, children, agentNames, latestTaskId: null, renderBlocks: (list) => <Blocks blocks={buildBlocks(list, all, false, compact)} ctx={ctx} running={agent?.status === 'running'} /> }
     const agent = all.find((item): item is ToolItem => item.id === agentId && item.kind === 'tool')
     return { ctx, agent, activity: children.get(agentId) ?? [] }
-  }, [items, chatId, agentId, root])
+  }, [items, chatId, agentId, root, compact])
   useLayoutEffect(() => { if (follow.current && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight }, [items])
   return (
     <div ref={scroller} onScroll={() => { const el = scroller.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60 }} className="chat-surface h-full overflow-y-auto px-5 py-4">
@@ -287,6 +450,9 @@ export function Timeline({ chat, items, root }: TimelineProps): ReactNode {
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
   const [atBottom, setAtBottom] = useState(true)
+  const compact = useStore((s) => s.settings.toolDensity === 'compact')
+  const fold = useStore((s) => s.settings.foldWork !== false)
+  const expand = useStore((s) => s.settings.expandToolCalls !== false)
 
   const { top, ctx } = useMemo(() => {
     const children = new Map<string, Item[]>()
@@ -310,13 +476,12 @@ export function Timeline({ chat, items, root }: TimelineProps): ReactNode {
       children,
       agentNames,
       latestTaskId,
-      renderBlocks: (list) => <Blocks blocks={buildBlocks(list, items, false)} ctx={ctx} />
+      renderBlocks: (list) => <Blocks blocks={buildBlocks(list, items, false, compact)} ctx={ctx} />
     }
     return { top, ctx }
-  }, [items, chat.id, root])
+  }, [items, chat.id, root, compact])
 
-  const blocks = useMemo(() => buildBlocks(top, items, true), [top, items])
-  const presented = useMemo(() => items.filter((item): item is ToolItem => item.kind === 'tool' && item.tool === 'present' && item.status === 'done' && !!item.meta?.files?.length), [items])
+  const blocks = useMemo(() => buildBlocks(top, items, true, compact, fold), [top, items, compact, fold])
 
   const onScroll = useCallback(() => {
     const el = scroller.current
@@ -340,20 +505,15 @@ export function Timeline({ chat, items, root }: TimelineProps): ReactNode {
   }, [chat.id])
 
   const lastUser = [...top].reverse().find((i) => i.kind === 'user')
-  const lastBlock = blocks[blocks.length - 1]
-  const hasActivity = lastBlock?.type === 'explore' || lastBlock?.type === 'browse' || top.slice(lastUser ? top.indexOf(lastUser) + 1 : 0).some(hasLiveActivity)
+  const hasActivity = top.slice(lastUser ? top.indexOf(lastUser) + 1 : 0).some(hasLiveActivity)
 
   return (
     <div className="relative min-h-0 flex-1">
       <div ref={scroller} onScroll={onScroll} className="h-full overflow-y-auto">
         <div className="mx-auto w-full max-w-[780px] px-6 pb-10 pt-4">
-          <Blocks blocks={blocks} ctx={ctx} running={chat.status === 'running'} />
-          {chat.status === 'running' && !hasActivity && <WorkingIndicator since={lastUser?.ts ?? Date.now()} />}
-          {(chat.status === 'idle' || chat.status === 'error') && presented.length > 0 && (
-            <section aria-label="Presented files" className="activity-reveal mt-4 w-full space-y-3">
-              {presented.map((item) => <PresentTool key={item.id} item={item} />)}
-            </section>
-          )}
+          <Blocks blocks={blocks} ctx={ctx} running={chat.status === 'running'} stickyMessages />
+          {chat.reverted && chat.status !== 'running' && <RevertedEditor key={chat.reverted.text} chat={chat} />}
+          {chat.status === 'running' && (!expand ? <WorkingIndicator since={lastUser?.ts ?? Date.now()} status={liveStatus(top.slice(lastUser ? top.indexOf(lastUser) + 1 : 0))} /> : !hasActivity && <WorkingIndicator since={lastUser?.ts ?? Date.now()} />)}
         </div>
       </div>
       {!atBottom && (

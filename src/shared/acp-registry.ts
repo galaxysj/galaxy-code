@@ -48,6 +48,8 @@ export interface AcpAgentSpec {
   Login?: string[]
   Status?: AcpStatusCheck
   Keyless?: boolean
+  /** Added by the user in Settings rather than listed here. */
+  Custom?: boolean
 }
 
 export const AcpAgents: AcpAgentSpec[] = [
@@ -88,8 +90,9 @@ export const AcpAgents: AcpAgentSpec[] = [
   {
     ID: 'antigravity',
     DisplayName: 'Antigravity',
-    Description: 'Connects to the Antigravity ACP server. Set its path if it is not on your PATH.',
-    Binaries: ['agy_acp_server', 'agy_acp_server.par', 'antigravity-acp'],
-    Args: []
+    Description: 'Unofficial agy-acp adapter. Third-party account access may result in Google account restrictions or suspension. Requires Node.js 22+; downloads the adapter when needed.',
+    Binaries: ['agy-acp'],
+    Args: [],
+    Login: ['--login']
   }
 ]

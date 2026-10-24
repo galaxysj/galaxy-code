@@ -103,7 +103,7 @@ export class AgentTeam {
       } finally {
         session.flushDeltas()
         const usage = session.chat.usage
-        this.root.addUsage(usage.inputTokens, usage.outputTokens, usage.cost)
+        this.root.addUsage(usage.inputTokens, usage.outputTokens, usage.cost, undefined, false)
         disposeCodex(id)
         disposeAcp(id)
         if (!this.closed) {

@@ -1,9 +1,10 @@
-import { Check, ChevronDown, ChevronLeft, ChevronRight, RotateCcw, Search, Zap } from 'lucide-react'
+import { Check, ChevronDown, ChevronLeft, ChevronRight, RotateCcw, Search, Sparkles, Zap } from 'lucide-react'
+import { AUTO_MODEL } from '@shared/catalog'
 import { useCallback, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { AcpAgents } from '@shared/acp-registry'
 import { EFFORT_LABELS, type Effort, type ResolvedModel, type Subscription } from '@shared/types'
 import { cn } from '../lib/utils'
-import { useRunConfig, useStore } from '../store'
+import { useChatId, useRunConfig, useStore } from '../store'
 import { Popover } from './ui'
 
 function FastIcon({ size = 12 }: { size?: number }): ReactNode {
@@ -12,7 +13,7 @@ function FastIcon({ size = 12 }: { size?: number }): ReactNode {
 
 export const SUBSCRIPTION_LABELS: Record<Subscription, string> = {
   Default: 'OpenRouter',
-  Claude: 'Claude Code',
+  Claude: 'Claude',
   Codex: 'Codex',
   ...Object.fromEntries(AcpAgents.map((agent) => [agent.DisplayName, agent.DisplayName]))
 }
@@ -120,7 +121,7 @@ function ModelList({ current, subscription, onPick, onBack }: { current: Resolve
 
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    const visible = models.filter((m) => m.enabled && m.subscription === subscription && (!needle || m.name.toLowerCase().includes(needle) || m.id.toLowerCase().includes(needle)))
+    const visible = models.filter((m) => m.enabled && !m.auto && m.subscription === subscription && (!needle || m.name.toLowerCase().includes(needle) || m.id.toLowerCase().includes(needle)))
     return subscription && visible.length > 0 ? [{ subscription, models: visible }] : []
   }, [models, query, subscription])
 
@@ -143,11 +144,22 @@ function ModelList({ current, subscription, onPick, onBack }: { current: Resolve
         />
       </div>
       <div className="max-h-[300px] overflow-y-auto p-1">
+        {subscription === 'Default' && !query.trim() && (
+          <button
+            type="button"
+            onClick={() => onPick(AUTO_MODEL.key)}
+            className={cn('mb-1 flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[12px] transition-colors hover:bg-hover', current?.auto ? 'text-fg' : 'text-muted')}
+          >
+            <Sparkles size={12} className="shrink-0 text-subtle" />
+            <span className="min-w-0 flex-1 truncate">Auto</span>
+            <span className="flex w-3.5 shrink-0 justify-end">{current?.auto && <Check size={13} />}</span>
+          </button>
+        )}
         {groups.length === 0 && <div className="px-3 py-6 text-center text-[12px] text-subtle">{subscription ? 'No models match.' : 'Choose a signed-in subscription or Local.'}</div>}
         {groups.map((group) => (
           <div key={group.subscription} className="mb-1 last:mb-0">
             <div className="flex h-6 items-center justify-between px-2 text-[11px] font-medium text-subtle">
-              <span>{group.subscription === 'Default' ? 'Local' : SUBSCRIPTION_LABELS[group.subscription]}</span>
+              <span>{group.subscription === 'Default' ? 'Local' : (SUBSCRIPTION_LABELS[group.subscription] ?? group.subscription)}</span>
               {group.subscription === 'Default' && !hasKey && (
                 <button type="button" className="text-warn hover:underline" onClick={() => useStore.setState({ settingsOpen: 'providers' })}>
                   Add API key
@@ -183,14 +195,16 @@ export function ModelPicker(): ReactNode {
   const [listing, setListing] = useState(false)
   const pickModel = useStore((s) => s.pickModel)
   const setRunOptions = useStore((s) => s.setRunOptions)
+  const chatId = useChatId()
   const { model, subscription, effort, ultra, fast } = useRunConfig()
 
   const close = useCallback(() => {
     setOpen(false)
   }, [])
 
-  const hasEffort = !!model && model.efforts.length > 0
-  const label = !model ? '' : ultra ? 'Ultra' : effort ? EFFORT_LABELS[effort] : 'Standard'
+  const auto = !!model?.auto
+  const hasEffort = !!model && !auto && model.efforts.length > 0
+  const label = !model ? '' : auto ? 'Auto' : ultra ? 'Ultra' : effort ? EFFORT_LABELS[effort] : 'Standard'
   const isDefault = !!model && !ultra && !fast && effort === model.defaultEffort
 
   return (
@@ -212,9 +226,9 @@ export function ModelPicker(): ReactNode {
           ultra && 'aurora-ring'
         )}
       >
-        {fast && <FastIcon />}
+        {fast && !auto && <FastIcon />}
         <span className="truncate">{model?.name ?? 'Select a model'}</span>
-        {model && (ultra || effort) && <span className={cn('shrink-0', ultra ? 'aurora-text font-medium' : 'text-subtle')}>{label}</span>}
+        {model && !auto && (ultra || effort) && <span className={cn('shrink-0', ultra ? 'aurora-text font-medium' : 'text-subtle')}>{label}</span>}
         <ChevronDown size={12} className={cn('picker-chevron shrink-0 text-subtle', open && 'rotate-180')} />
       </button>
       <Popover open={open} onClose={close} anchor={anchor} placement="top-end" offset={8} className={cn('overflow-hidden rounded-2xl!', listing || !model ? 'w-[264px]' : 'w-[228px]')}>
@@ -224,27 +238,27 @@ export function ModelPicker(): ReactNode {
             subscription={subscription}
             onBack={() => (model ? setListing(false) : close())}
             onPick={(key) => {
-              pickModel(key)
+              pickModel(key, chatId)
               setListing(false)
             }}
           />
         ) : (
           <div className="picker-view picker-view-back px-3 pb-3 pt-2">
             <div className="flex items-start">
-              <button
+              {auto ? <span className="-ml-1 h-6 w-6 shrink-0" /> : <button
                 type="button"
                 title={model.fastMode ? (fast ? 'Fast is on. Faster output, billed at a higher rate.' : 'Turn on Fast') : 'This model has no Fast mode'}
                 disabled={!model.fastMode}
                 aria-label="Fast mode"
                 aria-pressed={fast}
-                onClick={() => setRunOptions({ fast: !fast })}
+                onClick={() => setRunOptions({ fast: !fast }, chatId)}
                 className={cn(
                   '-ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors disabled:opacity-25',
                   fast ? 'text-black hover:bg-hover' : 'text-muted hover:bg-hover hover:text-fg'
                 )}
               >
                 {fast ? <FastIcon size={13.5} /> : <Zap size={13.5} strokeWidth={1.5} />}
-              </button>
+              </button>}
               <button
                 type="button"
                 onClick={() => setListing(true)}
@@ -253,23 +267,24 @@ export function ModelPicker(): ReactNode {
               >
                 <span className={cn('block text-[13px] font-semibold leading-6', ultra ? 'aurora-text' : hasEffort ? 'text-[var(--slider)]' : 'text-fg')}>{label}</span>
                 <span className="-mt-1 flex max-w-full items-center justify-center gap-0.5 text-[11.5px] leading-4 text-muted">
-                  <span className="truncate">{model.name}</span>
+                  <span className="truncate">{auto ? 'Choose a model' : model.name}</span>
                   <ChevronRight size={11} className="shrink-0 opacity-70" />
                 </span>
               </button>
               <button
                 type="button"
                 title="Reset to default"
-                disabled={isDefault || (!hasEffort && !fast)}
-                onClick={() => setRunOptions({ ...(model.defaultEffort ? { effort: model.defaultEffort } : {}), ultra: false, fast: false })}
+                disabled={auto || isDefault || (!hasEffort && !fast)}
+                onClick={() => setRunOptions({ ...(model.defaultEffort ? { effort: model.defaultEffort } : {}), ultra: false, fast: false }, chatId)}
                 className="-mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-25"
               >
                 <RotateCcw size={13} />
               </button>
             </div>
+            {auto && <p className="mt-2 px-1 text-center text-[11.5px] leading-snug text-subtle">Picks the best model for each request automatically.</p>}
             {hasEffort && (
               <div className="mt-2.5" title={ultra ? `Ultra orchestrates parallel subagents at ${EFFORT_LABELS[model.ultraEffort as Effort].toLowerCase()} effort` : undefined}>
-                <EffortSlider model={model} effort={effort} ultra={ultra} onChange={(next) => setRunOptions(next)} />
+                <EffortSlider model={model} effort={effort} ultra={ultra} onChange={(next) => setRunOptions(next, chatId)} />
               </div>
             )}
           </div>

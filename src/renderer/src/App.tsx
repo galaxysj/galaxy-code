@@ -4,7 +4,9 @@ import type { Chat } from '@shared/types'
 import { cn, formatTokens, tildify } from './lib/utils'
 import { useActiveChat, useStore } from './store'
 import { Composer } from './components/Composer'
-import { SettingsModal } from './components/Settings'
+import { SettingsPage } from './components/Settings'
+import { AntigravityConsent } from './components/AntigravityConsent'
+import { AttachmentPreview } from './components/AttachmentPreview'
 import { Sidebar } from './components/Sidebar'
 import { SidePanel } from './components/SidePanel'
 import { Timeline } from './components/timeline/Timeline'
@@ -215,6 +217,8 @@ export function App(): ReactNode {
   const sidebarOpen = useStore((s) => s.sidebarOpen)
   const panelOpen = useStore((s) => s.panelOpen)
   const settingsOpen = useStore((s) => s.settingsOpen)
+  const antigravityConsent = useStore((s) => s.antigravityConsent)
+  const attachmentPreview = useStore((s) => s.attachmentPreview)
   const toast = useStore((s) => s.toast)
   const updateSettings = useStore((s) => s.updateSettings)
   const savedSidebar = useStore((s) => s.settings.sidebarWidth)
@@ -299,11 +303,13 @@ export function App(): ReactNode {
         <aside aria-hidden={!panelOpen} inert={!panelOpen} className={cn('animated-pane relative shrink-0 overflow-hidden', resizing === 'panel' && 'pane-resizing')} style={{ width: panelOpen ? Math.min(panelWidth, maxPanel()) : 0, opacity: panelOpen ? 1 : 0, pointerEvents: panelOpen ? 'auto' : 'none' }}>
           <Resizer width={Math.min(panelWidth, maxPanel())} min={MIN_PANEL_WIDTH} max={maxPanel()} direction={-1} onChange={setPanelWidth} onStart={() => setResizing('panel')} onEnd={() => setResizing(null)} onCollapse={() => { setResizing(null); useStore.getState().setPanel(false) }} onExpand={() => { setResizing(null); if (useStore.getState().panelTabs.length) useStore.setState({ panelOpen: true }) }} onCommit={(width) => void updateSettings({ panelWidth: Math.round(width) })} />
           <div className="animated-pane-content absolute inset-y-1.5 left-px right-1.5 overflow-hidden rounded-xl shadow-[inset_0_0_0_1px_var(--border)]" style={{ transform: panelOpen ? 'translateX(0)' : 'translateX(16px)' }}>
-            <SidePanel root={root} covered={settingsOpen !== null || !panelOpen} />
+            <SidePanel root={root} covered={settingsOpen !== null || antigravityConsent !== null || attachmentPreview !== null || !panelOpen} />
           </div>
         </aside>
       </div>
-      <SettingsModal />
+      <SettingsPage />
+      {antigravityConsent && <AntigravityConsent requestId={antigravityConsent} />}
+      {attachmentPreview && <AttachmentPreview key={attachmentPreview.id} file={attachmentPreview} />}
       {toast && (
         <div
           key={toast.id}

@@ -20,14 +20,19 @@ import type {
   UiEvent
 } from '@shared/types'
 import { manager } from './agent/manager'
+import { initReviewRepository, readReview, reviewCommits } from './services/review'
 import { accountStatuses, loginAccount } from './services/accounts'
+import { answerAntigravityConsent, configureAntigravityConsent, confirmAntigravityUse } from './services/antigravityConsent'
 import { probeAcpOptions } from './engines/acp'
 import { browser } from './services/browser'
 import { terminals } from './services/terminal'
 import { listProjectFiles, searchProjectFiles } from './services/projectFiles'
-import { gitInfo } from './services/git'
+import { gitInfo, gitState, pushBranch } from './services/git'
 import { mcp } from './services/mcp'
 import { signInWithOpenRouter, testKey } from './services/openrouter'
+import { analyticsRows } from './services/analytics'
+import { cancelInlineEdit, completeCode, inlineEdit, saveFile, terminalCommand, type CompletionRequest, type InlineEditRequest, type TerminalCommandRequest } from './services/editor'
+import { usageReport } from './services/usage'
 import { ensureSkillsDir, listSkills, projectSkillsDir, userSkillsDir } from './services/skills'
 import { store } from './store'
 import { exists, expandHome, isImagePath, looksBinary, mimeOf, newId, run } from './util'
@@ -121,7 +126,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     }
   }
   const emitUi = (event: UiEvent): void => {
-    if (event.type === 'settings' || event.type === 'projects' || event.type === 'mcp-status') {
+    if (event.type === 'settings' || event.type === 'projects' || event.type === 'mcp-status' || event.type === 'inline-edit-delta') {
       for (const win of getWindows()) sendUi(win, event)
       return
     }
@@ -145,6 +150,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
   const emitProjects = (): void => emitUi({ type: 'projects', projects: store.projects })
 
   manager.connect(emitChat, emitUi)
+  configureAntigravityConsent((requestId) => {
+    const win = requestWindow()
+    sendUi(win, { type: 'antigravity-consent', requestId })
+    return win
+  })
   browser.windowForChat = chatWindow
   mcp.onStatus((statuses) => emitUi({ type: 'mcp-status', statuses }))
   browser.onState((state, tabId) => emitUi({ type: 'browser-state', state, tabId }))
@@ -188,6 +198,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     },
 
     'settings.update': async (patch: Partial<Settings>): Promise<Settings> => {
+      const enablingAntigravity = patch.accounts?.antigravity?.enabled === true && store.settings.accounts.antigravity?.enabled === false
+      const enablingAcp = patch.acpEnabled === true && store.settings.acpEnabled === false && (patch.accounts ?? store.settings.accounts).antigravity?.enabled !== false
+      if (enablingAntigravity || enablingAcp) await confirmAntigravityUse(true)
       const settings = store.saveSettings(patch)
       if (patch.mcpServers) void mcp.sync()
       emitSettings()
@@ -198,6 +211,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
       emitSettings()
     },
     'settings.testOpenRouterKey': () => testKey(),
+    'settings.usage': () => usageReport(),
+    'settings.analytics': () => analyticsRows(),
     'settings.signInOpenRouter': async () => {
       const result = await signInWithOpenRouter()
       emitSettings()
@@ -205,6 +220,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     },
 
     'accounts.status': () => accountStatuses(),
+    'acp.answerConsent': (requestId: string, allow: boolean) => {
+      const win = requestWindow()
+      if (win) answerAntigravityConsent(requestId, allow === true, win.id)
+    },
     'accounts.login': (id: AccountId) => loginAccount(id),
     'acp.options': (id: AccountId, projectId: string | null, fresh?: boolean) =>
       probeAcpOptions(id, (projectId && store.project(projectId)?.path) || homedir(), fresh === true),
@@ -272,6 +291,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
       manager.approve(chatId, approvalId, decision, note),
     'chats.answer': (chatId: string, itemId: string, answers: Record<string, string> | null) => manager.answer(chatId, itemId, answers),
     'chats.unqueue': (chatId: string, messageId: string) => manager.unqueue(chatId, messageId),
+    'chats.revert': (chatId: string, itemId: string) => manager.revert(chatId, itemId),
+    'chats.redo': (chatId: string) => manager.redo(chatId),
 
     'files.pickAttachments': async () => {
       const win = requestWindow()
@@ -295,6 +316,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'files.listProject': listProjectFiles,
     'files.searchProject': searchProjectFiles,
     'files.read': (path: string) => readFileView(path),
+    'files.write': (path: string, content: string) => saveFile(path, content),
+    'editor.complete': (request: CompletionRequest) => completeCode(request),
+    'editor.inlineEdit': (request: InlineEditRequest) => inlineEdit(request, (text) => emitUi({ type: 'inline-edit-delta', requestId: request.requestId, text })),
+    'editor.cancelInlineEdit': (requestId: string) => cancelInlineEdit(requestId),
+    'editor.terminalCommand': (request: TerminalCommandRequest) => terminalCommand(request, (text) => emitUi({ type: 'inline-edit-delta', requestId: request.requestId, text })),
     'files.reveal': (path: string) => shell.showItemInFolder(expandHome(path)),
     'files.openExternal': async (target: string) => {
       if (/^(https?|mailto):/i.test(target)) await shell.openExternal(target)
@@ -329,15 +355,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'terminal.resize': (id: string, cols: number, rows: number) => terminals.resize(id, cols, rows),
     'terminal.interrupt': (id: string) => terminals.interrupt(id),
     'terminal.close': (id: string) => terminals.close(id),
-    'review.read': async (cwd: string) => {
-      const info = await gitInfo(cwd)
-      if (!info.isRepo) return { isRepo: false, patch: '', untracked: [] }
-      const [diff, untracked] = await Promise.all([
-        run('git', ['diff', 'HEAD', '--no-ext-diff', '--no-color'], { cwd }),
-        run('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd })
-      ])
-      return { isRepo: true, patch: diff.stdout, untracked: untracked.stdout.split('\0').filter(Boolean) }
-    }
+    'review.read': readReview,
+    'review.commits': reviewCommits,
+    'review.status': gitInfo,
+    'review.init': initReviewRepository,
+    'review.push': pushBranch,
+    'review.state': gitState
   }
 
   ipcMain.handle(IPC_INVOKE, async (event, path: string, args: unknown[]) => {

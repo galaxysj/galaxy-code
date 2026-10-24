@@ -10,6 +10,7 @@ interface Row {
 }
 
 function parse(patch: string): Row[] {
+  if (!patch) return []
   const rows: Row[] = []
   let oldNo = 0
   let newNo = 0
@@ -43,12 +44,20 @@ export function DiffStat({ added, removed, className }: { added: number; removed
 
 export function DiffView({ diff, maxHeight = 420, monochrome = false }: { diff: FileDiff; maxHeight?: number | null; monochrome?: boolean }): ReactNode {
   const rows = useMemo(() => parse(diff.patch), [diff.patch])
+  const chunks = useMemo(() => {
+    const result: Row[][] = []
+    for (let start = 0; start < rows.length; start += 200) result.push(rows.slice(start, start + 200))
+    return result
+  }, [rows])
   if (rows.length === 0) return <div className="px-3 py-2 text-[12px] text-subtle">No textual changes.</div>
-  const width = String(Math.max(...rows.map((r) => r.newNo ?? r.oldNo ?? 0))).length
+  // Spreading every line into Math.max exceeds the argument limit on long diffs.
+  const width = String(rows.reduce((largest, row) => Math.max(largest, row.newNo ?? row.oldNo ?? 0), 0)).length
   return (
     <div className={cn('selectable font-mono text-[12px] leading-[1.55]', maxHeight === null ? 'overflow-visible' : 'overflow-auto')} style={{ maxHeight: maxHeight ?? undefined }}>
       <div className="min-w-max">
-        {rows.map((row, index) =>
+        {chunks.map((chunk, chunkIndex) => (
+          <div key={chunkIndex} style={rows.length > 1000 ? { contentVisibility: 'auto', containIntrinsicSize: `auto ${chunk.length * 18.6}px` } : undefined}>
+        {chunk.map((row, index) =>
           row.type === 'hunk' ? (
             <div key={index} className="my-0.5 border-t border-dashed border-line" />
           ) : (
@@ -73,6 +82,8 @@ export function DiffView({ diff, maxHeight = 420, monochrome = false }: { diff: 
             </div>
           )
         )}
+          </div>
+        ))}
       </div>
     </div>
   )

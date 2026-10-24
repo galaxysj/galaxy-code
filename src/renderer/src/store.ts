@@ -1,9 +1,12 @@
+import { createContext, useContext } from 'react'
 import { create } from 'zustand'
-import { availableSubscriptions, defaultModel, findModel, normalizeEffort, resolveImageModels, resolveModels } from '@shared/catalog'
+import { availableSubscriptions, canUseChatSubscription, defaultModel, findModel, normalizeEffort, resolveImageModels, resolveModels } from '@shared/catalog'
 import {
   acpAgentFor,
+  applyCustomAcpAgents,
   type AccountStatus,
   type AcpConfigOption,
+  type AgentMode,
   type Attachment,
   type BrowserState,
   type Chat,
@@ -23,7 +26,7 @@ import {
   type WorkspaceMode
 } from '@shared/types'
 
-export type SettingsSection = 'general' | 'models' | 'providers' | 'accounts' | 'acp' | 'mcp' | 'skills'
+export type SettingsSection = 'general' | 'models' | 'providers' | 'accounts' | 'usage' | 'acp' | 'mcp' | 'skills'
 
 export interface Draft {
   projectId: string | null
@@ -44,11 +47,39 @@ export interface AcpProbe {
   error: string | null
 }
 
+/** The side panel's tabs, which belong to one chat. */
+export interface ChatPanel {
+  panelTabs: PanelTab[]
+  panelTab: string
+  panelOpen: boolean
+  openFiles: OpenFile[]
+}
+
+const EMPTY_PANEL: ChatPanel = { panelTabs: [], panelTab: '', panelOpen: false, openFiles: [] }
+
+const panelKey = (chatId: string | null, projectId: string | null): string => chatId ?? `draft:${projectId ?? 'none'}`
+
+/** Ends what a tab keeps running in the main process. */
+function disposeTab(tab: PanelTab): void {
+  if (tab.type === 'browser') void window.galaxy.browser.close(tab.id).catch(() => {})
+  if (tab.type === 'terminal') void window.galaxy.terminal.close(tab.id).catch(() => {})
+  if (tab.type === 'side') void window.galaxy.chats.remove(tab.chatId).catch(() => {})
+}
+
 export interface OpenFile {
   path: string
   line?: number
   /** Bumped to force a reload when the same file is opened again. */
   nonce: number
+}
+
+/** A terminal tab, or text selected in it, to mention in the composer. */
+export interface QueuedMention {
+  kind: 'terminal'
+  name: string
+  tabId: string
+  cwd: string
+  selection?: string
 }
 
 export type PanelTab = (
@@ -57,6 +88,7 @@ export type PanelTab = (
   | { id: string; type: 'terminal'; title: string; cwd: string; chatId: string | null }
   | { id: string; type: 'review'; title: string; cwd: string; chatId: string | null }
   | { id: string; type: 'agent'; title: string; agentId: string; chatId: string; root: string | null }
+  | { id: string; type: 'side'; title: string; chatId: string; root: string | null }
   | { id: string; type: 'files'; title: string; projectId: string; chatId: string | null; root: string }
 ) & { pinned?: boolean; customTitle?: string; nonce?: number }
 
@@ -104,6 +136,8 @@ interface State {
   accountStatuses: AccountStatus[]
   accountsLoading: boolean
   acpProbes: Record<string, AcpProbe>
+  antigravityConsent: string | null
+  attachmentPreview: Attachment | null
   imageModels: ResolvedImageModel[]
   autoApprovalModel: { name: string; id: string }
   mcp: McpServerStatus[]
@@ -116,6 +150,8 @@ interface State {
   /** Unsent composer text per chat, 'new' for the new chat screen. */
   composerText: Record<string, string>
   composerAttachments: Record<string, Attachment[]>
+  /** Ask or Plan chip in a composer, by the same keys as its text. */
+  composerMode: Record<string, AgentMode | undefined>
   /** Explicit activity collapses survive group changes and chat navigation. */
   activityCollapsed: Record<string, boolean>
 
@@ -123,7 +159,11 @@ interface State {
   panelOpen: boolean
   panelTab: string
   panelTabs: PanelTab[]
+  /** Mentions added from outside the composer, such as a terminal selection, waiting for the composer to take them. */
+  mentionQueue: QueuedMention[]
   openFiles: OpenFile[]
+  /** Panel tabs of the chats that are not open, by chat id ('new' for the draft). The open chat's are the fields above. */
+  chatPanels: Record<string, ChatPanel>
   settingsOpen: SettingsSection | null
   toast: { id: number; text: string; tone: 'info' | 'error' } | null
 
@@ -131,20 +171,30 @@ interface State {
   selectChat(chatId: string | null): void
   newChat(projectId?: string | null): void
   setDraft(patch: Partial<Draft>): void
-  pickModel(modelKey: string): void
-  pickSubscription(subscription: Subscription): void
+  /** Run-option actions act on `chatId` when given (a side chat), else on the open chat or the draft. */
+  pickModel(modelKey: string, chatId?: string | null): void
+  pickSubscription(subscription: Subscription, chatId?: string | null): void
   refreshAccounts(): Promise<void>
-  loadAcpOptions(agentId: string, fresh?: boolean): Promise<void>
-  setAcpOption(optionId: string, value: string): void
-  setRunOptions(patch: { effort?: Effort | null; ultra?: boolean; fast?: boolean }): void
-  setPermissionMode(mode: PermissionMode): void
-  send(text: string, attachments: Attachment[], mentions?: PromptMentions): Promise<void>
+  loadAcpOptions(agentId: string, fresh?: boolean, chatId?: string | null): Promise<void>
+  setAcpOption(optionId: string, value: string, chatId?: string | null): void
+  setRunOptions(patch: { effort?: Effort | null; ultra?: boolean; fast?: boolean }, chatId?: string | null): void
+  setPermissionMode(mode: PermissionMode, chatId?: string | null): void
+  send(text: string, attachments: Attachment[], mentions?: PromptMentions, steer?: boolean, mode?: AgentMode, plan?: string, chatId?: string | null): Promise<void>
   updateSettings(patch: Partial<Settings>): Promise<void>
   openFile(path: string, line?: number): void
+  openAttachment(file: Attachment): void
   closeFile(path: string): void
   showBrowser(tabId?: string, background?: boolean): void
+  queueMention(mention: QueuedMention): void
+  takeMentions(): QueuedMention[]
   addPanelTab(tab: PanelTab, background?: boolean): void
-  closePanelTab(id: string): void
+  /** A side chat with messages asks first unless `confirmed`; closing it deletes the chat. */
+  closePanelTab(id: string, confirmed?: boolean): void
+  /** Side chat tab waiting for the user to confirm closing it. */
+  closingSideTab: string | null
+  setClosingSideTab(id: string | null): void
+  /** Opens a throwaway chat in the panel, with the current chat's model and folder. Sends `text` first when given. */
+  openSideChat(text?: string, sourceChatId?: string): Promise<void>
   createPanelTab(type: 'browser' | 'file' | 'terminal' | 'review', cwd: string | null, replaceId?: string, afterId?: string): Promise<void>
   updatePanelTab(id: string, patch: { pinned?: boolean; customTitle?: string; nonce?: number }): void
   movePanelTab(id: string, direction: -1 | 1): void
@@ -154,6 +204,7 @@ interface State {
   setPanel(open: boolean, tab?: string): void
   setComposerText(key: string, text: string): void
   setComposerAttachments(key: string, attachments: Attachment[]): void
+  setComposerMode(key: string, mode: AgentMode | undefined): void
   setActivityCollapsed(key: string, collapsed: boolean): void
   notify(text: string, tone?: 'info' | 'error'): void
 }
@@ -186,6 +237,35 @@ export const useStore = create<State>((set, get) => {
   let initialization: Promise<void> | null = null
   const itemLoads = new Map<string, ChatEvent[]>()
 
+  /** Puts the open chat's tabs away and brings out the next chat's. Merge the result into the same set as the activeChatId change. */
+  const swapPanels = (nextChatId: string | null, nextProjectId?: string | null): Partial<State> => {
+    const s = get()
+    const projectId = nextProjectId === undefined ? s.draft.projectId : nextProjectId
+    const from = panelKey(s.activeChatId, s.draft.projectId)
+    const to = panelKey(nextChatId, projectId)
+    if (from === to) return {}
+    const chatPanels = { ...s.chatPanels, [from]: { panelTabs: s.panelTabs, panelTab: s.panelTab, panelOpen: s.panelOpen, openFiles: s.openFiles } }
+    let next = chatPanels[to]
+    if (!next && !s.activeChatId && !nextChatId && projectId !== s.draft.projectId) {
+      const project = s.projects.find((entry) => entry.id === projectId)
+      // Carry the browsing layout over, but never reuse old file paths or shells.
+      const tabs: PanelTab[] = []
+      let selected = ''
+      if (project) for (const tab of s.panelTabs) {
+        let replacement: PanelTab | undefined
+        if (tab.type === 'files') replacement = { ...tab, id: `files:${crypto.randomUUID()}`, projectId: project.id, chatId: null, root: project.path, nonce: 0 }
+        else if (tab.type === 'review') replacement = { ...tab, id: `review:${crypto.randomUUID()}`, cwd: project.path, chatId: null, nonce: 0 }
+        if (replacement) {
+          tabs.push(replacement)
+          if (tab.id === s.panelTab) selected = replacement.id
+        }
+      }
+      next = { panelTabs: tabs, panelTab: selected || tabs[0]?.id || '', panelOpen: s.panelOpen && tabs.length > 0, openFiles: [] }
+    }
+    delete chatPanels[to]
+    return { chatPanels, ...(next ?? EMPTY_PANEL) }
+  }
+
   const applyChatEvent = (event: ChatEvent): void => {
     if (event.type === 'item' || event.type === 'delta' || event.type === 'items-reset') {
       const pending = itemLoads.get(event.chatId)
@@ -209,7 +289,26 @@ export const useStore = create<State>((set, get) => {
           delete chats[event.chatId]
           delete items[event.chatId]
           const activityCollapsed = Object.fromEntries(Object.entries(s.activityCollapsed).filter(([key]) => !key.startsWith(`${event.chatId}:`)))
-          return { chats, items, activityCollapsed, activeChatId: s.activeChatId === event.chatId ? null : s.activeChatId }
+          // A removed chat's tabs go with it.
+          const chatPanels = { ...s.chatPanels }
+          for (const tab of chatPanels[event.chatId]?.panelTabs ?? []) disposeTab(tab)
+          delete chatPanels[event.chatId]
+          if (s.activeChatId === event.chatId) {
+            for (const tab of s.panelTabs) disposeTab(tab)
+            const draftKey = panelKey(null, s.draft.projectId)
+            const next = chatPanels[draftKey] ?? EMPTY_PANEL
+            delete chatPanels[draftKey]
+            return { chats, items, activityCollapsed, chatPanels, ...next, activeChatId: null }
+          }
+          // A side chat's own tab may sit in the open chat or in one put away.
+          const withoutSide = (panel: ChatPanel): ChatPanel => {
+            const panelTabs = panel.panelTabs.filter((tab) => tab.type !== 'side' || tab.chatId !== event.chatId)
+            if (panelTabs.length === panel.panelTabs.length) return panel
+            const panelTab = panelTabs.some((tab) => tab.id === panel.panelTab) ? panel.panelTab : panelTabs.at(-1)?.id ?? ''
+            return { ...panel, panelTabs, panelTab, panelOpen: panel.panelOpen && panelTabs.length > 0 }
+          }
+          for (const key of Object.keys(chatPanels)) chatPanels[key] = withoutSide(chatPanels[key])
+          return { chats, items, activityCollapsed, chatPanels, ...withoutSide({ panelTabs: s.panelTabs, panelTab: s.panelTab, panelOpen: s.panelOpen, openFiles: s.openFiles }) }
         })
         break
       case 'item':
@@ -246,9 +345,14 @@ export const useStore = create<State>((set, get) => {
 
   const applyUiEvent = (event: UiEvent): void => {
     switch (event.type) {
+      case 'antigravity-consent':
+        set({ antigravityConsent: event.requestId })
+        break
       case 'settings': {
         const previous = get().settings
-        const accountsChanged = JSON.stringify(previous.accounts) !== JSON.stringify(event.settings.accounts) || previous.acpEnabled !== event.settings.acpEnabled
+        const accountsChanged = JSON.stringify(previous.accounts) !== JSON.stringify(event.settings.accounts) || previous.acpEnabled !== event.settings.acpEnabled ||
+          JSON.stringify(previous.customAcpAgents) !== JSON.stringify(event.settings.customAcpAgents)
+        applyCustomAcpAgents(event.settings.customAcpAgents)
         set({ settings: event.settings, secrets: event.secrets, models: resolveModels(event.settings), ...(accountsChanged ? { acpProbes: {} } : {}) })
         if (accountsChanged) void get().refreshAccounts()
         break
@@ -288,6 +392,19 @@ export const useStore = create<State>((set, get) => {
         else if (event.action === 'settings') set({ settingsOpen: 'general' })
         else if (event.action === 'toggle-sidebar') set((s) => ({ sidebarOpen: !s.sidebarOpen }))
         else if (event.action === 'toggle-panel') get().setPanel(!get().panelOpen)
+        else if (event.action === 'open-files' || event.action === 'open-browser' || event.action === 'open-terminal') {
+          const state = get()
+          const chat = state.activeChatId ? state.chats[state.activeChatId] : undefined
+          const project = state.projects.find((entry) => entry.id === (chat ? chat.projectId : state.draft.projectId))
+          const type = event.action === 'open-files' ? 'files' : event.action === 'open-browser' ? 'browser' : 'terminal'
+          const existing = state.panelTabs.find((tab) => tab.type === type && (
+            tab.type === 'browser' || (tab.type === 'files' ? tab.projectId === project?.id && tab.chatId === (chat?.id ?? null) : tab.type === 'terminal' && tab.chatId === state.activeChatId)
+          ))
+          const browserFocused = type === 'browser' && state.panelOpen && state.panelTabs.some((tab) => tab.id === state.panelTab && tab.type === 'browser')
+          if (browserFocused) void state.createPanelTab('browser', null)
+          else if (existing) state.setPanel(true, existing.id)
+          else void state.createPanelTab(type === 'files' ? 'file' : type, chat?.worktree?.path ?? project?.path ?? null)
+        }
         break
     }
   }
@@ -306,6 +423,8 @@ export const useStore = create<State>((set, get) => {
     accountStatuses: [],
     accountsLoading: false,
     acpProbes: {},
+    antigravityConsent: null,
+    attachmentPreview: null,
     imageModels: resolveImageModels(),
     autoApprovalModel: { name: '', id: '' },
     mcp: [],
@@ -317,13 +436,17 @@ export const useStore = create<State>((set, get) => {
     draft: { projectId: null, workspace: 'local', modelKey: '', effort: null, ultra: false, fast: false, permissionMode: 'auto' },
     composerText: {},
     composerAttachments: {},
+    composerMode: {},
     activityCollapsed: {},
 
     sidebarOpen: true,
     panelOpen: false,
     panelTab: '',
     panelTabs: [],
+    closingSideTab: null,
+    mentionQueue: [],
     openFiles: [],
+    chatPanels: {},
     settingsOpen: null,
     toast: null,
 
@@ -336,6 +459,7 @@ export const useStore = create<State>((set, get) => {
       if (initialization) return initialization
       initialization = (async () => {
         const boot = await window.galaxy.bootstrap()
+        applyCustomAcpAgents(boot.settings.customAcpAgents)
         const chats: Record<string, Chat> = {}
         for (const chat of boot.chats) chats[chat.id] = chat
         const lastProject = boot.projects.some((p) => p.id === prefs.lastProjectId) ? prefs.lastProjectId : null
@@ -367,7 +491,7 @@ export const useStore = create<State>((set, get) => {
     },
 
     selectChat(chatId) {
-      set({ activeChatId: chatId })
+      set({ ...swapPanels(chatId), activeChatId: chatId })
       if (!chatId) return
       if (!get().items[chatId] && !itemLoads.has(chatId)) {
         const pending: ChatEvent[] = []
@@ -390,21 +514,25 @@ export const useStore = create<State>((set, get) => {
       const s = get()
       const target = projectId !== undefined ? projectId : s.draft.projectId
       const subscriptions = availableSubscriptions(s.settings, s.accountStatuses)
-      set({ activeChatId: null, settingsOpen: null, draft: { ...draftFor(s.models.filter((model) => subscriptions.includes(model.subscription)), s.settings, target), permissionMode: s.draft.permissionMode } })
+      set({ ...swapPanels(null, target), activeChatId: null, settingsOpen: null, draft: { ...draftFor(s.models.filter((model) => subscriptions.includes(model.subscription)), s.settings, target), permissionMode: s.draft.permissionMode } })
     },
 
     setDraft(patch) {
-      set((s) => ({ draft: { ...s.draft, ...patch } }))
+      const s = get()
+      const panels = !s.activeChatId && patch.projectId !== undefined ? swapPanels(null, patch.projectId) : {}
+      set({ ...panels, draft: { ...s.draft, ...patch } })
       if (patch.projectId !== undefined) {
         prefs.lastProjectId = patch.projectId
         savePrefs(prefs)
       }
     },
 
-    pickModel(modelKey) {
+    pickModel(modelKey, chatId) {
       const s = get()
+      const id = chatId === undefined ? s.activeChatId : chatId
       const model = findModel(s.models, modelKey)
       if (!model?.enabled || !availableSubscriptions(s.settings, s.accountStatuses).includes(model.subscription)) return
+      if (!canUseChatSubscription(id ? s.chats[id] : null, model.subscription)) return
       prefs.models[model.subscription] = modelKey
       savePrefs(prefs)
       const next = {
@@ -414,25 +542,27 @@ export const useStore = create<State>((set, get) => {
         fast: model.fastMode && prefs.fast[modelKey] === true,
         acpConfig: acpPrefs(model.subscription)
       }
-      if (s.activeChatId) {
+      if (id) {
         const { acpConfig, ...rest } = next
         // Keep the chat's own picks when the model is unchanged.
-        const sameModel = s.chats[s.activeChatId]?.modelKey === modelKey
-        void window.galaxy.chats.update(s.activeChatId, sameModel || !acpConfig ? rest : next)
+        const sameModel = s.chats[id]?.modelKey === modelKey
+        void window.galaxy.chats.update(id, sameModel || !acpConfig ? rest : next)
       }
       else set({ draft: { ...s.draft, ...next } })
       void s.updateSettings({ defaultModelKey: modelKey })
     },
 
-    pickSubscription(subscription) {
+    pickSubscription(subscription, chatId) {
       const s = get()
+      const id = chatId === undefined ? s.activeChatId : chatId
       if (!availableSubscriptions(s.settings, s.accountStatuses).includes(subscription)) return
+      if (!canUseChatSubscription(id ? s.chats[id] : null, subscription)) return
       const models = s.models.filter((model) => model.enabled && model.subscription === subscription)
-      const current = findModel(s.models, s.activeChatId ? s.chats[s.activeChatId]?.modelKey : s.draft.modelKey)
+      const current = findModel(s.models, id ? s.chats[id]?.modelKey : s.draft.modelKey)
       const remembered = models.find((model) => model.key === prefs.models[subscription])
       const matching = models.find((model) => model.name === current?.name)
       const model = current?.enabled && current.subscription === subscription ? current : remembered ?? matching ?? models[0]
-      if (model) s.pickModel(model.key)
+      if (model) s.pickModel(model.key, id)
     },
 
     refreshAccounts() {
@@ -460,10 +590,11 @@ export const useStore = create<State>((set, get) => {
       return accountRefresh
     },
 
-    async loadAcpOptions(agentId, fresh = false) {
+    async loadAcpOptions(agentId, fresh = false, chatId) {
       const current = get().acpProbes[agentId]
       if (current?.loading || (current && !current.error && !fresh)) return
-      const projectId = get().activeChatId ? (get().chats[get().activeChatId as string]?.projectId ?? null) : get().draft.projectId
+      const id = chatId === undefined ? get().activeChatId : chatId
+      const projectId = id ? (get().chats[id]?.projectId ?? null) : get().draft.projectId
       set((s) => ({ acpProbes: { ...s.acpProbes, [agentId]: { options: current?.options ?? [], loading: true, error: null } } }))
       try {
         const options = await window.galaxy.acp.options(agentId, projectId, fresh)
@@ -474,9 +605,10 @@ export const useStore = create<State>((set, get) => {
       }
     },
 
-    setAcpOption(optionId, value) {
+    setAcpOption(optionId, value, chatId) {
       const s = get()
-      const chat = s.activeChatId ? s.chats[s.activeChatId] : null
+      const id = chatId === undefined ? s.activeChatId : chatId
+      const chat = id ? s.chats[id] : null
       const agentId = acpAgentFor(findModel(s.models, chat ? chat.modelKey : s.draft.modelKey)?.subscription)
       if (!agentId) return
       prefs.acp = { ...prefs.acp, [agentId]: { ...(prefs.acp?.[agentId] ?? {}), [optionId]: value } }
@@ -488,9 +620,10 @@ export const useStore = create<State>((set, get) => {
       } else set({ draft: { ...s.draft, acpConfig: { ...(s.draft.acpConfig ?? {}), [optionId]: value } } })
     },
 
-    setRunOptions(patch) {
+    setRunOptions(patch, chatId) {
       const s = get()
-      const chat = s.activeChatId ? s.chats[s.activeChatId] : null
+      const id = chatId === undefined ? s.activeChatId : chatId
+      const chat = id ? s.chats[id] : null
       const key = chat ? chat.modelKey : s.draft.modelKey
       if (patch.effort) prefs.efforts[key] = patch.effort
       if (patch.ultra !== undefined) prefs.ultra[key] = patch.ultra
@@ -500,21 +633,23 @@ export const useStore = create<State>((set, get) => {
       else set({ draft: { ...s.draft, ...patch } })
     },
 
-    setPermissionMode(mode) {
+    setPermissionMode(mode, chatId) {
       const s = get()
-      if (s.activeChatId) void window.galaxy.chats.update(s.activeChatId, { permissionMode: mode })
+      const id = chatId === undefined ? s.activeChatId : chatId
+      if (id) void window.galaxy.chats.update(id, { permissionMode: mode })
       else set({ draft: { ...s.draft, permissionMode: mode } })
     },
 
-    async send(text, attachments, mentions) {
+    async send(text, attachments, mentions, steer = false, mode, plan, targetChatId) {
       const s = get()
-      const source = s.activeChatId ? s.chats[s.activeChatId] : s.draft
+      const target = targetChatId === undefined ? s.activeChatId : targetChatId
+      const source = target ? s.chats[target] : s.draft
       const model = findModel(s.models, source?.modelKey)
       if (!model || !availableSubscriptions(s.settings, s.accountStatuses).includes(model.subscription)) {
         s.notify('Choose a model from Local or a signed-in subscription first', 'error')
         return
       }
-      let chatId = s.activeChatId
+      let chatId = target
       if (!chatId) {
         if (!s.draft.modelKey) {
           s.notify('Choose a model first', 'error')
@@ -527,15 +662,23 @@ export const useStore = create<State>((set, get) => {
           items: { ...state.items, [chat.id]: [] },
           activeChatId: chat.id,
           composerText: { ...state.composerText, new: '' },
-          composerAttachments: { ...state.composerAttachments, new: [] }
+          composerAttachments: { ...state.composerAttachments, new: [] },
+          // The mode chip stays on for the chat the draft became.
+          composerMode: { ...state.composerMode, new: undefined, [chat.id]: state.composerMode.new }
         }))
       }
-      await window.galaxy.chats.send({ chatId, text, attachments, mentions })
+      await window.galaxy.chats.send({ chatId, text, attachments, mentions, steer, ...(mode ? { mode } : {}), ...(plan ? { plan } : {}) })
     },
 
     async updateSettings(patch) {
       const settings = await window.galaxy.settings.update(patch)
+      applyCustomAcpAgents(settings.customAcpAgents)
       set({ settings, models: resolveModels(settings) })
+    },
+
+    openAttachment(file) {
+      if (file.preview || file.mime.startsWith('image/')) set({ attachmentPreview: file })
+      else get().openFile(file.path)
     },
 
     openFile(path, line) {
@@ -557,6 +700,16 @@ export const useStore = create<State>((set, get) => {
       get().addPanelTab({ id: tabId, type: 'browser', title: 'Browser' }, background)
     },
 
+    queueMention(mention) {
+      set((s) => ({ mentionQueue: [...s.mentionQueue, mention] }))
+    },
+
+    takeMentions() {
+      const queued = get().mentionQueue
+      if (queued.length) set({ mentionQueue: [] })
+      return queued
+    },
+
     addPanelTab(tab, background = false) {
       set((s) => {
         const exists = s.panelTabs.some((entry) => entry.id === tab.id)
@@ -565,8 +718,16 @@ export const useStore = create<State>((set, get) => {
       })
     },
 
-    closePanelTab(id) {
+    closePanelTab(id, confirmed = false) {
       const tab = get().panelTabs.find((entry) => entry.id === id)
+      if (tab?.type === 'side') {
+        if (!confirmed && (get().items[tab.chatId] ?? []).length > 0) {
+          set({ closingSideTab: id, panelOpen: true, panelTab: id })
+          return
+        }
+        set({ closingSideTab: null })
+        void window.galaxy.chats.remove(tab.chatId).catch(() => {})
+      }
       if (tab?.type === 'browser') void window.galaxy.browser.close(id).catch(() => {})
       if (tab?.type === 'terminal') void window.galaxy.terminal.close(id).catch(() => {})
       set((s) => {
@@ -633,8 +794,51 @@ export const useStore = create<State>((set, get) => {
       if (!tab) return
       if (tab.type === 'browser') await window.galaxy.browser.reload(id)
       else if (tab.type === 'file') set((s) => ({ openFiles: s.openFiles.map((file) => file.path === tab.path ? { ...file, nonce: file.nonce + 1 } : file) }))
-      else if (tab.type === 'agent') { const items = await window.galaxy.chats.items(tab.chatId); set((s) => ({ items: { ...s.items, [tab.chatId]: items } })) }
+      else if (tab.type === 'agent' || tab.type === 'side') { const items = await window.galaxy.chats.items(tab.chatId); set((s) => ({ items: { ...s.items, [tab.chatId]: items } })) }
       else get().updatePanelTab(id, { nonce: (tab.nonce ?? 0) + 1 })
+    },
+
+    setClosingSideTab(id) {
+      set({ closingSideTab: id })
+    },
+
+    async openSideChat(text, sourceChatId) {
+      const s = get()
+      const parentId = sourceChatId ?? s.activeChatId
+      const source = parentId ? s.chats[parentId] : undefined
+      if (parentId && !source) {
+        s.notify('The parent chat no longer exists.', 'error')
+        return
+      }
+      const config = source ?? s.draft
+      const model = findModel(s.models, config.modelKey)
+      if (!model || !availableSubscriptions(s.settings, s.accountStatuses).includes(model.subscription)) {
+        s.notify('Choose a model from Local or a signed-in subscription first', 'error')
+        return
+      }
+      const projectId = source ? source.projectId : s.draft.projectId
+      const project = s.projects.find((entry) => entry.id === projectId)
+      try {
+        const chat = await window.galaxy.chats.create({
+          projectId,
+          modelKey: config.modelKey,
+          effort: config.effort,
+          ultra: false,
+          fast: config.fast,
+          permissionMode: config.permissionMode,
+          workspace: 'local',
+          ...(config.acpConfig ? { acpConfig: config.acpConfig } : {}),
+          side: true,
+          ...(source ? { parentChatId: source.id } : {})
+        })
+        // The side chat starts as a copy of the main chat's timeline.
+        const items = await window.galaxy.chats.items(chat.id)
+        set((state) => ({ chats: { ...state.chats, [chat.id]: chat }, items: { ...state.items, [chat.id]: items } }))
+        get().addPanelTab({ id: `side:${chat.id}`, type: 'side', title: 'Side chat', chatId: chat.id, root: chat.worktree?.path ?? s.projects.find((entry) => entry.id === chat.projectId)?.path ?? project?.path ?? null })
+        if (text?.trim()) await window.galaxy.chats.send({ chatId: chat.id, text: text.trim(), attachments: [] })
+      } catch (error) {
+        get().notify(error instanceof Error ? error.message : String(error), 'error')
+      }
     },
 
     openAgent(chatId, agentId, title, root) {
@@ -661,6 +865,10 @@ export const useStore = create<State>((set, get) => {
       set((s) => ({ composerAttachments: { ...s.composerAttachments, [key]: attachments } }))
     },
 
+    setComposerMode(key, mode) {
+      set((s) => ({ composerMode: { ...s.composerMode, [key]: mode } }))
+    },
+
     notify(text, tone = 'info') {
       const id = Date.now()
       set({ toast: { id, text, tone } })
@@ -672,8 +880,19 @@ export const useStore = create<State>((set, get) => {
 })
 
 /** The chat on screen, or null on the new chat screen. */
+/** Set around a side chat's timeline and message box so they act on that chat instead of the open one. */
+export const ChatScope = createContext<string | null>(null)
+
+/** The chat the surrounding UI acts on: the scoped side chat, else the open chat. */
+export function useChatId(): string | null {
+  const scoped = useContext(ChatScope)
+  const active = useStore((s) => s.activeChatId)
+  return scoped ?? active
+}
+
 export function useActiveChat(): Chat | null {
-  return useStore((s) => (s.activeChatId ? (s.chats[s.activeChatId] ?? null) : null))
+  const id = useChatId()
+  return useStore((s) => (id ? (s.chats[id] ?? null) : null))
 }
 
 /** Model and run options currently in effect, from the open chat or the draft. */

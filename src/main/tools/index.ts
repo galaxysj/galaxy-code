@@ -1,8 +1,9 @@
-import type { ToolItem, ToolKind } from '@shared/types'
+import { dirname, join } from 'node:path'
+import type { AgentMode, ToolItem, ToolKind } from '@shared/types'
 import { gate } from '../agent/approval'
 import { mcp, type McpTool } from '../services/mcp'
 import type { ChatToolSpec } from '../services/openrouter'
-import { errorMessage, isAbortError, oneLine } from '../util'
+import { errorMessage, isAbortError, oneLine, resolvePath } from '../util'
 import { createTool, editTool, globTool, grepTool, listTool, readTool } from './fs'
 import {
   askTool,
@@ -16,6 +17,7 @@ import {
   webFetchTool,
   webSearchTool
 } from './galaxy'
+import { parseEditPatch, patchFiles } from './patch'
 import { bashTool } from './shell'
 import { terminalTool } from './terminal'
 import { str, ToolInputError, type ToolContext, type ToolDef, type ToolResult } from './types'
@@ -110,30 +112,77 @@ export const ALL_TOOLS: ToolDef[] = [
 /** Tools Galaxy Code lends to account CLIs. */
 export const BRIDGE_TOOLS: ToolDef[] = [agentTool, messageTool, editTool, terminalTool, browserTool, listTabsTool, askTool, taskTool, presentTool, openTool, memoryTool, imageGenerationTool]
 
+/** Where Plan mode keeps its plans, relative to the working directory. */
+export const PLANS_DIR = join('.galaxy', 'plans')
+
+function planPaths(tool: ToolDef, input: Record<string, unknown>, cwd: string): string[] {
+  if (tool.name === 'Create') return [resolvePath(cwd, str(input, 'path', true))]
+  return patchFiles(parseEditPatch(str(input, 'patch', true), cwd), cwd)
+}
+
+/** Create or Edit limited to Markdown files directly inside .galaxy/plans. Those writes need no approval. */
+function planOnly(tool: ToolDef): ToolDef {
+  return {
+    ...tool,
+    description: `${tool.description}\n\nPlan mode: only Markdown files directly inside ${PLANS_DIR}/ can be written, such as ${PLANS_DIR}/add-login.md.`,
+    approval: undefined,
+    async execute(input, ctx) {
+      const plans = join(ctx.cwd, PLANS_DIR)
+      const paths = planPaths(tool, input, ctx.cwd)
+      const outside = paths.filter((path) => dirname(path) !== plans || !/\.md$/i.test(path))
+      if (outside.length) throw new Error(`Plan mode can only write Markdown files in ${PLANS_DIR}/. Not allowed: ${outside.join(', ')}`)
+      const result = await tool.execute(input, ctx)
+      const plan = paths.at(-1)
+      if (plan && ctx.session.agentId === 'main') ctx.session.emitUi({ type: 'open-file', chatId: ctx.session.id, path: plan })
+      return result
+    }
+  }
+}
+
+/** Ask answers from what it can read. Plan reads and writes only its plan files. */
+export function toolsForMode(mode: AgentMode): ToolDef[] {
+  if (mode === 'ask') return [...EXPLORE_TOOLS, askTool]
+  return [...EXPLORE_TOOLS, planOnly(createTool), planOnly(editTool), askTool]
+}
+
 export function toolsForSubagent(_type: string): ToolDef[] {
   return ALL_TOOLS.filter((tool) => tool.kind !== 'ask')
 }
 
 function mcpAsTool(tool: McpTool): ToolDef {
+  const schema = (tool.inputSchema as Record<string, unknown>) ?? { type: 'object', properties: {} }
+  const properties = (schema.properties ?? {}) as Record<string, unknown>
+  // Keep the server's own arguments intact, even if it already uses this name.
+  let titleKey = '_title'
+  while (Object.prototype.hasOwnProperty.call(properties, titleKey)) titleKey = `_${titleKey}`
+  const argumentsOf = (input: Record<string, unknown>): Record<string, unknown> => Object.fromEntries(Object.entries(input).filter(([key]) => key !== titleKey))
   return {
     name: tool.qualified,
     kind: 'mcp',
-    description: tool.description || `${tool.name} from the ${tool.server} MCP server.`,
-    parameters: (tool.inputSchema as Record<string, unknown>) ?? { type: 'object', properties: {} },
+    description: `${tool.description || `${tool.name} from the ${tool.server} MCP server.`}\nProvide ${titleKey} with a short, user-facing action title for this call's tool log.`,
+    parameters: {
+      ...schema,
+      properties: {
+        ...properties,
+        [titleKey]: { type: 'string', description: 'Short action title displayed in the tool log, for example "Find the project notes". Display only; not sent to the MCP server.', maxLength: 120 }
+      }
+    },
     present(input) {
-      const preview = oneLine(JSON.stringify(input), 120)
-      return { title: `${tool.server}: ${tool.name}`, detail: preview === '{}' ? undefined : preview, meta: { server: tool.server } }
+      const preview = oneLine(JSON.stringify(argumentsOf(input)), 120)
+      const rawTitle = input[titleKey]
+      const title = typeof rawTitle === 'string' ? oneLine(rawTitle.trim(), 120) : ''
+      return { title: title || `${tool.server}: ${tool.name}`, detail: preview === '{}' ? undefined : preview, meta: { server: tool.server } }
     },
     approval(input) {
       if (tool.readOnly) return null
       return {
-        action: { tool: `MCP ${tool.server}/${tool.name}`, description: tool.description.slice(0, 400), arguments: input },
+        action: { tool: `MCP ${tool.server}/${tool.name}`, description: tool.description.slice(0, 400), arguments: argumentsOf(input) },
         sessionKey: `mcp:${tool.qualified}`,
         sessionLabel: `Always allow ${tool.name} in this chat`
       }
     },
     async execute(input, ctx) {
-      const result = await mcp.call(tool, input, ctx.signal)
+      const result = await mcp.call(tool, argumentsOf(input), ctx.signal)
       return { text: result.text || '(empty result)', images: result.images, isError: result.isError }
     }
   }

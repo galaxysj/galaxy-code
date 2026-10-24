@@ -1,24 +1,36 @@
-import { ChevronDown, Laptop, UserRound } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
 import { useCallback, useRef, useState, type ReactNode } from 'react'
-import { availableSubscriptions } from '@shared/catalog'
+import { availableSubscriptions, canUseChatSubscription } from '@shared/catalog'
 import { cn } from '../lib/utils'
-import { useRunConfig, useStore } from '../store'
+import { useActiveChat, useChatId, useRunConfig, useStore } from '../store'
 import { SUBSCRIPTION_LABELS } from './ModelPicker'
+import { SubscriptionIcon } from './SubscriptionIcon'
 import { MenuItem, MenuSeparator, Popover, Spinner } from './ui'
 
 export function SubscriptionPicker(): ReactNode {
   const anchor = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const { subscription } = useRunConfig()
+  const chat = useActiveChat()
   const settings = useStore((s) => s.settings)
   const statuses = useStore((s) => s.accountStatuses)
   const loading = useStore((s) => s.accountsLoading)
   const models = useStore((s) => s.models)
   const pickSubscription = useStore((s) => s.pickSubscription)
+  const chatId = useChatId()
   const refresh = useStore((s) => s.refreshAccounts)
-  const subscriptions = availableSubscriptions(settings, statuses)
+  const subscriptions = availableSubscriptions(settings, statuses).filter((entry) => canUseChatSubscription(chat, entry))
   const close = useCallback(() => setOpen(false), [])
-  const Icon = subscription === 'Default' ? Laptop : UserRound
+  const label = subscription === 'Default' ? 'Local' : subscription ? (SUBSCRIPTION_LABELS[subscription] ?? subscription) : 'Subscription'
+
+  // A chat keeps the provider it started with.
+  if (chat)
+    return (
+      <div className="flex h-7 min-w-0 max-w-[150px] items-center gap-1.5 px-2 text-[12.5px] text-muted">
+        <SubscriptionIcon subscription={subscription} />
+        <span className="truncate">{label}</span>
+      </div>
+    )
 
   return (
     <>
@@ -35,8 +47,8 @@ export function SubscriptionPicker(): ReactNode {
         }}
         className={cn('flex h-7 min-w-0 max-w-[150px] items-center gap-1.5 rounded-lg px-2 text-[12.5px] text-muted transition-colors hover:bg-hover hover:text-fg', open && 'bg-hover text-fg')}
       >
-        <Icon size={13.5} className="shrink-0" />
-        <span className="truncate">{subscription === 'Default' ? 'Local' : subscription ? SUBSCRIPTION_LABELS[subscription] : 'Subscription'}</span>
+        <SubscriptionIcon subscription={subscription} />
+        <span className="truncate">{label}</span>
         <ChevronDown size={12} className={cn('picker-chevron shrink-0 opacity-60', open && 'rotate-180')} />
       </button>
       <Popover open={open} onClose={close} anchor={anchor} placement="top-start" className="w-[244px] p-1">
@@ -52,12 +64,12 @@ export function SubscriptionPicker(): ReactNode {
               <div key={entry}>
                 {!local && entry === subscriptions[1] && <MenuSeparator />}
                 <MenuItem
-                  icon={local ? <Laptop size={13.5} /> : <UserRound size={13.5} />}
-                  label={local ? 'Local' : SUBSCRIPTION_LABELS[entry]}
+                  icon={<SubscriptionIcon subscription={entry} />}
+                  label={local ? 'Local' : (SUBSCRIPTION_LABELS[entry] ?? entry)}
                   selected={entry === subscription}
                   disabled={!hasModels}
                   onClick={() => {
-                    pickSubscription(entry)
+                    pickSubscription(entry, chatId)
                     close()
                   }}
                 />

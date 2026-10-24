@@ -1,12 +1,10 @@
 import { shell } from 'electron'
 import { execFile } from 'node:child_process'
 import { ACCOUNT_LABELS, ACP_ACCOUNTS, type AccountId, type AccountStatus } from '@shared/types'
-import { acpAgent, acpBaseEnv, acpBinary } from '../engines/acp'
+import { acpAgent, acpBaseEnv, acpBinary, acpLaunch } from '../engines/acp'
 import { codexBinary, startCodexProcess } from '../engines/codex'
 import { store } from '../store'
 import { errorMessage, run, which } from '../util'
-
-const ORDER: AccountId[] = ['claude', 'codex', ...ACP_ACCOUNTS]
 
 async function binaryFor(id: AccountId): Promise<string | null> {
   if (id === 'claude') return which(store.settings.accounts.claude.binaryPath.trim() || 'claude')
@@ -51,9 +49,11 @@ async function authState(id: AccountId, binary: string): Promise<{ authenticated
 
 export async function accountStatuses(): Promise<AccountStatus[]> {
   return Promise.all(
-    ORDER.map(async (id): Promise<AccountStatus> => {
+    ['claude', 'codex', ...ACP_ACCOUNTS].map(async (id): Promise<AccountStatus> => {
       const binary = await binaryFor(id)
       if (!binary) return { id, installed: false, binary: null, version: null, authenticated: null, detail: null }
+      // Do not launch/download the unofficial adapter during background status checks.
+      if (id === 'antigravity') return { id, installed: true, binary, version: null, authenticated: null, detail: 'Unofficial adapter' }
       const [ver, auth] = await Promise.all([version(binary), authState(id, binary)])
       return { id, installed: true, binary, version: ver, ...auth }
     })
@@ -109,6 +109,11 @@ export async function loginAccount(id: AccountId): Promise<{ ok: boolean; messag
   if (!binary) return { ok: false, message: `${label} CLI is not installed` }
   try {
     if (id === 'codex') return await loginCodex()
+    if (id === 'antigravity') {
+      const launch = await acpLaunch(id, 'ask')
+      await openInTerminal([launch.command, ...launch.args, '--login'].map(shellQuote).join(' '))
+      return { ok: true, message: 'Finish signing in to Antigravity in the terminal window, then try again.' }
+    }
     const args = id === 'claude' ? ['auth', 'login'] : acpAgent(id)?.Login
     if (!args) return { ok: false, message: `Sign in to ${label} from its own app, then check again.` }
     const command = [binary, ...args].map(shellQuote).join(' ')

@@ -23,6 +23,8 @@ const api: GalaxyApi = {
     update: call('settings.update'),
     setOpenRouterKey: call('settings.setOpenRouterKey'),
     testOpenRouterKey: call('settings.testOpenRouterKey'),
+    usage: call('settings.usage'),
+    analytics: call('settings.analytics'),
     signInOpenRouter: call('settings.signInOpenRouter')
   },
   accounts: {
@@ -30,6 +32,7 @@ const api: GalaxyApi = {
     login: call('accounts.login')
   },
   acp: {
+    answerConsent: call('acp.answerConsent'),
     options: call('acp.options')
   },
   projects: {
@@ -50,7 +53,9 @@ const api: GalaxyApi = {
     markRead: call('chats.markRead'),
     approve: call('chats.approve'),
     answer: call('chats.answer'),
-    unqueue: call('chats.unqueue')
+    unqueue: call('chats.unqueue'),
+    revert: call('chats.revert'),
+    redo: call('chats.redo')
   },
   files: {
     listProject: call('files.listProject'),
@@ -59,9 +64,16 @@ const api: GalaxyApi = {
     attachFromPaths: call('files.attachFromPaths'),
     attachFromData: call('files.attachFromData'),
     read: call('files.read'),
+    write: call('files.write'),
     reveal: call('files.reveal'),
     openExternal: call('files.openExternal'),
     pathForFile: (file: File) => webUtils.getPathForFile(file)
+  },
+  editor: {
+    complete: call('editor.complete'),
+    inlineEdit: call('editor.inlineEdit'),
+    cancelInlineEdit: call('editor.cancelInlineEdit'),
+    terminalCommand: call('editor.terminalCommand')
   },
   skills: {
     list: call('skills.list'),
@@ -85,7 +97,7 @@ const api: GalaxyApi = {
   terminal: {
     create: call('terminal.create'), write: call('terminal.write'), resize: call('terminal.resize'), interrupt: call('terminal.interrupt'), close: call('terminal.close')
   },
-  review: { read: call('review.read') },
+  review: { read: call('review.read'), commits: call('review.commits'), status: call('review.status'), init: call('review.init'), push: call('review.push'), state: call('review.state') },
   onChatEvent: (listener) => subscribe<ChatEvent>(IPC_CHAT_EVENT, listener),
   onUiEvent: (listener) => subscribe<UiEvent>(IPC_UI_EVENT, listener)
 }

@@ -91,7 +91,7 @@ export const listTabsTool: ToolDef = {
   async execute(_input, ctx) {
     const tabs = browser.listTabsForChat(ctx.session.team?.chatId ?? ctx.session.id).map(({ title, url, tabIndex }) => ({ tabIndex, title, url }))
     return {
-      text: JSON.stringify(tabs, null, 2),
+      text: tabs.length ? JSON.stringify(tabs, null, 2) : 'No open browser tabs. You can create one now: call Browser with {"action":"create","url":"https://example.com","background":false}, using the requested URL. Do not wait for the user to open a tab.',
       display: tabs.length ? tabs.map((tab) => `${tab.tabIndex}. ${oneLine(tab.title, 160)}\n   ${tab.url || 'about:blank'}`).join('\n\n') : 'No open browser tabs.'
     }
   }
@@ -103,6 +103,7 @@ export const browserTool: ToolDef = {
   description: `Control in-app Chromium tabs in the current chat's window. tabIndex is scoped to that window; use ListTabs to find its tabs. By default tabs open and actions run in the background without opening the sidebar or changing the user's selected tab or keyboard focus. For navigate, set background:false to open the sidebar and select the target tab so the user can watch. Choose based on the user's intent: show pages they ask to open or see; keep research and implementation checks in the background. Use it to check pages you built, reproduce UI bugs, or work through sites that need interaction.
 
 Actions:
+- create: open a new tab, even when ListTabs is empty. Pass the requested url, or omit it for a blank tab. Never pass tabIndex. Reveals the tab by default; use background:true for background research. An empty tab list is not a blocker: create the tab yourself.
 - navigate: load \`url\` in \`tabIndex\`. Omit tabIndex to open a new tab. \`background\` defaults to true; set false to reveal and select the tab in the sidebar, or true to keep the user's current selection. This also works when navigating an existing tab. Returns its tabIndex and page outline.
 - snapshot: list interactive elements with numeric refs, plus the page text. Take one before clicking or typing, and again after the page changes.
 - click: click the element with \`ref\` (from the latest snapshot) or a CSS \`selector\`.
@@ -116,18 +117,18 @@ Actions:
 - console: recent console messages from the page.
 - tabs: list browser tabs with title, URL and 1-based tabIndex in sidebar order. ListTabs provides the same list. File preview pages are excluded.
 - close: close the tab at tabIndex.
-Use tabIndex as the only browser tab selector. All actions except tabs and navigate require tabIndex. Indices can change when tabs move or close; use ListTabs to refresh them. Controls work even if the user has another tab selected.
+Use tabIndex as the only browser tab selector. All actions except tabs, create, and navigate require tabIndex. Indices can change when tabs move or close; use ListTabs to refresh them. Controls work even if the user has another tab selected.
 Examples: {"action":"navigate","url":"https://example.com","background":true} opens a background tab. {"action":"navigate","url":"http://localhost:5000","background":false} opens and shows the page to the user. {"action":"snapshot","tabIndex":1} reads tab 1. {"action":"click","tabIndex":1,"ref":3} clicks element 3 in tab 1.`,
   parameters: {
     type: 'object',
     properties: {
       action: {
         type: 'string',
-        enum: ['navigate', 'snapshot', 'click', 'type', 'press', 'scroll', 'screenshot', 'evaluate', 'back', 'forward', 'reload', 'wait', 'console', 'tabs', 'close']
+        enum: ['create', 'navigate', 'snapshot', 'click', 'type', 'press', 'scroll', 'screenshot', 'evaluate', 'back', 'forward', 'reload', 'wait', 'console', 'tabs', 'close']
       },
       url: { type: 'string' },
-      background: { type: 'boolean', default: true, description: 'navigate only. true (default) opens/loads the tab without changing the selected tab or revealing the sidebar. false reveals the sidebar and selects the tab for the user to see. Use false when the user asks to open or show a page; use true for background research and checks.' },
-      tabIndex: { type: 'integer', minimum: 1, description: 'The only browser tab selector: 1-based index from ListTabs or navigate. Required for actions on an existing tab. Omit only for tabs or to navigate a new background tab.' },
+      background: { type: 'boolean', description: 'create defaults to false (show the new tab); navigate defaults to true (background). false reveals the sidebar and selects the tab. Use false when the user asks to open or show a page; true for background research and checks.' },
+      tabIndex: { type: 'integer', minimum: 1, description: 'The only browser tab selector: 1-based index from ListTabs, create, or navigate. Required for actions on an existing tab. Omit for tabs, create, or navigate to a new tab.' },
       ref: { type: 'integer', description: 'Element ref from the latest snapshot.' },
       selector: { type: 'string', description: 'CSS selector, as an alternative to ref.' },
       text: { type: 'string' },
@@ -145,6 +146,8 @@ Examples: {"action":"navigate","url":"https://example.com","background":true} op
     const action = String(input.action ?? '')
     const target = input.ref !== undefined ? `element ${String(input.ref)}` : input.selector ? String(input.selector) : ''
     switch (action) {
+      case 'create':
+        return { title: `Opened ${oneLine(String(input.url || 'new browser tab'), 70)}`, meta: { url: String(input.url || 'about:blank') } }
       case 'navigate':
         return { title: `Opened ${oneLine(String(input.url ?? ''), 70)}`, meta: { url: String(input.url ?? '') } }
       case 'snapshot':
@@ -381,6 +384,7 @@ export const openTool: ToolDef = {
     if (input.type === 'terminal' || input.type === 'review') {
       const pane = input.type
       const tabId = pane === 'terminal' ? await terminals.create(ctx.cwd) : `review:${ctx.session.team?.chatId ?? ctx.session.id}`
+      if (pane === 'terminal') terminals.track(tabId, ctx.session.team?.chatId ?? ctx.session.id, ctx.itemId)
       ctx.session.emitUi({ type: 'open-panel', chatId: ctx.session.id, pane, cwd: ctx.cwd, tabId })
       return { text: `Opened ${pane} tab ${tabId}.` }
     }
@@ -396,7 +400,7 @@ export const memoryTool: ToolDef = {
   name: 'Memory',
   kind: 'memory',
   description:
-    'Update the persistent memory file (.galaxy/MEMORY.md), which is loaded into every future chat in this project. Save things that will matter again: how the user wants you to work, corrections they gave, project conventions and decisions that are not obvious from the code. Do not save what the code or git history already records, or details that only matter to this chat. Actions: "add" appends an entry, "replace" swaps `old_text` for `content`, "remove" deletes `old_text`, "rewrite" replaces the whole file with `content`.',
+    'Update the persistent memory file (~/.galaxy/MEMORY.md), which is loaded into every future chat, across all projects. Save things that will matter again: how the user wants you to work, corrections they gave, project conventions and decisions that are not obvious from the code. Do not save what the code or git history already records, or details that only matter to this chat. Actions: "add" appends an entry, "replace" swaps `old_text` for `content`, "remove" deletes `old_text`, "rewrite" replaces the whole file with `content`.',
   parameters: {
     type: 'object',
     properties: {
@@ -408,8 +412,7 @@ export const memoryTool: ToolDef = {
   },
   present(input) {
     const action = String(input.action ?? 'add')
-    const label = action === 'remove' ? 'Removed a memory' : action === 'rewrite' ? 'Rewrote memory' : action === 'replace' ? 'Updated a memory' : 'Saved a memory'
-    return { title: label, detail: oneLine(String(input.content ?? input.old_text ?? ''), 160) }
+    return { title: action === 'remove' ? 'Removed memory' : 'Saved memory', detail: oneLine(String(input.content ?? input.old_text ?? ''), 160) }
   },
   async execute(input, ctx) {
     const action = str(input, 'action', true)

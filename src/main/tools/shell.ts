@@ -12,6 +12,16 @@ const MAX_TIMEOUT_S = 600
 const MAX_OUTPUT = 30_000
 
 const background = new Set<ChildProcess>()
+const backgroundOwners = new Map<ChildProcess, { chatId: string; itemId: string }>()
+
+export function stopRevertedBackgroundProcesses(chatId: string, itemIds: Set<string>): void {
+  for (const [child, owner] of backgroundOwners) {
+    if (owner.chatId !== chatId || !itemIds.has(owner.itemId)) continue
+    killTree(child, 'SIGKILL')
+    background.delete(child)
+    backgroundOwners.delete(child)
+  }
+}
 
 function killTree(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM'): void {
   if (!child.pid) return
@@ -30,6 +40,7 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM'): void
 export function killBackgroundProcesses(): void {
   for (const child of background) killTree(child, 'SIGKILL')
   background.clear()
+  backgroundOwners.clear()
 }
 
 function shellEnv(): NodeJS.ProcessEnv {
@@ -89,10 +100,12 @@ export const bashTool: ToolDef = {
       const stream = createWriteStream(log)
       const child = spawn(shell, ['-lc', command], { cwd: ctx.cwd, env: shellEnv(), detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
       background.add(child)
+      backgroundOwners.set(child, { chatId: ctx.session.team?.chatId ?? ctx.session.id, itemId: ctx.itemId })
       child.stdout?.pipe(stream, { end: false })
       child.stderr?.pipe(stream, { end: false })
       child.on('close', (code) => {
         background.delete(child)
+        backgroundOwners.delete(child)
         stream.end(`\n[process exited with code ${code}]\n`)
       })
       child.on('error', (err) => stream.end(`\n[failed to start: ${err.message}]\n`))
@@ -101,7 +114,7 @@ export const bashTool: ToolDef = {
       const early = child.exitCode !== null ? ` It already exited with code ${child.exitCode}.` : ''
       return {
         text: `Started in the background (pid ${child.pid}).${early}\nOutput is being written to ${log}. Read that file to check on it. Stop it with: kill -- -${child.pid}`,
-        meta: { background: true, exitCode: child.exitCode }
+        meta: { background: true, exitCode: child.exitCode, log }
       }
     }
 

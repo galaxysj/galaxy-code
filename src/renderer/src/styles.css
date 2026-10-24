@@ -44,6 +44,7 @@
   --green: #4cc38a;
   --red: #f2766b;
   --amber: #e2a336;
+  --orange: #f0883e;
   --blue: #78aef5;
   --purple: #a78bfa;
   --slider: #4a86f7;
@@ -81,6 +82,7 @@
   --green: #1f8a52;
   --red: #c9382c;
   --amber: #a86a06;
+  --orange: #c4560f;
   --blue: #1f65c1;
   --purple: #7c4ddb;
   --slider: #3b7cf5;
@@ -282,16 +284,33 @@
 }
 .activity-reveal { animation: activity-reveal 180ms ease-out both; }
 
+@keyframes status-roll {
+  from { opacity: 0; transform: translateY(70%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.status-roll { display: inline-block; animation: status-roll 260ms cubic-bezier(0.2, 0, 0, 1) both; }
+
+.fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 320ms cubic-bezier(0.2, 0, 0, 1), opacity 240ms ease-out;
+}
+.fold[data-open='true'] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
 .explore-group {
-  --fg: #b3b3b3;
-  --fg-muted: #999999;
-  --fg-subtle: #808080;
+  --fg: #d4d4d4;
+  --fg-muted: #b3b3b3;
+  --fg-subtle: #999999;
 }
 
 :root[data-theme='light'] .explore-group {
-  --fg: #666666;
-  --fg-muted: #808080;
-  --fg-subtle: #999999;
+  --fg: #3d3d3d;
+  --fg-muted: #616161;
+  --fg-subtle: #808080;
 }
 
 .activity-output-surface {
@@ -334,6 +353,22 @@
 .explore-viewport::after {
   bottom: 0;
   background: linear-gradient(to top, var(--bg), transparent);
+  -webkit-mask-image: linear-gradient(to top, black, transparent);
+  mask-image: linear-gradient(to top, black, transparent);
+}
+
+/* Build plan preview: same fade as the explore viewport, on the message card's color. */
+.plan-preview::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 28px;
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  background: linear-gradient(to top, var(--bg-elev), transparent);
   -webkit-mask-image: linear-gradient(to top, black, transparent);
   mask-image: linear-gradient(to top, black, transparent);
 }
@@ -469,6 +504,8 @@
   .picker-view,
   .picker-chevron,
   .activity-reveal,
+  .status-roll,
+  .fold,
   .pop-in,
   .fade-in {
     animation: none;
@@ -640,10 +677,72 @@
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-.composer-swap { animation: composer-swap-in 180ms cubic-bezier(0.22, 1, 0.36, 1); }
+.chat-turn + .chat-turn { padding-top: 20px; }
+
+.chat-turn > .group\/user {
+  position: sticky;
+  top: 16px;
+  z-index: 20;
+}
+
+.composer-swap {
+  animation: composer-swap-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: border-radius 220ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 180ms ease;
+}
+.composer-bubble {
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+.composer-wrap-measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+.composer-wrap-probe {
+  width: max(1px, calc(100% - 244px));
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-size: 14.7px;
+  line-height: 1.55;
+}
+.composer-compact {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 28px;
+}
+.composer-compact .composer-toolbar,
+.composer-compact .composer-options,
+.composer-compact .composer-actions { display: contents; }
+.composer-compact .composer-options > :first-child {
+  order: 0;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--bg-active);
+}
+.composer-compact .composer-input { order: 1; flex: 1; min-width: 0; }
+.composer-compact .composer-input textarea,
+.composer-compact .composer-mention-mirror {
+  min-height: 28px;
+  padding: 2.5px 8px;
+}
+.composer-compact .composer-model { order: 2; width: 144px; flex-shrink: 0; justify-content: flex-end; }
+.composer-compact .composer-model > button { max-width: 100%; }
+.composer-compact .composer-actions > button { order: 3; margin-left: 0; }
 
 @media (prefers-reduced-motion: reduce) {
-  .composer-swap { animation: none; }
+  .composer-swap { animation: none; transition: none; }
 }
 
 /* Effort slider: fill and thumb glide between stops. */
@@ -658,4 +757,39 @@
 @media (prefers-reduced-motion: reduce) {
   .slider-thumb,
   .slider-fill { transition: none; }
+}
+
+/* File editor (Monaco) */
+.galaxy-jump-mark::after {
+  content: 'Tab';
+  margin-left: 2px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 14px;
+  vertical-align: 1px;
+}
+.galaxy-target-line {
+  background: color-mix(in srgb, var(--amber) 15%, transparent);
+}
+.galaxy-edit-selection {
+  background: color-mix(in srgb, var(--blue) 25%, transparent);
+}
+.galaxy-diff-add {
+  background: var(--diff-add);
+}
+.galaxy-diff-add-gutter {
+  border-left: 3px solid var(--green);
+}
+.galaxy-diff-del {
+  background: var(--diff-del);
+  border-left: 3px solid var(--red);
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 19px;
+  padding-left: 4px;
 }

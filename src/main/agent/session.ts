@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
+  AgentMode,
   ApprovalRequest,
   AskQuestion,
   Attachment,
@@ -16,6 +17,7 @@ import type {
   ToolItem,
   UiEvent
 } from '@shared/types'
+import { recordUsage } from '../services/analytics'
 import { store, type ChatDoc } from '../store'
 import { newId } from '../util'
 import type { AgentTeam } from './team'
@@ -30,6 +32,8 @@ export interface Turn {
   ultra: boolean
   fast: boolean
   permissionMode: PermissionMode
+  /** Ask or Plan keeps the turn read-only. Native engine only. */
+  mode?: AgentMode
   signal: AbortSignal
 }
 
@@ -101,8 +105,10 @@ export class Session {
     if (this.chat.status !== status) this.patchChat({ status })
   }
 
-  addUsage(input: number, output: number, cost: number, context?: number): void {
+  /** `record` is off when re-adding a worker's totals that were already recorded under its own model. */
+  addUsage(input: number, output: number, cost: number, context?: number, record = true): void {
     const usage = this.chat.usage
+    if (record) recordUsage(this.chat.modelKey, input, output, cost)
     this.patchChat({
       usage: {
         inputTokens: usage.inputTokens + input,
@@ -135,6 +141,14 @@ export class Session {
     if (this.persistent) store.touchDoc(this.id)
     this.emit({ type: 'item', chatId: this.id, item: { ...item } })
     return item
+  }
+
+  /** Swaps the whole timeline, as a revert or redo does. */
+  replaceItems(items: Item[]): void {
+    this.flushDeltas()
+    this.doc.items.splice(0, this.doc.items.length, ...items)
+    if (this.persistent) store.touchDoc(this.id)
+    this.emit({ type: 'items-reset', chatId: this.id, items: [...this.doc.items] })
   }
 
   /** Appends streamed text. Deltas are coalesced so the renderer is not flooded. */

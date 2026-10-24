@@ -18,12 +18,16 @@ export const terminalTool: ToolDef = {
     if (action === 'list') return { text: JSON.stringify(terminals.list()) }
     if (action === 'create') {
       const tabId = await terminals.create(ctx.cwd)
+      terminals.track(tabId, ctx.session.team?.chatId ?? ctx.session.id, ctx.itemId)
       ctx.session.emitUi({ type: 'open-panel', chatId: ctx.session.id, pane: 'terminal', tabId, cwd: ctx.cwd })
       return { text: `Opened terminal tab ${tabId}.` }
     }
     const tabId = str(input, 'tabId', true)
     switch (action) {
-      case 'write': terminals.write(tabId, str(input, 'text', true)); break
+      case 'write':
+        terminals.write(tabId, str(input, 'text', true))
+        terminals.track(tabId, ctx.session.team?.chatId ?? ctx.session.id, ctx.itemId)
+        break
       case 'read': return { text: terminals.read(tabId) || '(No output yet.)' }
       case 'interrupt': terminals.interrupt(tabId); break
       case 'close': terminals.close(tabId); ctx.session.emitUi({ type: 'close-panel-tab', tabId }); break

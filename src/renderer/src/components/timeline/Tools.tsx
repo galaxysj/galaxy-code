@@ -29,11 +29,16 @@ import {
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { EXPLORE_KINDS, type AskQuestion, type Item, type ReasoningItem, type TaskEntry, type ToolItem, type ToolKind } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, plural, relativeTo } from '../../lib/utils'
-import { toolActivityTitle } from '../../lib/toolActivity'
+import { isTerminalRead, readPath, toolActivityTitle } from '../../lib/toolActivity'
 import { useStore } from '../../store'
 import { DiffStat, DiffView } from '../DiffView'
 import { Markdown } from '../Markdown'
+import { FileIcon as FileTypeIcon } from '../ProjectFiles'
 import { Button, Spinner } from '../ui'
+import hljs from 'highlight.js/lib/core'
+import bash from 'highlight.js/lib/languages/bash'
+
+hljs.registerLanguage('bash', bash)
 
 export interface TimelineContext {
   chatId: string
@@ -61,7 +66,7 @@ const KIND_ICON: Record<ToolKind, typeof Wrench> = {
   ask: MessageCircleQuestion,
   task: ListTodo,
   present: FileIcon,
-  open: PanelRight,
+  open: FileIcon,
   memory: Brain,
   image: ImageIcon,
   other: Wrench
@@ -88,6 +93,8 @@ interface RowProps {
   open?: boolean
   onToggle?(): void
   dim?: boolean
+  /** No lead-word emphasis, for titles that are content rather than activity labels. */
+  plain?: boolean
 }
 
 /** One line of agent activity. Clicking it reveals the detail underneath. */
@@ -99,7 +106,7 @@ function leadWord(title: ReactNode): ReactNode {
   return <><span className="text-fg">{title.slice(0, space)}</span>{title.slice(space)}</>
 }
 
-function Row({ icon, title, detail, trailing, live, open, onToggle, dim }: RowProps): ReactNode {
+function Row({ icon, title, detail, trailing, live, open, onToggle, dim, plain }: RowProps): ReactNode {
   return (
     <button
       type="button"
@@ -107,13 +114,13 @@ function Row({ icon, title, detail, trailing, live, open, onToggle, dim }: RowPr
       disabled={!onToggle}
       aria-expanded={onToggle ? open : undefined}
       className={cn(
-        'group/row flex h-7 w-full min-w-0 items-center gap-2 rounded-md text-left text-[13.8px] transition-colors',
+        'group/row flex h-7 w-full min-w-0 items-center gap-2 rounded-md text-left text-[13.8px] font-[450] transition-colors',
         onToggle ? 'hover:text-fg' : 'cursor-default',
         dim ? 'text-subtle' : 'text-muted'
       )}
     >
       <span className="flex w-4 shrink-0 justify-center">{live ? <Spinner size={13} /> : icon}</span>
-      <span className={cn('min-w-0 shrink truncate', live && 'shimmer')}>{leadWord(title)}</span>
+      <span className={cn('min-w-0 shrink truncate', live && 'shimmer')}>{plain ? title : leadWord(title)}</span>
       {detail && <span className="min-w-0 flex-1 truncate font-mono text-[12.7px] text-subtle">{detail}</span>}
       {!detail && <span className="flex-1" />}
       {trailing}
@@ -131,8 +138,14 @@ function Panel({ children, className }: { children: ReactNode; className?: strin
   return <div className={cn('mb-1.5 ml-6 overflow-hidden rounded-lg border border-line bg-inset', className)}>{children}</div>
 }
 
-function OutputBlock({ text, follow, maxHeight = 300 }: { text: string; follow?: boolean; maxHeight?: number }): ReactNode {
+function OutputBlock({ text, follow, maxHeight = 300, command, highlight }: { text: string; follow?: boolean; maxHeight?: number | 'none'; command?: string; highlight?: boolean }): ReactNode {
   const ref = useRef<HTMLPreElement>(null)
+  const html = useMemo(() => {
+    if (!highlight) return null
+    // Very large logs stay plain to keep highlighting fast.
+    const body = text.length > 200_000 ? escapeHtml(text) : hljs.highlight(text, { language: 'bash' }).value
+    return command ? `<span class="text-fg">$ </span>${hljs.highlight(command, { language: 'bash' }).value}\n\n${body}` : body
+  }, [text, command, highlight])
   const following = useRef(true)
   useLayoutEffect(() => {
     if (follow && following.current && ref.current) ref.current.scrollTop = ref.current.scrollHeight
@@ -141,10 +154,14 @@ function OutputBlock({ text, follow, maxHeight = 300 }: { text: string; follow?:
     <pre ref={ref} onScroll={(event) => {
       const el = event.currentTarget
       following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
-    }} className="selectable overflow-auto overscroll-contain whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12.7px] leading-[1.55] text-muted" style={{ maxHeight }}>
-      {text}
+    }} className={cn('selectable overflow-auto overscroll-contain whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12.7px] leading-[1.55]', highlight ? 'text-fg' : 'text-muted')} style={{ maxHeight }}>
+      {html === null ? text : <code dangerouslySetInnerHTML={{ __html: html }} />}
     </pre>
   )
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'))
 }
 
 /** Activity changes reset expansion; grouped activity can preserve an explicit collapse. */
@@ -156,22 +173,46 @@ function useDisclosure(auto: boolean, activityKey?: string, preserveCollapse = f
 
 // Explore
 
+/** An open group names what its latest tool call does; compact groups also edit and run commands. */
+function liveVerb(items: ToolItem[]): string {
+  const current = items[items.length - 1]
+  if (current?.tool === 'edit' || current?.tool === 'create') return 'Editing'
+  if (current?.tool === 'bash') return 'Running'
+  return 'Exploring'
+}
+
 function exploreSummary(items: ToolItem[], verb = 'Explored'): string {
-  const files = items.filter((i) => i.tool === 'read' && !i.meta?.skill).length
+  const reads = items.filter((i) => i.tool === 'read' && !i.meta?.skill)
+  const terminals = reads.filter(isTerminalRead).length
+  const files = reads.length - terminals
   const skills = items.filter((i) => i.meta?.skill).length
   const searches = items.filter((i) => i.tool === 'grep' || i.tool === 'glob').length
   const lists = items.filter((i) => i.tool === 'list').length
   const web = items.filter((i) => i.tool === 'websearch').length
-  const pages = items.filter((i) => i.tool === 'webfetch').length
+  const pages = items.filter((i) => i.tool === 'webfetch' || i.tool === 'browser').length
+  const commands = items.filter((i) => i.tool === 'bash').length
+  const edited = new Set(items.filter((i) => i.tool === 'edit' || i.tool === 'create').flatMap((i) => i.meta?.diffs?.map((d) => d.path) ?? [i.id])).size
+  const others = items.filter((i) => !EXPLORE_KINDS.includes(i.tool) && !['bash', 'edit', 'create', 'browser'].includes(i.tool)).length
   const parts = [
     files && plural(files, 'file'),
+    terminals && plural(terminals, 'terminal'),
     skills && plural(skills, 'skill'),
     searches && plural(searches, 'search', 'searches'),
     lists && plural(lists, 'folder'),
     web && plural(web, 'web search', 'web searches'),
     pages && plural(pages, 'page')
   ].filter(Boolean)
-  return `${verb} ${parts.join(', ')}`
+  // A single item names what it was rather than counting to one.
+  if (items.length === 1 && reads.length === 1) parts[0] = terminals ? 'terminal' : basename(readPath(reads[0]))
+  else if (items.length === 1 && web === 1) parts[0] = 'web search'
+  const done = verb === 'Explored'
+  const actions = [
+    commands && `${done ? 'ran' : 'running'} ${plural(commands, 'command')}`,
+    edited && `${done ? 'edited' : 'editing'} ${plural(edited, 'file')}`,
+    others && `${done ? 'used' : 'using'} ${plural(others, 'tool')}`
+  ].filter((part): part is string => !!part)
+  if (!parts.length && actions.length) actions[0] = actions[0].charAt(0).toUpperCase() + actions[0].slice(1)
+  return [parts.length ? `${verb} ${parts.join(', ')}` : '', ...actions].filter(Boolean).join(', ')
 }
 
 function browsingPages(items: ToolItem[]): number {
@@ -192,26 +233,41 @@ function browsingPages(items: ToolItem[]): number {
 
 function ExploreLine({ item }: { item: ToolItem }): ReactNode {
   const openFile = useStore((s) => s.openFile)
-  const Icon = KIND_ICON[item.tool]
-  const path = item.tool === 'read' && typeof (item.input as { path?: string; file_path?: string })?.path === 'string' ? (item.input as { path: string }).path : (item.input as { file_path?: string })?.file_path
+  const Icon = isTerminalRead(item) ? SquareTerminal : KIND_ICON[item.tool]
+  const path = isTerminalRead(item) ? undefined : item.tool === 'read' && typeof (item.input as { path?: string; file_path?: string })?.path === 'string' ? (item.input as { path: string }).path : (item.input as { file_path?: string })?.file_path
   const url = item.meta?.url
   const results = item.meta?.results
-  const [open, setOpen] = useState(false)
-  const action = path ? () => openFile(path) : url ? () => void window.galaxy.files.openExternal(url) : results?.length ? () => setOpen(!open) : undefined
+  const outputMode = useStore((s) => s.settings.terminalOutput)
+  const editing = item.tool === 'edit' || item.tool === 'create'
+  const [open, toggle] = useDisclosure(false, `${outputMode}:${isLive(item) ? 'running' : 'complete'}`)
+  const diffs = item.tool === 'edit' || item.tool === 'create' ? item.meta?.diffs ?? [] : []
+  const preview = !open && editing && diffs.length > 0 && (outputMode === 'preview' || outputMode === 'foreground' && isLive(item))
+  const command = item.tool === 'bash' ? item.meta?.command ?? (item.input as { command?: string } | null)?.command ?? '' : ''
+  // Grouped commands and edits expand in place, like their standalone blocks.
+  const expandable = item.tool === 'bash' ? !!(item.output || item.error) : diffs.length > 0
+  const action = expandable ? toggle : path ? () => openFile(path) : url ? () => void window.galaxy.files.openExternal(url) : results?.length ? toggle : undefined
+  if (item.tool === 'mcp') return <McpTool item={item} />
   return (
     <div>
       <button
         type="button"
         disabled={!action}
         onClick={action}
-        className={cn('flex h-7 w-full min-w-0 items-center gap-2 text-left text-[13.8px] text-muted', action && 'hover:text-fg')}
+        className={cn('flex h-7 w-full min-w-0 items-center gap-2 text-left text-[13.8px] font-[450] text-muted', action && 'hover:text-fg')}
       >
         <span className="flex w-4 shrink-0 justify-center">{isLive(item) ? <Spinner size={13} /> : <Icon size={13.5} className="text-subtle" />}</span>
-        <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(toolActivityTitle(item))}</span>
-        {item.detail && item.detail !== basename(item.detail) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
+        <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(item.tool === 'bash' ? `${isLive(item) ? 'Running' : 'Ran'} ${toolActivityTitle(item)}` : toolActivityTitle(item))}</span>
+        {!isTerminalRead(item) && item.detail && item.detail !== basename(item.detail) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
         {item.meta?.matches !== undefined && item.tool !== 'read' && <span className="shrink-0 text-[12.1px] text-subtle">{plural(item.meta.matches, 'match', 'matches')}</span>}
         <StatusMark item={item} />
       </button>
+      {(open || preview) && expandable && (
+        <div className={cn('activity-output-surface activity-reveal mb-1.5 ml-6 overflow-hidden rounded-lg border border-line', preview && 'max-h-28 overflow-y-auto overscroll-contain')}>
+          {item.tool === 'bash'
+            ? item.output ? <OutputBlock text={item.output} command={command} highlight maxHeight="none" /> : <div className="px-3 py-2 text-[13.2px] text-danger">{item.error}</div>
+            : diffs.map((diff) => <DiffView key={diff.path} diff={diff} maxHeight={null} />)}
+        </div>
+      )}
       {open && results && (
         <div className="mb-1 ml-3 space-y-1">
           {results.slice(0, 8).map((result) => (
@@ -239,8 +295,12 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
   const collapseKey = `${disclosureKey}:${browsing ? 'browse' : 'explore'}`
   const collapsed = useStore((s) => s.activityCollapsed[collapseKey] ?? false)
   const setCollapsed = useStore((s) => s.setActivityCollapsed)
-  const [disclosed, toggleDisclosure] = useDisclosure(live, `${live ? 'running' : 'complete'}:${latestItemId}`)
+  const expand = useStore((s) => s.settings.expandToolCalls !== false)
+  const [disclosed, toggleDisclosure] = useDisclosure(live && expand, expand ? `${live ? 'running' : 'complete'}:${latestItemId}` : 'manual')
   const open = !collapsed && disclosed
+  // Content mounts on first open and stays, so closing can animate.
+  const [shown, setShown] = useState(open)
+  useEffect(() => { if (open) setShown(true) }, [open])
   const toggle = (): void => {
     setCollapsed(collapseKey, open)
     if (!open && !disclosed) toggleDisclosure()
@@ -249,7 +309,7 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
     ? live ? open ? 'Browsing' : `Browsing ${plural(browsingPages(tools), 'page')}` : `Browsed ${plural(browsingPages(tools), 'page')}`
     : thinkingOnly
       ? live ? 'Thinking' : thoughtTime === '0s' ? 'Thought briefly' : `Thought for ${thoughtTime}`
-      : live ? open ? 'Exploring' : exploreSummary(tools, 'Exploring') : exploreSummary(tools)
+      : live ? open ? liveVerb(tools) : exploreSummary(tools, 'Exploring') : exploreSummary(tools)
   const activity = useRef<HTMLDivElement>(null)
   const following = useRef({ itemId: latestItemId, enabled: true })
   useLayoutEffect(() => {
@@ -269,8 +329,9 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
         onToggle={toggle}
         trailing={failed ? <StatusMark item={tools[0]} /> : null}
       />
-      {open && (
-        <div className={cn('activity-reveal relative mb-1.5', live && 'explore-viewport')}>
+      {(open || shown) && (
+        <div className="fold" data-open={open && shown} inert={!open}>
+        <div className={cn('relative mb-1.5 min-h-0 overflow-hidden', live && 'explore-viewport')}>
           <div
             ref={activity}
             className={cn('py-1', live && 'max-h-48 overflow-y-auto overscroll-contain')}
@@ -284,6 +345,7 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
               : browsing && ctx ? <ToolBlock key={item.id} item={item} ctx={ctx} /> : <ExploreLine key={item.id} item={item} />)}
           </div>
         </div>
+        </div>
       )}
     </div>
   )
@@ -291,11 +353,40 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
 
 // Individual tools
 
+/** Follows a background command's log file while it is shown. */
+function useBackgroundLog(path: string | undefined, shown: boolean): string | null {
+  const [text, setText] = useState<string | null>(null)
+  useEffect(() => {
+    if (!path || !shown) return
+    let alive = true
+    const read = (): void => {
+      void window.galaxy.files.read(path).then((view) => {
+        if (!alive || view.kind !== 'text') return
+        setText(view.content ?? '')
+        // The shell appends this line once the process ends; the log is final.
+        if (/\n\[(process exited|failed to start)/.test(view.content ?? '')) clearInterval(timer)
+      }).catch(() => {})
+    }
+    const timer = setInterval(read, 1500)
+    read()
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [path, shown])
+  return text
+}
+
 function BashTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactNode {
   const input = item.input as { command?: string } | null
   const command = item.meta?.command ?? input?.command ?? item.detail ?? ''
+  const mode = useStore((s) => s.settings.terminalOutput)
   const foreground = item.status === 'running' && !item.meta?.background && !!command
   const [open, toggle] = useDisclosure(false, foreground ? 'running' : 'complete')
+  // A collapsed preview: the running command, or every command in preview mode.
+  const backgroundLog = useBackgroundLog(item.meta?.log ?? (item.meta?.background ? item.output?.match(/Output is being written to (\S+\.log)/)?.[1] : undefined), open || mode === 'preview')
+  const output = backgroundLog ?? item.output
+  const preview = !open && (mode === 'preview' ? !!output || foreground : mode === 'foreground' && foreground)
   const exit = item.meta?.exitCode
   const rawTitle = item.title.replace(/…$/, '').trim()
   const title = command && rawTitle && (command.startsWith(rawTitle) || rawTitle.includes(command)) ? 'Terminal command' : item.title
@@ -303,6 +394,7 @@ function BashTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactNode
     <div className="my-1.5 overflow-hidden rounded-xl border border-line-strong bg-elev">
       <div className="px-3 py-1">
       <Row
+        plain
         icon={<SquareTerminal size={13.5} className="text-subtle" />}
         title={title}
         live={isLive(item)}
@@ -317,15 +409,15 @@ function BashTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactNode
         }
       />
       </div>
-      {(open || foreground) && (
+      {(open || preview) && (
         <div className="activity-output-surface activity-reveal border-t border-line">
-          {foreground ? (
+          {preview ? (
             <div className="explore-viewport relative">
-              {item.output ? <OutputBlock text={item.output} follow maxHeight={112} /> : <div className="shimmer px-3 py-3 text-[12.7px] text-muted">Running command…</div>}
+              {output ? <OutputBlock text={output} follow maxHeight={112} /> : <div className="shimmer px-3 py-3 text-[12.7px] text-muted">Running command…</div>}
             </div>
-          ) : item.output ? (
+          ) : output ? (
             <div>
-              <OutputBlock text={item.output} follow={isLive(item)} />
+              <OutputBlock text={output} command={command} highlight follow={isLive(item) || !!backgroundLog} maxHeight="none" />
             </div>
           ) : item.status === 'error' && item.error ? (
             <div className="border-t border-line px-3 py-2 text-[13.2px] text-danger">{item.error}</div>
@@ -339,11 +431,12 @@ function BashTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactNode
 function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): ReactNode {
   const openFile = useStore((s) => s.openFile)
   const homeDir = useStore((s) => s.homeDir)
+  const outputMode = useStore((s) => s.settings.terminalOutput)
   const diffs = item.meta?.diffs ?? []
   const added = diffs.reduce((n, d) => n + d.added, 0)
   const removed = diffs.reduce((n, d) => n + d.removed, 0)
   const live = isLive(item)
-  const [open, toggle] = useDisclosure(live, live ? 'editing' : 'complete')
+  const [open, toggle] = useDisclosure(false, `${outputMode}:${live ? 'editing' : 'complete'}`)
   const patchViewport = useRef<HTMLDivElement>(null)
   const followPatch = useRef(true)
   const Icon = KIND_ICON[item.tool]
@@ -355,9 +448,10 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
     if (typeof input.new_string === 'string') return input.new_string
     return null
   }, [item.input, diffs.length])
+  const preview = !open && (diffs.length > 0 || inputPreview !== null || live) && (outputMode === 'preview' || outputMode === 'foreground' && live)
   useLayoutEffect(() => {
-    if (live && open && followPatch.current && patchViewport.current) patchViewport.current.scrollTop = patchViewport.current.scrollHeight
-  }, [diffs, inputPreview, live, open])
+    if (live && preview && followPatch.current && patchViewport.current) patchViewport.current.scrollTop = patchViewport.current.scrollHeight
+  }, [diffs, inputPreview, live, preview])
 
   return (
     <div className="my-1.5 overflow-hidden rounded-xl border border-line-strong bg-elev">
@@ -377,15 +471,15 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
         }
       />
       </div>
-      {open && (
-        <div className="activity-output-surface explore-viewport activity-reveal relative border-t border-line">
-          <div ref={patchViewport} className="max-h-28 overflow-auto overscroll-contain py-2" onScroll={(event) => {
+      {(open || preview) && (
+        <div className={cn('activity-output-surface activity-reveal relative border-t border-line', preview && 'explore-viewport')}>
+          <div ref={patchViewport} className={cn('py-2', preview && 'max-h-28 overflow-auto overscroll-contain')} onScroll={(event) => {
             const target = event.currentTarget
             followPatch.current = target.scrollHeight - target.scrollTop - target.clientHeight < 24
           }}>
           {diffs.map((diff) => (
             <div key={diff.path} className="border-b border-line last:border-b-0">
-              <div className="flex h-7 items-center gap-2 border-b border-line px-3">
+              {diffs.length > 1 && <div className="sticky top-0 z-10 flex h-7 items-center gap-2 border-b border-line bg-elev px-3">
                 <button type="button" onClick={() => openFile(diff.path)} className="min-w-0 truncate font-mono text-[12.7px] text-muted hover:text-fg hover:underline" title="Open beside the chat">
                   {relativeTo(ctx.root, diff.path, homeDir)}
                 </button>
@@ -393,7 +487,7 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
                 {diff.deleted && <span className="shrink-0 text-[11.6px] uppercase tracking-wide text-danger">deleted</span>}
                 <span className="flex-1" />
                 <DiffStat added={diff.added} removed={diff.removed} />
-              </div>
+              </div>}
               <DiffView diff={diff} maxHeight={null} monochrome={live} />
             </div>
           ))}
@@ -430,6 +524,36 @@ function FileThumb({ path, className, fitImage = false }: { path: string; classN
         if (fitImage && image.naturalWidth > 0 && image.naturalHeight > 0) setRatio(image.naturalWidth / image.naturalHeight)
       }} />
     </button>
+  )
+}
+
+function McpTool({ item }: { item: ToolItem }): ReactNode {
+  const [open, toggle] = useDisclosure(false)
+  const input = useMemo(() => JSON.stringify(item.input ?? {}, null, 2), [item.input])
+  const images = item.meta?.images ?? []
+  return (
+    <div>
+      <Row icon={<Plug size={13.5} className="text-subtle" />} title={toolActivityTitle(item)} live={isLive(item)} open={open} onToggle={toggle} trailing={<StatusMark item={item} />} plain />
+      {open && (
+        <Panel className="activity-reveal">
+          <div className="border-b border-line px-3 py-2">
+            <div className="text-[11px] font-medium text-subtle">Call</div>
+            <div className="selectable mt-1 break-all font-mono text-[12px] text-muted">{item.name}</div>
+          </div>
+          <OutputBlock text={input} maxHeight={240} />
+          <div className="border-t border-line px-3 py-2 text-[11px] font-medium text-subtle">Result</div>
+          {item.output ? <OutputBlock text={item.output} follow={isLive(item)} /> : (
+            <div className="px-3 pb-3 text-[12px] text-muted">{isLive(item) ? 'Waiting for result…' : item.status === 'denied' ? 'Call denied.' : 'No result returned.'}</div>
+          )}
+          {item.error && <div className="selectable border-t border-line px-3 py-2 text-[12px] text-danger">{item.error}</div>}
+          {images.length > 0 && (
+            <div className="flex flex-wrap gap-2 border-t border-line p-3">
+              {images.map((path) => <FileThumb key={path} path={path} className="h-28 w-44" />)}
+            </div>
+          )}
+        </Panel>
+      )}
+    </div>
   )
 }
 
@@ -477,12 +601,24 @@ function GenericTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactN
   )
 }
 
+/** Memory writes show as one plain line; the note is in the tooltip. */
+function MemoryTool({ item }: { item: ToolItem }): ReactNode {
+  const openFile = useStore((s) => s.openFile)
+  const path = item.meta?.diffs?.[0]?.path
+  const title = /^Remov/.test(item.title) ? 'Removed memory' : 'Saved memory'
+  return (
+    <div title={item.detail || undefined}>
+      <Row icon={<Brain size={13.5} className="text-subtle" />} title={title} live={isLive(item)} onToggle={path ? () => openFile(path) : undefined} trailing={<StatusMark item={item} />} />
+    </div>
+  )
+}
+
 function OpenTool({ item }: { item: ToolItem }): ReactNode {
   const openFile = useStore((s) => s.openFile)
   const file = item.meta?.files?.[0]
   return (
     <Row
-      icon={<PanelRight size={13.5} className="text-subtle" />}
+      icon={<FileIcon size={13.5} className="text-subtle" />}
       title={item.title}
       detail={item.detail}
       onToggle={file ? () => openFile(file.path) : undefined}
@@ -657,12 +793,6 @@ function AskTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): React
 
 // Present
 
-function fileIcon(mime: string): typeof FileIcon {
-  if (mime.startsWith('image/')) return FileImage
-  if (mime.startsWith('text/') || mime === 'application/json') return FileText
-  return FileIcon
-}
-
 export function PresentTool({ item }: { item: ToolItem }): ReactNode {
   const openFile = useStore((s) => s.openFile)
   const files = item.meta?.files ?? []
@@ -671,18 +801,12 @@ export function PresentTool({ item }: { item: ToolItem }): ReactNode {
   }
   return (
     <div className="my-2">
-      {item.meta?.summary && <div className="selectable mb-2 text-[13.8px] text-muted">{item.meta.summary}</div>}
       <div className="space-y-2">
         {files.map((file) => {
-          const Icon = fileIcon(file.mime)
           return (
-            <div key={file.path} className="group/file flex w-full items-center gap-3 rounded-xl border border-line-strong bg-elev px-4 py-3 transition-colors hover:bg-hover">
+            <div key={file.path} className="group/file flex w-full items-center gap-3 rounded-lg border border-line px-4 py-3">
               <div className="flex min-w-0 flex-1 items-center gap-3">
-                {file.mime.startsWith('image/') && file.mime !== 'image/svg+xml' ? (
-                  <FileThumb path={file.path} className="h-10 w-10 shrink-0" />
-                ) : (
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-hover text-muted"><Icon size={18} /></span>
-                )}
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center"><FileTypeIcon name={file.name} size={24} /></span>
                 <button type="button" onClick={() => openFile(file.path)} className="min-w-0 flex-1 text-left" title={file.path}>
                   <span className="block truncate text-[14.3px] font-medium text-fg">{file.name}</span>
                   <span className="block text-[12.1px] text-subtle">{formatBytes(file.size)}</span>
@@ -747,13 +871,21 @@ export function isHiddenAgentMessage(item: Item): boolean {
   return item.kind === 'tool' && isAgentMessage(item) && (item.input as { action?: string } | null)?.action !== 'send'
 }
 
+/** Tools that Compact density folds into a summary line; questions, plans and approvals stay visible. */
+export function isCompactable(item: Item): item is ToolItem {
+  return item.kind === 'tool' && !item.approval && item.status !== 'awaiting' && !['ask', 'task', 'agent', 'present'].includes(item.tool) && !isAgentMessage(item)
+}
+
 export function isBrowsing(item: Item): item is ToolItem {
   return item.kind === 'tool' && (item.tool === 'browser' || (item.tool === 'webfetch' && item.status !== 'awaiting'))
 }
 
 export const ToolBlock = memo(function ToolBlock({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): ReactNode {
+  const medium = useStore((s) => s.settings.toolDensity === 'medium')
   const title = toolActivityTitle(item)
   if (title !== item.title) item = { ...item, title }
+  // Medium keeps commands and edits on their own line, without the card; approvals still get the full card.
+  if (medium && ['bash', 'edit', 'create'].includes(item.tool) && !item.approval && item.status !== 'awaiting') return <ExploreLine item={item} />
   if (isAgentMessage(item)) {
     if (isHiddenAgentMessage(item)) return null
     const to = String((item.input as { to?: string } | null)?.to ?? 'agent')
@@ -768,12 +900,15 @@ export const ToolBlock = memo(function ToolBlock({ item, ctx }: { item: ToolItem
     )
   }
   switch (item.tool) {
+    case 'mcp':
+      return <McpTool item={item} />
     case 'bash':
       return <BashTool item={item} ctx={ctx} />
     case 'edit':
     case 'create':
-    case 'memory':
       return <EditTool item={item} ctx={ctx} />
+    case 'memory':
+      return <MemoryTool item={item} />
     case 'agent':
       return <AgentTool item={item} ctx={ctx} />
     case 'ask':
