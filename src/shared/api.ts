@@ -105,6 +105,11 @@ export interface GalaxyApi {
   files: {
     listProject(projectId: string, relativePath: string, chatId?: string): Promise<ProjectFileEntry[]>
     searchProject(projectId: string, query: string, chatId?: string): Promise<ProjectFileEntry[]>
+    /** Creates an empty file or a folder inside `parent`, a path relative to the project. */
+    createEntry(projectId: string, parent: string, name: string, directory: boolean, chatId?: string): Promise<ProjectFileEntry>
+    renameEntry(projectId: string, relativePath: string, name: string, chatId?: string): Promise<ProjectFileEntry>
+    /** Moves the entry to the system Trash. */
+    trashEntry(projectId: string, relativePath: string, chatId?: string): Promise<void>
     pickAttachments(): Promise<Attachment[]>
     attachFromPaths(paths: string[]): Promise<Attachment[]>
     attachFromData(name: string, mime: string, base64: string): Promise<Attachment>

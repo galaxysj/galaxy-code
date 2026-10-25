@@ -155,7 +155,8 @@ async function loop(options: LoopOptions): Promise<string> {
     if (result.content) finalText = result.content
 
     if (result.toolCalls.length === 0) {
-      if (session.team?.hasRunning() && session.agentId === 'main') {
+      // An event that waits for subagents ends the turn instead; the chat listens and resumes when they finish.
+      if (session.team?.hasRunning() && session.agentId === 'main' && !session.events.some((event) => event.keepsTeam)) {
         await session.team.wait()
         continue
       }

@@ -25,7 +25,7 @@ import { answerAntigravityConsent, configureAntigravityConsent, confirmAntigravi
 import { probeAcpOptions } from './engines/acp'
 import { browser } from './services/browser'
 import { terminals } from './services/terminal'
-import { listProjectFiles, searchProjectFiles } from './services/projectFiles'
+import { createProjectEntry, listProjectFiles, renameProjectEntry, searchProjectFiles, trashProjectEntry } from './services/projectFiles'
 import { gitInfo, gitState, instantCommit, pushBranch } from './services/git'
 import { disposeAccountWorkers } from './services/accountWorkers'
 import { mcp } from './services/mcp'
@@ -316,6 +316,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     },
     'files.listProject': listProjectFiles,
     'files.searchProject': searchProjectFiles,
+    'files.createEntry': createProjectEntry,
+    'files.renameEntry': renameProjectEntry,
+    'files.trashEntry': trashProjectEntry,
     'files.read': (path: string) => readFileView(path),
     'files.write': (path: string, content: string) => saveFile(path, content),
     'editor.complete': (request: CompletionRequest) => completeCode(request),

@@ -1,5 +1,6 @@
-import { readdir, realpath } from 'node:fs/promises'
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { lstat, mkdir, readdir, realpath, rename, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { shell } from 'electron'
 import fg from 'fast-glob'
 import type { ProjectFileEntry } from '@shared/types'
 import { store } from '../store'
@@ -30,4 +31,60 @@ export async function searchProjectFiles(projectId: string, query: string, chatI
   const paths = await fg('**/*', { cwd: root, dot: true, onlyFiles: true, followSymbolicLinks: false, ignore: ['**/.git/**', '**/node_modules/**'], suppressErrors: true })
   const needle = query.toLowerCase()
   return paths.filter((path) => path.toLowerCase().includes(needle)).sort().slice(0, 300).map((path) => ({ name: basename(path), path: join(root, path), relativePath: path, directory: false }))
+}
+
+/** Resolves a path inside the project, refusing anything that leaves it, including through a symlinked folder. */
+async function insideProject(root: string, relativePath: string): Promise<string> {
+  const path = resolve(root, relativePath || '.')
+  if (!within(root, path)) throw new Error('This path is outside the current project.')
+  const parent = await realpath(dirname(path)).catch(() => null)
+  if (parent && !within(root, parent)) throw new Error('This path is outside the current project.')
+  return path
+}
+
+function entryFor(root: string, path: string, directory: boolean): ProjectFileEntry {
+  return { name: basename(path), path, relativePath: relative(root, path), directory }
+}
+
+function checkName(name: string): string {
+  const trimmed = name.trim()
+  if (!trimmed || trimmed === '.' || trimmed === '..') throw new Error('Enter a name.')
+  if (/[\\:]/.test(trimmed) || trimmed.split('/').some((part) => !part || part === '.' || part === '..')) throw new Error(`"${trimmed}" is not a valid name.`)
+  return trimmed
+}
+
+/** Creates an empty file or a folder in `parent`. The name may hold slashes to create folders on the way. */
+export async function createProjectEntry(projectId: string, parent: string, name: string, directory: boolean, chatId?: string): Promise<ProjectFileEntry> {
+  const root = await projectRoot(projectId, chatId)
+  const path = await insideProject(root, join(parent, checkName(name)))
+  if (await lstat(path).then(() => true, () => false)) throw new Error(`${basename(path)} already exists.`)
+  if (directory) await mkdir(path, { recursive: true })
+  else {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, '', { flag: 'wx' })
+  }
+  return entryFor(root, path, directory)
+}
+
+/** Renames a file or folder in place. */
+export async function renameProjectEntry(projectId: string, relativePath: string, name: string, chatId?: string): Promise<ProjectFileEntry> {
+  const root = await projectRoot(projectId, chatId)
+  const from = await insideProject(root, relativePath)
+  if (from === root) throw new Error('The project folder cannot be renamed here.')
+  const to = await insideProject(root, join(dirname(relativePath), checkName(name)))
+  if (to === from) return entryFor(root, from, (await lstat(from)).isDirectory())
+  // A change of case only is the same file on case-insensitive disks.
+  if (to.toLowerCase() !== from.toLowerCase() && await lstat(to).then(() => true, () => false)) throw new Error(`${basename(to)} already exists.`)
+  const directory = (await lstat(from)).isDirectory()
+  await mkdir(dirname(to), { recursive: true })
+  await rename(from, to)
+  return entryFor(root, to, directory)
+}
+
+/** Moves a file or folder to the system Trash, so it can be put back. */
+export async function trashProjectEntry(projectId: string, relativePath: string, chatId?: string): Promise<void> {
+  const root = await projectRoot(projectId, chatId)
+  const path = await insideProject(root, relativePath)
+  if (path === root) throw new Error('The project folder cannot be moved to the Trash here.')
+  await shell.trashItem(path)
 }

@@ -34,8 +34,7 @@ If you set several, the first to fire resumes you and the rest are dropped. A ne
       trigger: { type: 'string', enum: [...TRIGGERS] },
       target: { type: 'string', description: 'Subagent ID for subagent-finish, terminal tabId for terminal-finish.' },
       seconds: { type: 'number', description: 'For timer: how long to wait. For the other triggers: give up and resume after this many seconds. Defaults to 1800 for those.' },
-      quiet_seconds: { type: 'number', description: 'For terminal-finish: how long the output must stay quiet. Defaults to 5.' },
-      label: { type: 'string', description: 'Short phrase completing "Will resume after …", such as "the test run finishes".' }
+      quiet_seconds: { type: 'number', description: 'For terminal-finish: how long the output must stay quiet. Defaults to 5.' }
     },
     required: ['trigger']
   },
@@ -49,7 +48,6 @@ If you set several, the first to fire resumes you and the rest are dropped. A ne
     const seconds = num(input, 'seconds')
     if (seconds !== undefined && (!(seconds > 0) || seconds > 86400)) throw new ToolInputError('seconds must be between 0 and 86400')
     const timeoutMs = (seconds ?? 1800) * 1000
-    const label = str(input, 'label')
     // Resumes with the detail, or after the timeout says so.
     const withTimeout = (listen: (fire: (detail: string) => void) => () => void) => (fire: (detail: string) => void): (() => void) => {
       const timer = setTimeout(() => fire(`It did not happen within ${timeoutMs / 1000} seconds.`), timeoutMs)
@@ -61,7 +59,7 @@ If you set several, the first to fire resumes you and the rest are dropped. A ne
     if (trigger === 'timer') {
       if (seconds === undefined) throw new ToolInputError('timer needs seconds')
       event = {
-        label: label ?? `${seconds} seconds`,
+        label: `${seconds} seconds`,
         start(fire) {
           const timer = setTimeout(() => fire(`${seconds} seconds have passed.`), timeoutMs)
           return () => clearTimeout(timer)
@@ -72,7 +70,7 @@ If you set several, the first to fire resumes you and the rest are dropped. A ne
       const target = str(input, 'target', true)
       if (!team?.has(target)) throw new ToolInputError(`No subagent with ID ${target}. Use Message action=list to find IDs.`)
       event = {
-        label: label ?? `${team.name(target)} finishes`,
+        label: `${team.name(target)} finishes`,
         keepsTeam: true,
         start: withTimeout((fire) => {
           let stopped = false
@@ -86,7 +84,7 @@ If you set several, the first to fire resumes you and the rest are dropped. A ne
       if (!terminals.list().some((tab) => tab.tabId === target)) throw new ToolInputError(`No open terminal with tabId ${target}. Use Terminal action=list to find IDs.`)
       const tail = (): string => terminals.read(target).slice(-4000)
       event = {
-        label: label ?? 'the terminal command finishes',
+        label: 'Terminal finishes',
         start: withTimeout((fire) => {
           let quiet = setTimeout(() => fire(`The terminal output has been quiet for ${quietMs / 1000} seconds. Its end:\n\n${tail()}`), quietMs)
           const stop = terminals.watch(target, (exited) => {
