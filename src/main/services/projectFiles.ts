@@ -1,5 +1,5 @@
-import { lstat, mkdir, readdir, realpath, rename, writeFile } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { cp, lstat, mkdir, readdir, realpath, rename, writeFile } from 'node:fs/promises'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { shell } from 'electron'
 import fg from 'fast-glob'
 import type { ProjectFileEntry } from '@shared/types'
@@ -79,6 +79,33 @@ export async function renameProjectEntry(projectId: string, relativePath: string
   await mkdir(dirname(to), { recursive: true })
   await rename(from, to)
   return entryFor(root, to, directory)
+}
+
+/** A free name in `folder`, adding " copy", " copy 2"… before the extension as Finder does. */
+async function freeName(folder: string, name: string, directory: boolean): Promise<string> {
+  const ext = directory ? '' : extname(name)
+  const stem = ext ? name.slice(0, -ext.length) : name
+  for (let index = 0; ; index++) {
+    const candidate = index === 0 ? name : `${stem} copy${index > 1 ? ` ${index}` : ''}${ext}`
+    if (!(await lstat(join(folder, candidate)).then(() => true, () => false))) return candidate
+  }
+}
+
+/** Copies files and folders into `parent`, renaming when a name is taken. */
+export async function copyProjectEntries(projectId: string, relativePaths: string[], parent: string, chatId?: string): Promise<ProjectFileEntry[]> {
+  const root = await projectRoot(projectId, chatId)
+  const folder = await insideProject(root, join(parent || '.', 'x')).then(dirname)
+  const copied: ProjectFileEntry[] = []
+  for (const relativePath of relativePaths) {
+    const from = await insideProject(root, relativePath)
+    if (from === root) throw new Error('The project folder cannot be copied here.')
+    const directory = (await lstat(from)).isDirectory()
+    if (directory && (folder === from || folder.startsWith(`${from}${sep}`))) throw new Error(`${basename(from)} cannot be copied into itself.`)
+    const to = join(folder, await freeName(folder, basename(from), directory))
+    await cp(from, to, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true })
+    copied.push(entryFor(root, to, directory))
+  }
+  return copied
 }
 
 /** Moves a file or folder to the system Trash, so it can be put back. */

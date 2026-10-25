@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { rgPath as bundledRgPath } from '@vscode/ripgrep'
 import type { ToolItem } from '@shared/types'
@@ -12,9 +13,15 @@ import { bool, num, plural, str, ToolInputError, type ToolDef } from './types'
 
 const rgPath = bundledRgPath.replace(/app\.asar([/\\])/, 'app.asar.unpacked$1')
 
-const MAX_READ_LINES = 2000
-const MAX_LINE_LENGTH = 2000
-const MAX_READ_BYTES = 8 * 1024 * 1024
+/** Saves a result that was cut to a temporary file, shown as "Read tool output" when the agent reads it back. */
+async function saveFull(itemId: string, text: string): Promise<string> {
+  const dir = join(tmpdir(), 'galaxy-code')
+  await mkdir(dir, { recursive: true })
+  const file = join(dir, `output-${itemId}.txt`)
+  await writeFile(file, text)
+  return file
+}
+
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', '.venv', 'venv', '__pycache__', 'target', '.cache', '.turbo', 'DerivedData'])
 
 function runRg(args: string[], cwd: string, signal: AbortSignal, maxBytes = 2_000_000): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -39,7 +46,7 @@ export const readTool: ToolDef = {
   kind: 'read',
   parallel: true,
   description:
-    'Read a file from disk. Returns numbered lines. Reads up to 2000 lines from the start unless `offset` and `limit` are given; use them for large files. Also reads images (PNG, JPG, GIF, WebP), which are shown to you visually. To use a skill, Read its SKILL.md.',
+    'Read a file from disk. Returns numbered lines. Reads the whole file, with no length limit, unless `offset` and `limit` are given. Also reads images (PNG, JPG, GIF, WebP), which are shown to you visually. To use a skill, Read its SKILL.md.',
   parameters: {
     type: 'object',
     properties: {
@@ -81,7 +88,8 @@ export const readTool: ToolDef = {
     const handle = await open(abs, 'r')
     let buffer: Buffer
     try {
-      buffer = Buffer.alloc(Math.min(info.size, MAX_READ_BYTES))
+      // Read has no length limit: the whole file, every line in full.
+      buffer = Buffer.alloc(info.size)
       await handle.read(buffer, 0, buffer.length, 0)
     } finally {
       await handle.close()
@@ -92,19 +100,18 @@ export const readTool: ToolDef = {
     if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
     const total = lines.length
     const offset = Math.max(1, Math.floor(num(input, 'offset') ?? 1))
-    const limit = Math.max(1, Math.floor(num(input, 'limit') ?? MAX_READ_LINES))
+    const limit = Math.max(1, Math.floor(num(input, 'limit') ?? Number.MAX_SAFE_INTEGER))
     if (offset > total && total > 0) throw new Error(`offset ${offset} is past the end of the file (${total} lines)`)
 
     const slice = lines.slice(offset - 1, offset - 1 + limit)
     const width = String(offset + slice.length - 1).length
     const body = slice
-      .map((line, i) => `${String(offset + i).padStart(width)}\t${line.length > MAX_LINE_LENGTH ? line.slice(0, MAX_LINE_LENGTH) + ' [line truncated]' : line}`)
+      .map((line, i) => `${String(offset + i).padStart(width)}\t${line}`)
       .join('\n')
 
     const end = offset + slice.length - 1
     const notes: string[] = []
     if (end < total) notes.push(`[Showing lines ${offset}-${end} of ${total}. Use offset to read more.]`)
-    if (info.size > MAX_READ_BYTES) notes.push(`[File is ${Math.round(info.size / 1024 / 1024)} MB, only the first 8 MB was loaded.]`)
     if (total === 0) notes.push('[File is empty]')
     return { text: [body, ...notes].filter(Boolean).join('\n'), meta: { lines: slice.length } }
   }
@@ -167,7 +174,7 @@ export const grepTool: ToolDef = {
 
     const limit = Math.max(1, Math.floor(num(input, 'head_limit') ?? 200))
     const shown = lines.slice(0, limit)
-    const more = lines.length > limit ? `\n[${lines.length - limit} more lines not shown. Narrow the search or raise head_limit.]` : ''
+    const more = lines.length > limit ? `\n[${lines.length - limit} more lines not shown. All ${lines.length} are saved to ${await saveFull(ctx.itemId, lines.join('\n'))}. This result is incomplete. Unless what you were looking for is already in the part above, your next step must be Read on that file, before you answer, summarize or call any other tool. Do not tell the user the output was cut or ask them to narrow it; read the file.]` : ''
     const matches = mode === 'content' ? lines.filter((l) => /^[^:]*:\d+:/.test(l) || /^\d+:/.test(l)).length : lines.length
     return { text: truncateEnd(shown.join('\n'), 60000) + more, meta: { matches } }
   }
@@ -203,7 +210,7 @@ export const globTool: ToolDef = {
     const files = result.stdout.split('\n').filter(Boolean)
     if (files.length === 0) return { text: 'No files found.', meta: { matches: 0 } }
     const shown = files.slice(0, 200)
-    const more = files.length > 200 ? `\n[${files.length - 200} more files not shown. Use a narrower pattern.]` : ''
+    const more = files.length > 200 ? `\n[${files.length - 200} more files not shown. All ${files.length} are saved to ${await saveFull(ctx.itemId, files.join('\n'))}. This result is incomplete. Unless what you were looking for is already in the part above, your next step must be Read on that file, before you answer, summarize or call any other tool. Do not tell the user the output was cut or ask them to narrow it; read the file.]` : ''
     return { text: shown.join('\n') + more, meta: { matches: files.length } }
   }
 }
@@ -234,17 +241,12 @@ export const listTool: ToolDef = {
     if (!info.isDirectory()) throw new Error(`${root} is a file. Use Read to see its contents.`)
     const maxDepth = Math.min(3, Math.max(1, Math.floor(num(input, 'depth') ?? 1)))
     const lines: string[] = []
-    let truncated = false
 
     const walk = async (dir: string, depth: number, indent: string): Promise<void> => {
       const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
       entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
       for (const entry of entries) {
         if (entry.name === '.DS_Store') continue
-        if (lines.length >= 500) {
-          truncated = true
-          return
-        }
         if (entry.isDirectory()) {
           lines.push(`${indent}${entry.name}/`)
           if (depth < maxDepth && !SKIP_DIRS.has(entry.name)) await walk(join(dir, entry.name), depth + 1, indent + '  ')
@@ -256,7 +258,7 @@ export const listTool: ToolDef = {
     await walk(root, 1, '')
     if (lines.length === 0) return { text: `${root} is empty.`, meta: { matches: 0 } }
     return {
-      text: `${root}\n${lines.join('\n')}${truncated ? '\n[Listing truncated at 500 entries.]' : ''}`,
+      text: `${root}\n${lines.join('\n')}`,
       meta: { matches: lines.length }
     }
   }

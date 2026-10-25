@@ -1,9 +1,15 @@
+import { mkdir, writeFile } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { AgentMode, ToolItem, ToolKind } from '@shared/types'
 import { gate } from '../agent/approval'
 import { mcp, type McpTool } from '../services/mcp'
 import type { ChatToolSpec } from '../services/openrouter'
 import { errorMessage, isAbortError, oneLine, resolvePath } from '../util'
+
+/** Longer tool results are saved to a temporary file, and the agent gets only their beginning. */
+const MAX_RESULT = 30_000
+const RESULT_PREVIEW = 2_000
 import { createTool, editTool, globTool, grepTool, listTool, readTool } from './fs'
 import {
   askTool,
@@ -113,26 +119,27 @@ export const ALL_TOOLS: ToolDef[] = [
 /** Tools Galaxy Code lends to account CLIs. */
 export const BRIDGE_TOOLS: ToolDef[] = [agentTool, messageTool, editTool, lintTool, waitTool, eventTool, browserTool, listTabsTool, askTool, taskTool, presentTool, openTool, memoryTool, imageGenerationTool]
 
-/** Where Plan mode keeps its plans, relative to the working directory. */
-export const PLANS_DIR = join('.galaxy', 'plans')
+/** Where Plan mode keeps its plans: in the user's home, never inside the project. */
+export const PLANS_DIR = join(homedir(), '.galaxy', 'plans')
 
 function planPaths(tool: ToolDef, input: Record<string, unknown>, cwd: string): string[] {
   if (tool.name === 'Create') return [resolvePath(cwd, str(input, 'path', true))]
   return patchFiles(parseEditPatch(str(input, 'patch', true), cwd), cwd)
 }
 
-/** Create or Edit limited to Markdown files directly inside .galaxy/plans. Those writes need no approval. */
+/** Create or Edit limited to Markdown files directly inside ~/.galaxy/plans. Those writes need no approval. */
 function planOnly(tool: ToolDef): ToolDef {
   return {
     ...tool,
-    description: `${tool.description}\n\nPlan mode: only Markdown files directly inside ${PLANS_DIR}/ can be written, such as ${PLANS_DIR}/add-login.md.`,
+    description: `${tool.description}\n\nPlan mode: paths resolve inside ${PLANS_DIR}/, and only Markdown files directly in it can be written, such as add-login.md.`,
     approval: undefined,
     async execute(input, ctx) {
-      const plans = join(ctx.cwd, PLANS_DIR)
-      const paths = planPaths(tool, input, ctx.cwd)
-      const outside = paths.filter((path) => dirname(path) !== plans || !/\.md$/i.test(path))
+      // Plans live outside the project, so relative paths resolve against the plans folder.
+      const paths = planPaths(tool, input, PLANS_DIR)
+      const outside = paths.filter((path) => dirname(path) !== PLANS_DIR || !/\.md$/i.test(path))
       if (outside.length) throw new Error(`Plan mode can only write Markdown files in ${PLANS_DIR}/. Not allowed: ${outside.join(', ')}`)
-      const result = await tool.execute(input, ctx)
+      await mkdir(PLANS_DIR, { recursive: true })
+      const result = await tool.execute(input, { ...ctx, cwd: PLANS_DIR })
       const plan = paths.at(-1)
       if (plan && ctx.session.agentId === 'main') ctx.session.emitUi({ type: 'open-file', chatId: ctx.session.id, path: plan })
       return result
@@ -141,7 +148,7 @@ function planOnly(tool: ToolDef): ToolDef {
 }
 
 /** Ask answers from what it can read. Plan reads and writes only its plan files. */
-export function toolsForMode(mode: AgentMode): ToolDef[] {
+export function toolsForMode(mode: Exclude<AgentMode, 'multitask'>): ToolDef[] {
   if (mode === 'ask') return [...EXPLORE_TOOLS, askTool]
   return [...EXPLORE_TOOLS, planOnly(createTool), planOnly(editTool), askTool]
 }
@@ -241,24 +248,27 @@ export async function runTool(
     }
   }
 
+  // Models sometimes skip required fields, such as Bash's description that titles the row.
+  // Send the call back before it reaches the timeline, so the retry is the only row the user sees.
+  const required = ((tool.parameters as { required?: string[] }).required ?? []).filter((key) => input[key] === undefined)
+  if (required.length) {
+    // Drop a streamed preview too, so only the retried call shows.
+    if (itemId && session.item(itemId)) session.replaceItems(session.doc.items.filter((entry) => entry.id !== itemId))
+    return { itemId: '', result: { text: `Missing required ${required.length > 1 ? 'fields' : 'field'}: ${required.join(', ')}. Call ${tool.name} again with ${required.length > 1 ? 'them' : 'it'}.`, isError: true } }
+  }
+
   let presentation
   try {
     presentation = tool.present(input, env)
   } catch {
     presentation = { title: tool.name }
   }
-  const item = session.add<ToolItem>({
-    id: itemId,
-    kind: 'tool',
-    tool: tool.kind,
-    name: tool.name,
-    title: presentation.title,
-    detail: presentation.detail,
-    input,
-    status: 'running',
-    meta: presentation.meta,
-    parentId: env.parentId
-  })
+  const fields = { kind: 'tool' as const, tool: tool.kind, name: tool.name, title: presentation.title, detail: presentation.detail, input, status: 'running' as const, parentId: env.parentId }
+  // A preview shown while the arguments streamed becomes the real item, keeping its live diff.
+  const preview = itemId ? session.item<ToolItem>(itemId) : undefined
+  const item = preview
+    ? session.update<ToolItem>(preview.id, { ...fields, meta: { ...preview.meta, ...presentation.meta } })!
+    : session.add<ToolItem>({ id: itemId, ...fields, meta: presentation.meta })
 
   const fail = (message: string, status: 'error' | 'denied' = 'error'): ToolRun => {
     session.update<ToolItem>(item.id, { status, error: message, endedAt: Date.now() })
@@ -284,6 +294,15 @@ export async function runTool(
 
     const current = session.item<ToolItem>(item.id)
     if (result.pending) return { itemId: item.id, result }
+    // Very long results go to a temporary file the agent can Read in parts, as with terminal logs.
+    // Only Glob and Grep are cut here; Bash cuts its own, and every other tool returns in full.
+    if ((tool.kind === 'glob' || tool.kind === 'grep') && result.text.length > MAX_RESULT) {
+      const dir = join(tmpdir(), 'galaxy-code')
+      await mkdir(dir, { recursive: true })
+      const file = join(dir, `output-${item.id}.txt`)
+      await writeFile(file, result.text)
+      result.text = `${result.text.slice(0, RESULT_PREVIEW)}\n…\n\n[Cut after ${RESULT_PREVIEW} of ${result.text.length} characters. The full output is saved to ${file}. This result is incomplete. Unless what you were looking for is already in the part above, your next step must be Read on that file, before you answer, summarize or call any other tool. Do not tell the user the output was cut or ask them to narrow it; read the file.]`
+    }
     session.update<ToolItem>(item.id, {
       status: result.isError ? 'error' : 'done',
       output: result.display ?? result.text,

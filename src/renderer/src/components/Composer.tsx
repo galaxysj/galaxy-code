@@ -314,11 +314,13 @@ function AttachmentChip({ file, onRemove }: { file: Attachment; onRemove(): void
 
 const MODES: Record<AgentMode, { label: string; command: string; description: string; placeholder: string; icon: typeof Globe; tone: string }> = {
   ask: { label: 'Ask', command: 'ask', description: 'Answer questions with read-only tools. Nothing is changed.', placeholder: 'Ask questions', icon: CircleQuestionMark, tone: 'var(--green)' },
-  plan: { label: 'Plan', command: 'plan', description: 'Research and write a plan to .galaxy/plans before building.', placeholder: 'Describe what to plan', icon: FileText, tone: 'var(--orange)' }
+  plan: { label: 'Plan', command: 'plan', description: 'Research and write a plan to ~/.galaxy/plans before building.', placeholder: 'Describe what to plan', icon: FileText, tone: 'var(--orange)' },
+  multitask: { label: 'Multitask', command: 'multitask', description: 'Split the request into tasks that subagents work on in parallel.', placeholder: 'Describe the tasks', icon: MessageCircle, tone: 'var(--purple)' }
 }
 
 /** Commands that open a side chat. Text after the command becomes its first message. */
 const SIDE_COMMANDS = ['side', 'btw']
+const MULTITASK_ULTRA = "Multitask can't be used with Ultra mode."
 const SIDE_COMMAND = /^\/(?:side|btw)(?:\s+|$)/i
 
 function ModeChip({ mode, onClear }: { mode: AgentMode; onClear(): void }): ReactNode {
@@ -413,7 +415,8 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const setAttachments = useStore((s) => s.setComposerAttachments)
   const send = useStore((s) => s.send)
   const openSideChat = useStore((s) => s.openSideChat)
-  const { model, subscription, ultra, acp } = useRunConfig()
+  const runConfig = useRunConfig()
+  const { model, subscription, acp } = runConfig
   const models = useStore((s) => s.models)
   const pickModel = useStore((s) => s.pickModel)
   const chatId = useChatId()
@@ -422,6 +425,8 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const storedMode = useStore((s) => s.composerMode[key])
   const setComposerMode = useStore((s) => s.setComposerMode)
   const mode = modesAvailable ? storedMode : undefined
+  // Multitask hides Ultra, so the composer stops showing it too.
+  const ultra = runConfig.ultra && mode !== 'multitask'
   const textarea = useRef<HTMLTextAreaElement>(null)
   const wrapProbe = useRef<HTMLDivElement>(null)
   const messageBox = useRef<HTMLDivElement>(null)
@@ -524,10 +529,13 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
     ? [
         ...(modesAvailable ? (Object.keys(MODES) as AgentMode[]) : [])
           .filter((value) => MODES[value].command.startsWith(mention.query.toLowerCase()))
-          .map((value) => ({ id: `mode:${value}`, kind: 'mode' as const, name: `/${MODES[value].command}`, detail: MODES[value].description, mode: value })),
-        ...(edit ? [] : SIDE_COMMANDS)
-          .filter((command) => command.startsWith(mention.query.toLowerCase()))
-          .map((command) => ({ id: `command:${command}`, kind: 'command' as const, name: `/${command}`, detail: 'Open a side chat in the panel. It is deleted when closed.' })),
+          .map((value) => {
+            const disabled = value === 'multitask' && ultra
+            return { id: `mode:${value}`, kind: 'mode' as const, name: MODES[value].label, detail: disabled ? MULTITASK_ULTRA : MODES[value].description, mode: value, disabled }
+          }),
+        ...(!edit && SIDE_COMMANDS.some((command) => command.startsWith(mention.query.toLowerCase()))
+          ? [{ id: 'command:side', kind: 'command' as const, name: 'Side Chat', detail: 'Open a side chat in the panel. It is deleted when closed.' }]
+          : []),
         ...models
           .filter((entry) => !acp && entry.enabled && entry.subscription === subscription &&
             (!mention.query || `${entry.name} ${entry.id}`.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase().includes(mention.query.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase())))
@@ -587,6 +595,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   }
 
   const chooseMention = (entry: MentionEntry): void => {
+    if (entry.disabled) return
     if (entry.kind === 'model' && entry.modelKey) {
       pickModel(entry.modelKey, chatId)
       replaceMention('')
@@ -877,9 +886,10 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
                   aria-selected={index === mentionIndex}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => chooseMention(entry)}
+                  aria-disabled={entry.disabled || undefined}
                   title={entry.detail || undefined}
                   onMouseMove={() => { if (index !== mentionIndex) setMentionIndex(index) }}
-                  className={cn('flex h-9.5 w-full min-w-0 items-center gap-3 rounded-lg px-3 text-left', index === mentionIndex ? 'bg-hover text-fg' : 'text-muted')}
+                  className={cn('flex h-9.5 w-full min-w-0 items-center gap-3 rounded-lg px-3 text-left', index === mentionIndex ? 'bg-hover text-fg' : 'text-muted', entry.disabled && 'cursor-default opacity-40')}
                 >
                   <span className="flex w-4 shrink-0 justify-center">{entry.kind === 'model' && entry.brand ? <ModelBrandIcon brand={entry.brand} /> : entry.kind === 'file' ? <FileTypeIcon name={entry.name} /> : <Icon size={15} className="text-subtle" />}</span>
                   <span className="flex min-w-0 flex-1 items-baseline gap-2.5">
@@ -1038,7 +1048,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
             {acp && <AcpOptions />}
           </div>
           <div className="composer-actions ml-auto flex min-w-0 max-w-full items-center">
-            {!acp && <span className="composer-model flex min-w-0 items-center"><ModelPicker /></span>}
+            {!acp && <span className="composer-model flex min-w-0 items-center"><ModelPicker noUltra={mode === 'multitask'} /></span>}
             {running && !canSend ? (
               <button
                 type="button"
@@ -1195,6 +1205,8 @@ interface MentionEntry {
   id: string
   kind: MentionKind
   mode?: AgentMode
+  /** Shown but not selectable; `detail` says why. */
+  disabled?: boolean
   modelKey?: string
   brand?: ModelBrand
   git?: GitCommand

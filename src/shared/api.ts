@@ -97,7 +97,8 @@ export interface GalaxyApi {
     answer(chatId: string, itemId: string, answers: Record<string, string> | null): Promise<void>
     unqueue(chatId: string, messageId: string): Promise<void>
     /** Puts files and the timeline back to before a user message. Rejects on conflicts. */
-    revert(chatId: string, itemId: string): Promise<void>
+    /** `messageOnly` takes the turns out of the timeline and leaves the files as they are. Resolves with why the files could not be restored, or null. */
+    revert(chatId: string, itemId: string, messageOnly?: boolean): Promise<string | null>
     /** Undoes the last revert. */
     redo(chatId: string): Promise<void>
   }
@@ -110,6 +111,8 @@ export interface GalaxyApi {
     renameEntry(projectId: string, relativePath: string, name: string, chatId?: string): Promise<ProjectFileEntry>
     /** Moves the entry to the system Trash. */
     trashEntry(projectId: string, relativePath: string, chatId?: string): Promise<void>
+    /** Copies entries into `parent`, adding " copy" to names that are taken. */
+    copyEntries(projectId: string, relativePaths: string[], parent: string, chatId?: string): Promise<ProjectFileEntry[]>
     pickAttachments(): Promise<Attachment[]>
     attachFromPaths(paths: string[]): Promise<Attachment[]>
     attachFromData(name: string, mime: string, base64: string): Promise<Attachment>

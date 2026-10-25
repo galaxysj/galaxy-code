@@ -4,7 +4,6 @@ import { basename, extname, join } from 'node:path'
 import { ImageModel } from '@shared/models'
 import type { AskQuestion, PresentedFile, TaskEntry } from '@shared/types'
 import { browser, type BrowserAction } from '../services/browser'
-import { terminals } from '../services/terminal'
 import { memoryPath, updateMemory, type MemoryAction } from '../services/memory'
 import { generateImage } from '../services/openrouter'
 import { webFetch, webSearch } from '../services/web'
@@ -365,28 +364,27 @@ export const openTool: ToolDef = {
   name: 'Open',
   kind: 'open',
   description:
-    'Open a tab beside the chat. type=file (default) opens path at line. type=terminal opens a shell in the workspace for the user and returns its tabId. type=review opens workspace changes. Existing tabs stay open. It does not return file content; use Read for that.',
+    'Open a tab beside the chat. type=file (default) opens path at line. type=review opens workspace changes. It never runs commands; use Bash for anything the user asks to run in a terminal. Existing tabs stay open. It does not return file content; use Read for that.',
   parameters: {
     type: 'object',
     properties: {
-      type: { type: 'string', enum: ['file', 'terminal', 'review'] },
+      type: { type: 'string', enum: ['file', 'review'] },
       path: { type: 'string', description: 'File to open.' },
       line: { type: 'integer', description: 'Line to scroll to.' }
     },
     required: []
   },
   present(input, ctx) {
-    if (input.type === 'terminal' || input.type === 'review') return { title: `Opened ${input.type}` }
+    if (input.type === 'review') return { title: 'Opened review' }
     const abs = resolvePath(ctx.cwd, String(input.path ?? ''))
     return { title: `Opened ${basename(abs)}`, detail: displayPath(ctx.cwd, abs) }
   },
   async execute(input, ctx) {
-    if (input.type === 'terminal' || input.type === 'review') {
-      const pane = input.type
-      const tabId = pane === 'terminal' ? await terminals.create(ctx.cwd) : `review:${ctx.session.team?.chatId ?? ctx.session.id}`
-      if (pane === 'terminal') terminals.track(tabId, ctx.session.team?.chatId ?? ctx.session.id, ctx.itemId)
-      ctx.session.emitUi({ type: 'open-panel', chatId: ctx.session.id, pane, cwd: ctx.cwd, tabId })
-      return { text: `Opened ${pane} tab ${tabId}.` }
+    if (input.type === 'terminal') throw new ToolInputError('Open cannot open terminals. Run the command with Bash instead.')
+    if (input.type === 'review') {
+      const tabId = `review:${ctx.session.team?.chatId ?? ctx.session.id}`
+      ctx.session.emitUi({ type: 'open-panel', chatId: ctx.session.id, pane: 'review', cwd: ctx.cwd, tabId })
+      return { text: `Opened review tab ${tabId}.` }
     }
     const abs = resolvePath(ctx.cwd, str(input, 'path', true))
     if (!(await exists(abs))) throw new Error(`File not found: ${abs}`)

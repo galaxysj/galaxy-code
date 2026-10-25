@@ -100,6 +100,8 @@ export interface StreamRequest {
   signal: AbortSignal
   onText(delta: string): void
   onReasoning(delta: string): void
+  /** A tool call's arguments so far, as they stream in. */
+  onToolCall?(call: ChatToolCall): void
 }
 
 /** Reasoning detail chunks arrive split across events and are stitched back by index. */
@@ -254,6 +256,7 @@ export async function streamChat(req: StreamRequest): Promise<StreamResult> {
         if (tc.id) call.id = tc.id
         if (tc.function?.name) call.function.name += tc.function.name
         if (tc.function?.arguments) call.function.arguments += tc.function.arguments
+        if (call.function.name) req.onToolCall?.(call)
       }
     }
   }

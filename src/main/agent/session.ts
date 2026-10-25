@@ -53,8 +53,12 @@ export class Session {
   team: AgentTeam | null = null
   /** Triggers set by the Event tool this turn. The chat listens for them once the turn ends. */
   events: PendingEvent[] = []
-  /** Stops listening for events, when the chat is. */
-  stopListening: ((abortWork: boolean) => void) | null = null
+  /** Events the chat listens for. Each resumes the agent once when it fires; the others stay set. */
+  listening = new Set<{ label: string; cancel(): void }>()
+  /** Teams of finished turns whose subagents still run. */
+  background = new Set<AgentTeam>()
+  /** Event resumes that fired while a turn was running. They run once it ends. */
+  pendingResumes: { text: string; label: string; mode?: AgentMode }[] = []
   agentId = 'main'
   readonly doc: ChatDoc
   controller: AbortController | null = null

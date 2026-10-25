@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import type { Attachment, Effort } from '@shared/types'
+import type { Attachment, Effort, FileDiff, ToolItem } from '@shared/types'
 import { buildSystemPrompt, gatherContext } from '../agent/prompt'
 import { TurnWriter, type Session, type Turn } from '../agent/session'
 import {
@@ -12,11 +12,14 @@ import {
 } from '../services/openrouter'
 import { ALL_TOOLS, mcpTools, runTool, toolsForMode, toolsForSubagent, toSpecs, type ToolDef, type ToolEnv } from '../tools'
 import type { ToolImage } from '../tools/types'
-import { isImagePath, truncateEnd, truncateMiddle } from '../util'
+import { isImagePath, resolvePath, truncateEnd, truncateMiddle } from '../util'
+import { basename } from 'node:path'
+import { streamedEditInput } from './claude'
+import { makeDiff } from '../tools/diff'
+import { previewEditPatch } from '../tools/patch'
 
 const MAX_STEPS = 250
 const PLAN_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789'
-const MAX_TOOL_RESULT = 60_000
 /** Prompt size at which older history is folded into a summary. */
 const COMPACT_AT_TOKENS = 180_000
 
@@ -118,6 +121,50 @@ interface LoopOptions {
   allowCompaction: boolean
 }
 
+/**
+ * Live previews of Edit and Create while their arguments stream in: the timeline shows the
+ * diff growing, and runTool takes the same item over once the call is complete.
+ */
+function editPreviews(session: Session, env: ToolEnv): { update(call: ChatToolCall): void; has(id: string): boolean; settle(): Promise<void> } {
+  const shown = new Set<string>()
+  const last = new Map<string, number>()
+  let pending: Promise<void> = Promise.resolve()
+  const publish = async (call: ChatToolCall): Promise<void> => {
+    const name = call.function.name
+    const input = streamedEditInput(call.function.arguments)
+    let diffs: FileDiff[] | undefined
+    let title = name
+    if (name === 'Create' && typeof input.path === 'string' && input.path) {
+      const abs = resolvePath(env.cwd, input.path)
+      title = `Create ${basename(abs)}`
+      diffs = [makeDiff(abs, null, typeof input.content === 'string' ? input.content : '')]
+    } else if (name === 'Edit' && typeof input.patch === 'string') {
+      const patch = input.patch.includes('*** End Patch') ? input.patch : `${input.patch.replace(/\n[^\n]*$/, '')}\n*** End Patch`
+      // A half-written hunk may not parse yet; keep the last diff that did.
+      diffs = await previewEditPatch(patch, env.cwd).catch(() => undefined)
+      if (diffs?.length) title = `Edit ${diffs.length === 1 ? basename(diffs[0].path) : `${diffs.length} files`}`
+    }
+    if (!diffs) return
+    if (shown.has(call.id)) session.update<ToolItem>(call.id, { title, meta: { ...session.item<ToolItem>(call.id)?.meta, diffs } })
+    else {
+      shown.add(call.id)
+      session.add<ToolItem>({ id: call.id, kind: 'tool', tool: name === 'Create' ? 'create' : 'edit', name, title, input: {}, status: 'pending', meta: { diffs }, parentId: env.parentId })
+    }
+  }
+  return {
+    update(call) {
+      if (call.function.name !== 'Edit' && call.function.name !== 'Create') return
+      const now = Date.now()
+      if (now - (last.get(call.id) ?? 0) < 80) return
+      last.set(call.id, now)
+      const snapshot = { ...call, function: { ...call.function } }
+      pending = pending.then(() => publish(snapshot)).catch(() => {})
+    },
+    has: (id) => shown.has(id),
+    settle: () => pending
+  }
+}
+
 /** The model-tool loop: request, run the tools it asks for, feed results back, until it answers. */
 async function loop(options: LoopOptions): Promise<string> {
   const { session, turn, tools, env, writer } = options
@@ -131,6 +178,7 @@ async function loop(options: LoopOptions): Promise<string> {
       options.messages.push({ role: 'user', content: `Message from agent ${message.from}:\n${message.text}` })
     }
 
+    const previews = editPreviews(session, env)
     const result = await streamChat({
       model: turn.model.id,
       messages: [{ role: 'system', content: options.system }, ...options.messages],
@@ -140,9 +188,11 @@ async function loop(options: LoopOptions): Promise<string> {
       ultrafast: turn.ultrafast && turn.model.ultrafastMode,
       signal,
       onText: (delta) => writer.text(delta),
-      onReasoning: (delta) => writer.reasoning(delta)
+      onReasoning: (delta) => writer.reasoning(delta),
+      onToolCall: (call) => previews.update(call)
     })
     writer.end()
+    await previews.settle()
 
     if (result.usage) {
       session.addUsage(result.usage.inputTokens, result.usage.outputTokens, result.usage.cost, env.parentId ? undefined : result.usage.inputTokens)
@@ -157,7 +207,9 @@ async function loop(options: LoopOptions): Promise<string> {
     if (result.toolCalls.length === 0) {
       // An event that waits for subagents ends the turn instead; the chat listens and resumes when they finish.
       if (session.team?.hasRunning() && session.agentId === 'main' && !session.events.some((event) => event.keepsTeam)) {
-        await session.team.wait()
+        // Stopping the turn leaves the subagents running, so stop waiting for them too.
+        await Promise.race([session.team.wait(), new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }))])
+        if (signal.aborted) break
         continue
       }
       if (result.finishReason === 'length') {
@@ -171,9 +223,11 @@ async function loop(options: LoopOptions): Promise<string> {
       const args = parseArgs(call.function.arguments)
       if (!args.ok) {
         outcomes.set(call.id, { text: args.error })
+        // A preview for a call whose arguments never parsed ends as a failed attempt.
+        if (previews.has(call.id)) session.update<ToolItem>(call.id, { status: 'error', error: args.error, endedAt: Date.now() })
         return
       }
-      const run = await runTool(tools, env, call.function.name, args.value)
+      const run = await runTool(tools, env, call.function.name, args.value, previews.has(call.id) ? call.id : undefined)
       outcomes.set(call.id, { text: run.result.text, images: run.result.images })
     }
 
@@ -200,7 +254,8 @@ async function loop(options: LoopOptions): Promise<string> {
     const images: ChatContentPart[] = []
     for (const call of result.toolCalls) {
       const outcome = outcomes.get(call.id)
-      let content = truncateMiddle(outcome?.text ?? '[Interrupted before this tool finished]', MAX_TOOL_RESULT)
+      // Results arrive already cut where a tool cuts them (Bash, Glob, Grep); the rest are sent whole.
+      let content = outcome?.text ?? '[Interrupted before this tool finished]'
       if (outcome?.images?.length) {
         if (turn.model.vision) {
           images.push({ type: 'text', text: `Image output of the ${call.function.name} call:` })
@@ -256,7 +311,8 @@ export async function runNative(session: Session, turn: Turn): Promise<void> {
       turn,
       system: buildSystemPrompt(ctx, turn.mentions),
       messages: history,
-      tools: turn.mode ? toolsForMode(turn.mode) : [...(session.agentId === 'main' ? ALL_TOOLS : toolsForSubagent('general')), ...mcpTools()],
+      // Multitask keeps every tool; its system prompt limits main to delegating.
+      tools: turn.mode === 'ask' || turn.mode === 'plan' ? toolsForMode(turn.mode) : [...(session.agentId === 'main' ? ALL_TOOLS : toolsForSubagent('general')), ...mcpTools()],
       env,
       writer,
       effort: turn.effort,

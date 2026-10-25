@@ -103,16 +103,24 @@ interface Prefs {
   /** Last values picked per ACP agent, so new chats start where the user left off. */
   acp: Record<string, Record<string, string>>
   lastProjectId: string | null
+  /** Composer mode chips per chat (or 'new'), so they survive a restart. */
+  modes: Record<string, AgentMode>
 }
 
 const PREFS_KEY = 'galaxy.prefs'
 
 function loadPrefs(): Prefs {
   try {
-    return { models: {}, efforts: {}, ultra: {}, fast: {}, ultrafast: {}, acp: {}, lastProjectId: null, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') }
+    return { models: {}, efforts: {}, ultra: {}, fast: {}, ultrafast: {}, acp: {}, lastProjectId: null, modes: {}, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') }
   } catch {
-    return { models: {}, efforts: {}, ultra: {}, fast: {}, ultrafast: {}, acp: {}, lastProjectId: null }
+    return { models: {}, efforts: {}, ultra: {}, fast: {}, ultrafast: {}, acp: {}, lastProjectId: null, modes: {} }
   }
+}
+
+/** Saves the mode chips that are on; turned-off ones are dropped. */
+function saveModes(composerMode: Record<string, AgentMode | undefined>): void {
+  prefs.modes = Object.fromEntries(Object.entries(composerMode).filter((entry): entry is [string, AgentMode] => !!entry[1]))
+  savePrefs(prefs)
 }
 
 function savePrefs(prefs: Prefs): void {
@@ -293,6 +301,7 @@ export const useStore = create<State>((set, get) => {
           const items = { ...s.items }
           delete chats[event.chatId]
           delete items[event.chatId]
+          if (prefs.modes[event.chatId]) saveModes({ ...s.composerMode, [event.chatId]: undefined })
           const activityCollapsed = Object.fromEntries(Object.entries(s.activityCollapsed).filter(([key]) => !key.startsWith(`${event.chatId}:`)))
           // A removed chat's tabs go with it.
           const chatPanels = { ...s.chatPanels }
@@ -440,7 +449,7 @@ export const useStore = create<State>((set, get) => {
     draft: { projectId: null, workspace: 'local', modelKey: '', effort: null, ultra: false, fast: false, ultrafast: false, permissionMode: 'auto' },
     composerText: {},
     composerAttachments: {},
-    composerMode: {},
+    composerMode: { ...prefs.modes },
     activityCollapsed: {},
 
     sidebarOpen: true,
@@ -672,6 +681,7 @@ export const useStore = create<State>((set, get) => {
           // The mode chip stays on for the chat the draft became.
           composerMode: { ...state.composerMode, new: undefined, [chat.id]: state.composerMode.new }
         }))
+        saveModes(get().composerMode)
       }
       await window.galaxy.chats.send({ chatId, text, attachments, mentions, steer, ...(mode ? { mode } : {}), ...(plan ? { plan } : {}) })
     },
@@ -874,6 +884,7 @@ export const useStore = create<State>((set, get) => {
 
     setComposerMode(key, mode) {
       set((s) => ({ composerMode: { ...s.composerMode, [key]: mode } }))
+      saveModes(get().composerMode)
     },
 
     notify(text, tone = 'info') {

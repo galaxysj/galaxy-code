@@ -33,13 +33,15 @@ interface EffortSliderProps {
   model: ResolvedModel
   effort: Effort | null
   ultra: boolean
+  /** Leaves out the Ultra stop, for modes that cannot run with it. */
+  allowUltra: boolean
   onChange(next: { effort?: Effort; ultra: boolean }): void
 }
 
 /** A pill slider over the model's efforts. Ultra, when the model has it, is the final stop. */
-function EffortSlider({ model, effort, ultra, onChange }: EffortSliderProps): ReactNode {
+function EffortSlider({ model, effort, ultra, allowUltra, onChange }: EffortSliderProps): ReactNode {
   const track = useRef<HTMLDivElement>(null)
-  const stops = useMemo<Stop[]>(() => [...model.efforts, ...(model.ultraEffort ? (['ultra'] as const) : [])], [model])
+  const stops = useMemo<Stop[]>(() => [...model.efforts, ...(model.ultraEffort && allowUltra ? (['ultra'] as const) : [])], [model, allowUltra])
   const last = stops.length - 1
   const index = ultra ? last : Math.max(0, stops.indexOf(effort ?? model.defaultEffort ?? model.efforts[0]))
 
@@ -118,7 +120,7 @@ function EffortSlider({ model, effort, ultra, onChange }: EffortSliderProps): Re
   )
 }
 
-function ModelList({ current, subscription, onPick, onBack }: { current: ResolvedModel | null; subscription: Subscription | null; onPick(key: string): void; onBack(): void }): ReactNode {
+function ModelList({ current, subscription, allowUltra, onPick, onBack }: { current: ResolvedModel | null; subscription: Subscription | null; allowUltra: boolean; onPick(key: string): void; onBack(): void }): ReactNode {
   const models = useStore((s) => s.models)
   const hasKey = useStore((s) => s.secrets.openRouterKey)
   const [query, setQuery] = useState('')
@@ -181,7 +183,7 @@ function ModelList({ current, subscription, onPick, onBack }: { current: Resolve
                 )}
               >
                 <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-                {entry.ultraEffort && <span className="shrink-0 text-[10.5px] text-ultra/80">Ultra</span>}
+                {entry.ultraEffort && allowUltra && <span className="shrink-0 text-[10.5px] text-ultra/80">Ultra</span>}
                 {entry.fastMode && <Zap size={11} className="shrink-0 text-subtle" />}
                 <span className="flex w-3.5 shrink-0 justify-end">{entry.key === current?.key && <Check size={13} />}</span>
               </button>
@@ -193,14 +195,17 @@ function ModelList({ current, subscription, onPick, onBack }: { current: Resolve
   )
 }
 
-export function ModelPicker(): ReactNode {
+/** `noUltra` hides Ultra, for composer modes that cannot run with it. */
+export function ModelPicker({ noUltra = false }: { noUltra?: boolean }): ReactNode {
   const anchor = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const [listing, setListing] = useState(false)
   const pickModel = useStore((s) => s.pickModel)
   const setRunOptions = useStore((s) => s.setRunOptions)
   const chatId = useChatId()
-  const { model, subscription, effort, ultra, fast, ultrafast } = useRunConfig()
+  const config = useRunConfig()
+  const { model, subscription, effort, fast, ultrafast } = config
+  const ultra = config.ultra && !noUltra
 
   const close = useCallback(() => {
     setOpen(false)
@@ -253,6 +258,7 @@ export function ModelPicker(): ReactNode {
           <ModelList
             current={model}
             subscription={subscription}
+            allowUltra={!noUltra}
             onBack={() => (model ? setListing(false) : close())}
             onPick={(key) => {
               pickModel(key, chatId)
@@ -301,7 +307,7 @@ export function ModelPicker(): ReactNode {
             {auto && <p className="mt-2 px-1 text-center text-[11.5px] leading-snug text-subtle">Picks the best model for each request automatically.</p>}
             {hasEffort && (
               <div className="mt-2.5" title={ultra ? `Ultra orchestrates parallel subagents at ${EFFORT_LABELS[model.ultraEffort as Effort].toLowerCase()} effort` : undefined}>
-                <EffortSlider model={model} effort={effort} ultra={ultra} onChange={(next) => setRunOptions(next, chatId)} />
+                <EffortSlider model={model} effort={effort} ultra={ultra} allowUltra={!noUltra} onChange={(next) => setRunOptions(next, chatId)} />
               </div>
             )}
           </div>

@@ -1,4 +1,5 @@
 import {
+  FileOutput,
   Bot,
   Brain,
   Check,
@@ -32,7 +33,7 @@ import {
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { EXPLORE_KINDS, type AskQuestion, type Item, type ReasoningItem, type TaskEntry, type ToolItem, type ToolKind } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, plural, relativeTo } from '../../lib/utils'
-import { isTerminalRead, readPath, toolActivityTitle } from '../../lib/toolActivity'
+import { attemptedTitle, isTerminalRead, isToolOutputRead, readPath, thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
 import { useStore } from '../../store'
 import { DiffStat, DiffView } from '../DiffView'
 import { Markdown } from '../Markdown'
@@ -84,7 +85,8 @@ function isLive(item: ToolItem): boolean {
 
 function StatusMark({ item }: { item: ToolItem }): ReactNode {
   if (item.tool === 'bash' && item.status === 'error') return null
-  if (item.status === 'error') return <span className="shrink-0 text-[12.7px] text-danger">Failed</span>
+  // A failed call says so in its title ("Read attempted"), so there is no mark.
+  if (item.status === 'error') return null
   if (item.status === 'denied') return <span className="shrink-0 text-[12.7px] text-subtle">Declined</span>
   if (item.status === 'awaiting') return <span className="shrink-0 text-[12.7px] text-warn">Needs approval</span>
   return null
@@ -101,6 +103,8 @@ interface RowProps {
   dim?: boolean
   /** No lead-word emphasis, for titles that are content rather than activity labels. */
   plain?: boolean
+  /** Shown on hover, such as why a call failed. */
+  hint?: string
 }
 
 /** One line of agent activity. Clicking it reveals the detail underneath. */
@@ -112,8 +116,9 @@ function leadWord(title: ReactNode): ReactNode {
   return <><span className="text-fg">{title.slice(0, space)}</span>{title.slice(space)}</>
 }
 
-function Row({ icon, title, detail, trailing, live, open, onToggle, dim, plain }: RowProps): ReactNode {
+function Row({ icon, title, detail, trailing, live, open, onToggle, dim, plain, hint }: RowProps): ReactNode {
   return (
+    <span title={hint} className="contents">
     <button
       type="button"
       onClick={onToggle}
@@ -137,6 +142,7 @@ function Row({ icon, title, detail, trailing, live, open, onToggle, dim, plain }
         />
       )}
     </button>
+    </span>
   )
 }
 
@@ -150,7 +156,7 @@ function OutputBlock({ text, follow, maxHeight = 300, command, highlight }: { te
     if (!highlight) return null
     // Very large logs stay plain to keep highlighting fast.
     const body = text.length > 200_000 ? escapeHtml(text) : hljs.highlight(text, { language: 'bash' }).value
-    return command ? `<span class="text-fg">$ </span>${hljs.highlight(command, { language: 'bash' }).value}\n\n${body}` : body
+    return command ? `<span class="text-fg">$ </span>${hljs.highlight(command, { language: 'bash' }).value}${body ? `\n\n${body}` : ''}` : body
   }, [text, command, highlight])
   const following = useRef(true)
   useLayoutEffect(() => {
@@ -171,9 +177,17 @@ function escapeHtml(text: string): string {
 }
 
 /** Activity changes reset expansion; grouped activity can preserve an explicit collapse. */
-function useDisclosure(auto: boolean, activityKey?: string, preserveCollapse = false): [boolean, () => void] {
+/** `preserveCollapse` and `preserveOpen` keep a manual close or open when the activity key changes. */
+/** Why a call failed, for the hover text of its "attempted" title. */
+function failureReason(item: ToolItem): string | undefined {
+  if (item.status !== 'error') return undefined
+  if (item.tool === 'bash' && typeof item.meta?.exitCode === 'number') return undefined
+  return item.error || item.output?.trim().split('\n').pop() || 'The call failed.'
+}
+
+function useDisclosure(auto: boolean, activityKey?: string, preserveCollapse = false, preserveOpen = false): [boolean, () => void] {
   const [manual, setManual] = useState<{ key?: string; open: boolean } | null>(null)
-  const open = manual && (manual.key === activityKey || (preserveCollapse && !manual.open)) ? manual.open : auto
+  const open = manual && (manual.key === activityKey || (preserveCollapse && !manual.open) || (preserveOpen && manual.open)) ? manual.open : auto
   return [open, () => setManual({ key: activityKey, open: !open })]
 }
 
@@ -188,10 +202,62 @@ function liveVerb(items: ToolItem[]): string {
   return 'Exploring'
 }
 
-function exploreSummary(items: ToolItem[], verb = 'Explored'): string {
+/** One word that scrolls up when it changes: the old word leaves through the top as the new one rises in. */
+function RollingWord({ value, animate }: { value: string; animate: boolean }): ReactNode {
+  const [state, setState] = useState({ current: value, previous: null as string | null, step: animate ? 1 : 0 })
+  if (state.current !== value) setState({ current: value, previous: state.current, step: state.step + 1 })
+  return (
+    <span className="roll-slot">
+      {state.previous !== null && <span key={`out:${state.step}`} className="roll-out" onAnimationEnd={() => setState((now) => ({ ...now, previous: null }))}>{state.previous}</span>}
+      <span key={`in:${state.step}`} className={state.step ? 'roll-in' : undefined}>{state.current}</span>
+    </span>
+  )
+}
+
+/** Live text where only the words that change scroll up. Spaces and commas stay put. A shimmer on a parent sweeps across it as one. */
+export function RollingText({ text, effect = 'roll' }: { text: string; effect?: 'roll' | 'blur' }): ReactNode {
+  const mounted = useRef(false)
+  useEffect(() => { mounted.current = true }, [])
+  return text.split(/(\s+|,)/).map((part, index) => /^(\s+|,)?$/.test(part) ? <span key={index}>{part}</span> : effect === 'blur' ? <BlurWord key={index} value={part} animate={mounted.current} /> : <RollingWord key={index} value={part} animate={mounted.current} />)
+}
+
+/** A live summary whose counts roll in as they change. */
+function rollingSummary(summary: string): ReactNode {
+  const space = summary.indexOf(' ')
+  if (space <= 0) return <RollingText text={summary} />
+  // The verb stays bold, as in every other row; it paints its own color through the row's shimmer.
+  return <><span className="text-fg [-webkit-text-fill-color:currentColor]">{summary.slice(0, space)}</span><RollingText text={summary.slice(space)} effect="blur" /></>
+}
+
+/** The part of `next` that differs from `previous`, as the unchanged start, the changed middle and the unchanged end. */
+function changedPart(previous: string, next: string): [string, string, string] {
+  let start = 0
+  while (start < previous.length && start < next.length && previous[start] === next[start]) start++
+  let end = 0
+  while (end < previous.length - start && end < next.length - start && previous[previous.length - 1 - end] === next[next.length - 1 - end]) end++
+  return [next.slice(0, start), next.slice(start, next.length - end), next.slice(next.length - end)]
+}
+
+/**
+ * A word whose changed letters blur-fade in, such as 1 → 2 and the added s in "file" → "files".
+ * While they animate they carry their own shimmer, since the filter takes them out of the parent's.
+ */
+function BlurWord({ value, animate }: { value: string; animate: boolean }): ReactNode {
+  const [state, setState] = useState({ current: value, previous: animate ? '' : value, step: 0 })
+  if (state.current !== value) setState({ current: value, previous: state.current, step: state.step + 1 })
+  const [head, changed, tail] = changedPart(state.previous, state.current)
+  if (!changed) return state.current
+  return <>{head}<span key={state.step} className="blur-fade shimmer inline-block whitespace-pre" onAnimationEnd={() => setState((now) => ({ ...now, previous: now.current }))}>{changed}</span>{tail}</>
+}
+
+function exploreSummary(all: ToolItem[], verb = 'Explored'): string {
+  // Failed calls are not counted; a group where every call failed says so instead.
+  const items = all.filter((item) => item.status !== 'error')
+  if (all.length && !items.length) return verb === 'Exploring' ? verb : 'Explore attempted'
   const reads = items.filter((i) => i.tool === 'read' && !i.meta?.skill)
   const terminals = reads.filter(isTerminalRead).length
-  const files = reads.length - terminals
+  const outputs = reads.filter(isToolOutputRead).length
+  const files = reads.length - terminals - outputs
   const skills = items.filter((i) => i.meta?.skill).length
   const searches = items.filter((i) => i.tool === 'grep' || i.tool === 'glob').length
   const lists = items.filter((i) => i.tool === 'list').length
@@ -204,6 +270,7 @@ function exploreSummary(items: ToolItem[], verb = 'Explored'): string {
   const parts = [
     files && plural(files, 'file'),
     terminals && plural(terminals, 'terminal'),
+    outputs && plural(outputs, 'tool output'),
     skills && plural(skills, 'skill'),
     searches && plural(searches, 'search', 'searches'),
     lists && plural(lists, 'folder'),
@@ -213,7 +280,7 @@ function exploreSummary(items: ToolItem[], verb = 'Explored'): string {
     pages && plural(pages, 'page')
   ].filter(Boolean)
   // A single item names what it was rather than counting to one.
-  if (items.length === 1 && reads.length === 1) parts[0] = terminals ? 'terminal' : basename(readPath(reads[0]))
+  if (items.length === 1 && reads.length === 1) parts[0] = terminals ? 'terminal' : outputs ? 'tool output' : basename(readPath(reads[0]))
   else if (items.length === 1 && web === 1) parts[0] = 'web search'
   const done = verb === 'Explored'
   const actions = [
@@ -245,8 +312,8 @@ function browsingPages(items: ToolItem[]): number {
 
 function ExploreLine({ item }: { item: ToolItem }): ReactNode {
   const openFile = useStore((s) => s.openFile)
-  const Icon = isTerminalRead(item) ? SquareTerminal : KIND_ICON[item.tool]
-  const path = isTerminalRead(item) ? undefined : item.tool === 'read' && typeof (item.input as { path?: string; file_path?: string })?.path === 'string' ? (item.input as { path: string }).path : (item.input as { file_path?: string })?.file_path
+  const Icon = isTerminalRead(item) ? SquareTerminal : isToolOutputRead(item) ? FileOutput : KIND_ICON[item.tool]
+  const path = isTerminalRead(item) || isToolOutputRead(item) ? undefined : item.tool === 'read' && typeof (item.input as { path?: string; file_path?: string })?.path === 'string' ? (item.input as { path: string }).path : (item.input as { file_path?: string })?.file_path
   const url = item.meta?.url
   const results = item.meta?.results
   const outputMode = useStore((s) => s.settings.terminalOutput)
@@ -260,7 +327,7 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
   const action = expandable ? toggle : path ? () => openFile(path) : url ? () => void window.galaxy.files.openExternal(url) : results?.length ? toggle : undefined
   if (item.tool === 'mcp') return <McpTool item={item} />
   return (
-    <div>
+    <div title={failureReason(item)}>
       <button
         type="button"
         disabled={!action}
@@ -268,13 +335,13 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
         className={cn('flex h-7 w-full min-w-0 items-center gap-2 text-left text-[13.8px] font-[450] text-muted', action && 'hover:text-fg')}
       >
         <span className="flex w-4 shrink-0 justify-center">{isLive(item) ? <Spinner size={13} /> : <Icon size={13.5} className="text-subtle" />}</span>
-        <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(item.tool === 'bash' ? `${isLive(item) ? 'Running' : 'Ran'} ${toolActivityTitle(item)}` : toolActivityTitle(item))}</span>
-        {!isTerminalRead(item) && item.detail && item.detail !== basename(item.detail) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
+        <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(item.tool === 'bash' && item.status !== 'error' ? `${isLive(item) ? 'Running' : 'Ran'} ${toolActivityTitle(item)}` : toolActivityTitle(item))}</span>
+        {!isTerminalRead(item) && !isToolOutputRead(item) && item.detail && item.detail !== basename(item.detail) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
         {item.meta?.matches !== undefined && item.tool !== 'read' && <span className="shrink-0 text-[12.1px] text-subtle">{plural(item.meta.matches, 'match', 'matches')}</span>}
         <StatusMark item={item} />
       </button>
       {(open || preview) && expandable && (
-        <div className={cn('activity-output-surface activity-reveal mb-1.5 ml-6 overflow-hidden rounded-lg border border-line', preview && 'max-h-28 overflow-y-auto overscroll-contain')}>
+        <div className={cn('activity-output-surface activity-reveal mb-1.5 ml-6 overflow-hidden rounded-lg border border-line', preview && 'max-h-[78px] overflow-y-auto overscroll-contain')}>
           {item.tool === 'bash'
             ? item.output ? <OutputBlock text={item.output} command={command} highlight maxHeight="none" /> : <div className="px-3 py-2 text-[13.2px] text-danger">{item.error}</div>
             : diffs.map((diff) => <DiffView key={diff.path} diff={diff} maxHeight={null} />)}
@@ -320,8 +387,8 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
   const title = browsing
     ? live ? open ? 'Browsing' : `Browsing ${plural(browsingPages(tools), 'page')}` : `Browsed ${plural(browsingPages(tools), 'page')}`
     : thinkingOnly
-      ? live ? 'Thinking' : thoughtTime === '0s' ? 'Thought briefly' : `Thought for ${thoughtTime}`
-      : live ? open ? liveVerb(tools) : exploreSummary(tools, 'Exploring') : exploreSummary(tools)
+      ? live ? (current?.kind === 'reasoning' && thinkingTopic(current.text)) || 'Thinking' : thoughtTime === '0s' ? 'Thought briefly' : `Thought for ${thoughtTime}`
+      : live ? open ? liveVerb(tools) : rollingSummary(exploreSummary(tools, 'Exploring')) : exploreSummary(tools)
   const activity = useRef<HTMLDivElement>(null)
   const following = useRef({ itemId: latestItemId, enabled: true })
   useLayoutEffect(() => {
@@ -331,8 +398,9 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
     }
   }, [items, latestItemId, open])
   const failed = tools.length === 1 && tools[0].status === 'error'
+  const failures = tools.filter((tool) => tool.status === 'error')
   return (
-    <div className="explore-group">
+    <div className="explore-group" title={failures.length && failures.length === tools.length ? failures.map((tool) => `${toolActivityTitle({ ...tool, status: 'done' })}: ${failureReason(tool)}`).join('\n') : undefined}>
       <Row
         icon={browsing ? <Globe size={13.5} className="text-subtle" /> : thinkingOnly ? <Lightbulb size={13.5} className="text-subtle" /> : <Search size={13.5} className="text-subtle" />}
         title={title}
@@ -353,7 +421,9 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
             }}
           >
             {items.map((item) => item.kind === 'reasoning'
-              ? item.text.trim() ? <Markdown key={item.id} text={item.text} className="py-1 text-[13.8px]! text-muted" /> : null
+              ? !item.text.trim() ? null
+                : thinkingOnly ? <Markdown key={item.id} text={item.text} className="py-1 text-[13.8px]! text-muted" />
+                : <ThinkingLine key={item.id} item={item} exploring={live} />
               : browsing && ctx ? <ToolBlock key={item.id} item={item} ctx={ctx} /> : <ExploreLine key={item.id} item={item} />)}
           </div>
         </div>
@@ -362,6 +432,22 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
     </div>
   )
 })
+
+/** A thought among exploration steps: its own collapsible block, like a thinking-only group. */
+function ThinkingLine({ item, exploring }: { item: ReasoningItem; exploring: boolean }): ReactNode {
+  // Open while the exploration runs, closed once it is done, unless toggled by hand.
+  const [manual, setManual] = useState<boolean | null>(null)
+  const open = manual ?? exploring
+  const live = !!item.streaming
+  const time = formatDuration(item.endedAt ? Math.max(0, item.endedAt - item.ts) : 0)
+  const title = live ? thinkingTopic(item.text) ?? 'Thinking' : time === '0s' ? 'Thought briefly' : `Thought for ${time}`
+  return (
+    <div>
+      <Row icon={<Lightbulb size={13.5} className="text-subtle" />} title={title} live={live} open={open} onToggle={() => setManual(!open)} />
+      {open && <Markdown text={item.text} className="py-1 pl-6 text-[13.8px]! text-muted" />}
+    </div>
+  )
+}
 
 // Individual tools
 
@@ -394,14 +480,14 @@ function BashTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactNode
   const command = item.meta?.command ?? input?.command ?? item.detail ?? ''
   const mode = useStore((s) => s.settings.terminalOutput)
   const foreground = item.status === 'running' && !item.meta?.background && !!command
-  const [open, toggle] = useDisclosure(false, foreground ? 'running' : 'complete')
+  const [open, toggle] = useDisclosure(false, foreground ? 'running' : 'complete', false, true)
   // A collapsed preview: the running command, or every command in preview mode.
   const backgroundLog = useBackgroundLog(item.meta?.log ?? (item.meta?.background ? item.output?.match(/Output is being written to (\S+\.log)/)?.[1] : undefined), open || mode === 'preview')
   const output = backgroundLog ?? item.output
   const preview = !open && (mode === 'preview' ? !!output || foreground : mode === 'foreground' && foreground)
   const exit = item.meta?.exitCode
   const rawTitle = item.title.replace(/…$/, '').trim()
-  const title = command && rawTitle && (command.startsWith(rawTitle) || rawTitle.includes(command)) ? 'Terminal command' : item.title
+  const title = attemptedTitle(item) ?? (command && rawTitle && (command.startsWith(rawTitle) || rawTitle.includes(command)) ? 'Terminal command' : item.title)
   return (
     <div className="my-1.5 overflow-hidden rounded-xl border border-line-strong bg-elev">
       <div className="px-3 py-1">
@@ -409,13 +495,14 @@ function BashTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactNode
         plain
         icon={<SquareTerminal size={13.5} className="text-subtle" />}
         title={title}
+        hint={failureReason(item)}
         live={isLive(item)}
         open={open}
         onToggle={toggle}
         trailing={
           <>
             {item.meta?.background && <span className="shrink-0 text-[12.1px] text-subtle">background</span>}
-            {item.status === 'done' && typeof exit === 'number' && exit !== 0 && <span className="shrink-0 font-mono text-[12.1px] text-danger">exit {exit}</span>}
+            {(item.status === 'done' || item.status === 'error') && typeof exit === 'number' && exit !== 0 && <span className="shrink-0 font-mono text-[12.1px] text-danger">exit {exit}</span>}
             <StatusMark item={item} />
           </>
         }
@@ -425,11 +512,12 @@ function BashTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactNode
         <div className="activity-output-surface activity-reveal border-t border-line">
           {preview ? (
             <div className="explore-viewport relative">
-              {output ? <OutputBlock text={output} follow maxHeight={112} /> : <div className="shimmer px-3 py-3 text-[12.7px] text-muted">Running command…</div>}
+              {output ? <OutputBlock text={output} follow maxHeight={78} /> : <div className="shimmer px-3 py-3 text-[12.7px] text-muted">Running command…</div>}
             </div>
-          ) : output ? (
+          ) : output || command ? (
             <div>
-              <OutputBlock text={output} command={command} highlight follow={isLive(item) || !!backgroundLog} maxHeight="none" />
+              {/* The full command shows even before it prints anything. */}
+              <OutputBlock text={output ?? ''} command={command} highlight follow={isLive(item) || !!backgroundLog} maxHeight="none" />
             </div>
           ) : item.status === 'error' && item.error ? (
             <div className="border-t border-line px-3 py-2 text-[13.2px] text-danger">{item.error}</div>
@@ -470,7 +558,8 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
       <div className="px-3 py-1">
       <Row
         icon={<Icon size={13.5} className="text-subtle" />}
-        title={item.title}
+        title={attemptedTitle(item) ?? item.title}
+        hint={failureReason(item)}
         detail={item.tool === 'memory' ? item.detail : item.detail && item.detail !== basename(item.detail) ? item.detail : undefined}
         live={isLive(item)}
         open={open}
@@ -485,7 +574,7 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
       </div>
       {(open || preview) && (
         <div className={cn('activity-output-surface activity-reveal relative border-t border-line', preview && 'explore-viewport')}>
-          <div ref={patchViewport} className={cn('py-2', preview && 'max-h-28 overflow-auto overscroll-contain')} onScroll={(event) => {
+          <div ref={patchViewport} className={cn('py-2', preview && 'max-h-[78px] overflow-auto overscroll-contain')} onScroll={(event) => {
             const target = event.currentTarget
             followPatch.current = target.scrollHeight - target.scrollTop - target.clientHeight < 24
           }}>
@@ -584,7 +673,8 @@ function GenericTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactN
     <div>
       <Row
         icon={<Icon size={13.5} className="text-subtle" />}
-        title={item.title}
+        title={attemptedTitle(item) ?? item.title}
+        hint={failureReason(item)}
         detail={item.tool === 'browser' || item.tool === 'image' ? undefined : item.detail}
         live={isLive(item)}
         open={open}
@@ -848,7 +938,7 @@ function AgentTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Rea
       const child = children[i]
       if (child.kind === 'tool') return toolActivityTitle(child)
       if (child.kind === 'assistant' && child.text.trim()) return child.text.trim().split('\n').pop()?.slice(0, 140) ?? ''
-      if (child.kind === 'reasoning') return 'Thinking'
+      if (child.kind === 'reasoning') return (child.streaming && thinkingTopic(child.text)) || 'Thinking'
     }
     return 'Starting'
   }, [children])

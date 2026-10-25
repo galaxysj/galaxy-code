@@ -290,6 +290,26 @@
 }
 .status-roll { display: inline-block; animation: status-roll 260ms cubic-bezier(0.2, 0, 0, 1) both; }
 
+/* A word that scrolls up when it changes: the old one leaves through the top, the new one rises from below.
+   It moves by margin, not transform or opacity, so a parent's text-clipped shimmer still covers it as one sweep. */
+.roll-slot { display: inline-grid; grid-template-rows: 1lh; height: 1lh; overflow: hidden; vertical-align: top; }
+.roll-slot > * { grid-area: 1 / 1; align-self: start; white-space: pre; }
+@keyframes roll-in {
+  from { margin-top: 1lh; }
+  to { margin-top: 0; }
+}
+@keyframes roll-out {
+  from { margin-top: 0; }
+  to { margin-top: -1lh; }
+}
+.blur-fade { animation: blur-fade 320ms ease-out both; }
+@keyframes blur-fade {
+  from { opacity: 0; filter: blur(4px); }
+  to { opacity: 1; filter: blur(0); }
+}
+.roll-in { animation: roll-in 280ms cubic-bezier(0.2, 0, 0, 1) both; }
+.roll-out { animation: roll-out 280ms cubic-bezier(0.2, 0, 0, 1) both; pointer-events: none; }
+
 .fold {
   display: grid;
   grid-template-rows: 0fr;
@@ -505,6 +525,9 @@
   .picker-chevron,
   .activity-reveal,
   .status-roll,
+  .roll-in,
+  .roll-out,
+  .blur-fade,
   .fold,
   .pop-in,
   .fade-in {
@@ -737,7 +760,8 @@
   min-height: 28px;
   padding: 2.5px 8px;
 }
-.composer-compact .composer-model { order: 2; width: 144px; flex-shrink: 0; justify-content: flex-end; }
+/* Sized to the model name and effort, so neither is cut off; very long names still truncate. */
+.composer-compact .composer-model { order: 2; width: auto; max-width: 260px; flex-shrink: 0; justify-content: flex-end; }
 .composer-compact .composer-model > button { max-width: 100%; }
 .composer-compact .composer-actions > button { order: 3; margin-left: 0; }
 

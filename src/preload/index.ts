@@ -67,6 +67,7 @@ const api: GalaxyApi = {
     createEntry: call('files.createEntry'),
     renameEntry: call('files.renameEntry'),
     trashEntry: call('files.trashEntry'),
+    copyEntries: call('files.copyEntries'),
     pickAttachments: call('files.pickAttachments'),
     attachFromPaths: call('files.attachFromPaths'),
     attachFromData: call('files.attachFromData'),

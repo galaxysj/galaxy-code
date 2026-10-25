@@ -1,5 +1,5 @@
-import { ChevronRight, Code, Copy, ExternalLink, FileImage, FilePlus, FileText, Folder, FolderOpen, FolderPlus, PanelRight, Pencil, Search, RotateCw, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { ChevronRight, ClipboardPaste, Code, Copy, ExternalLink, FileImage, FilePlus, FileText, Folder, FolderOpen, FolderPlus, PanelRight, Pencil, Search, RotateCw, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import type { ProjectFileEntry } from '@shared/types'
 import { basename, cn } from '../lib/utils'
 import type { OpenFile, PanelTab } from '../store'
@@ -101,6 +101,11 @@ export function ProjectFilesPane({ tab, available, renderFile }: { tab: Extract<
   const [creating, setCreating] = useState<{ parent: string; directory: boolean } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [menu, setMenu] = useState<{ entry: ProjectFileEntry | null; x: number; y: number } | null>(null)
+  /** Entries picked with click, Cmd-click and Shift-click, by relative path. */
+  const [marked, setMarked] = useState<Set<string>>(new Set())
+  const markAnchor = useRef<string | null>(null)
+  /** What Cmd+C copied, for Cmd+V. Only within this pane. */
+  const [clipboard, setClipboard] = useState<string[]>([])
   const menuAnchor = useRef<HTMLDivElement>(null)
   const notify = useStore((s) => s.notify)
   const load = useCallback(async (relativePath: string) => {
@@ -177,6 +182,67 @@ export function ProjectFilesPane({ tab, available, renderFile }: { tab: Extract<
       notify(`Moved ${entry.name} to the Trash.`)
     } catch (error) { notify(cleanError(error), 'error') }
   }
+  /** Entries in the order the tree shows them, folders' contents included when open. */
+  const visible = (): ProjectFileEntry[] => {
+    if (filter.trim()) return results
+    const walk = (entries: ProjectFileEntry[]): ProjectFileEntry[] => entries.flatMap((entry) => [entry, ...(entry.directory && expanded.has(entry.relativePath) ? walk(folders[entry.relativePath] ?? []) : [])])
+    return walk(folders[''] ?? [])
+  }
+  const entryAt = (relativePath: string): ProjectFileEntry | undefined => [...Object.values(folders).flat(), ...results].find((item) => item.relativePath === relativePath)
+  /** Click picks one entry, Cmd-click toggles one, Shift-click picks the range from the last pick. */
+  const pick = (entry: ProjectFileEntry, event: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }): void => {
+    if (event.shiftKey && markAnchor.current) {
+      const list = visible().map((item) => item.relativePath)
+      const from = list.indexOf(markAnchor.current)
+      const to = list.indexOf(entry.relativePath)
+      if (from >= 0 && to >= 0) {
+        setMarked(new Set(list.slice(Math.min(from, to), Math.max(from, to) + 1)))
+        return
+      }
+    }
+    markAnchor.current = entry.relativePath
+    if (event.metaKey || event.ctrlKey) {
+      setMarked((previous) => { const next = new Set(previous); if (next.has(entry.relativePath)) next.delete(entry.relativePath); else next.add(entry.relativePath); return next })
+      return
+    }
+    setMarked(new Set([entry.relativePath]))
+    choose(entry)
+  }
+  /** Where a paste goes: into the one picked folder, next to the picked file, or the project root. */
+  const pasteFolder = (): string => {
+    const first = [...marked][0]
+    const entry = first ? entryAt(first) : undefined
+    if (!entry) return selectedFolder()
+    return marked.size === 1 && entry.directory ? entry.relativePath : parentOf(entry.relativePath)
+  }
+  const paste = async (parent: string): Promise<void> => {
+    if (!clipboard.length) return
+    try {
+      const copied = await window.galaxy.files.copyEntries(tab.projectId, clipboard, parent, tab.chatId ?? undefined)
+      if (parent) setExpanded((previous) => new Set(previous).add(parent))
+      await load(parent)
+      setMarked(new Set(copied.map((entry) => entry.relativePath)))
+    } catch (error) { notify(cleanError(error), 'error') }
+  }
+  const trashMarked = async (): Promise<void> => {
+    // Inner entries go with their folder, so only trash the outermost ones.
+    const paths = [...marked].filter((path) => ![...marked].some((other) => other !== path && path.startsWith(`${other}/`)))
+    for (const path of paths) {
+      const entry = entryAt(path)
+      if (entry) await trash(entry)
+    }
+    setMarked(new Set())
+  }
+  const onTreeKey = (event: KeyboardEvent): void => {
+    if (event.target instanceof HTMLInputElement || !(event.metaKey || event.ctrlKey)) return
+    const key = event.key.toLowerCase()
+    if (key === 'a') setMarked(new Set(visible().map((entry) => entry.relativePath)))
+    else if (key === 'c') { if (!marked.size) return; setClipboard([...marked]); notify(marked.size === 1 ? 'Copied 1 item.' : `Copied ${marked.size} items.`) }
+    else if (key === 'v') void paste(pasteFolder())
+    else if (event.key === 'Backspace') { if (!marked.size) return; void trashMarked() }
+    else return
+    event.preventDefault()
+  }
   const copy = (text: string): void => {
     void navigator.clipboard.writeText(text).then(() => notify('Copied to the clipboard.'), () => notify('Could not copy to the clipboard.', 'error'))
   }
@@ -196,7 +262,7 @@ export function ProjectFilesPane({ tab, available, renderFile }: { tab: Extract<
       </div>
     }
     return <div key={entry.path}>
-      <button type="button" onClick={() => choose(entry)} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setMenu({ entry, x: event.clientX, y: event.clientY }) }} onDoubleClick={() => { if (!entry.directory) useStore.getState().openFile(entry.path) }} title={entry.relativePath} className={cn('flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pr-2 text-left text-[12px] transition-colors hover:bg-hover', selected?.path === entry.path ? 'bg-hover text-fg' : 'text-muted')} style={{ paddingLeft: 8 + depth * 14 }}>
+      <button type="button" onClick={(event) => pick(entry, event)} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); if (!marked.has(entry.relativePath)) { setMarked(new Set([entry.relativePath])); markAnchor.current = entry.relativePath } setMenu({ entry, x: event.clientX, y: event.clientY }) }} onDoubleClick={() => { if (!entry.directory) useStore.getState().openFile(entry.path) }} title={entry.relativePath} className={cn('flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pr-2 text-left text-[12px] transition-colors hover:bg-hover', marked.has(entry.relativePath) ? 'bg-active text-fg' : selected?.path === entry.path ? 'bg-hover text-fg' : 'text-muted')} style={{ paddingLeft: 8 + depth * 14 }}>
         {entry.directory ? <><ChevronRight size={12} className={cn('shrink-0 text-subtle transition-transform', open && 'rotate-90')} />{open ? <FolderOpen size={14} className="shrink-0 text-subtle" /> : <Folder size={14} className="shrink-0 text-subtle" />}</> : <><span className="w-3 shrink-0" /><FileIcon name={entry.name} /></>}
         <span className="min-w-0 truncate">{filter.trim() ? entry.relativePath : entry.name}</span>
         {loading.has(entry.relativePath) && <Spinner size={11} />}
@@ -222,11 +288,11 @@ export function ProjectFilesPane({ tab, available, renderFile }: { tab: Extract<
       </div>
       <div id={treeId} hidden={!treeOpen} className={cn('min-h-0 w-[40%] min-w-[150px] max-w-[220px] shrink-0 flex-col border-l border-line', treeOpen ? 'flex' : 'hidden')}>
         <div className="flex shrink-0 items-center gap-1 p-2"><div className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-line px-2"><Search size={12} className="shrink-0 text-subtle" /><input aria-label="Filter project files" placeholder="Filter files…" value={filter} onChange={(event) => setFilter(event.target.value)} className="min-w-0 flex-1 bg-transparent text-[11.5px] placeholder:text-subtle" /></div><IconButton label="New file" size="sm" onClick={() => startCreate(selectedFolder(), false)}><FilePlus size={12.5} /></IconButton><IconButton label="Refresh files" size="sm" onClick={() => setRevision((value) => value + 1)}><RotateCw size={12} /></IconButton></div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-3" onContextMenu={(event) => { event.preventDefault(); setMenu({ entry: null, x: event.clientX, y: event.clientY }) }}>{error && <div className="p-2 text-[11.5px] text-danger">{error}</div>}{loading.has('') || searching ? <div className="p-2"><Spinner size={13} className="text-subtle" /></div> : <>{createRow('', 0)}{rows(filter.trim() ? results : folders[''] ?? [])}</>}{filter.trim() && !searching && !results.length && <div className="p-2 text-[11.5px] text-subtle">No matching files.</div>}</div>
+        <div tabIndex={-1} onKeyDown={onTreeKey} className="min-h-0 flex-1 overflow-y-auto px-1 pb-3 outline-none" onContextMenu={(event) => { event.preventDefault(); setMenu({ entry: null, x: event.clientX, y: event.clientY }) }}>{error && <div className="p-2 text-[11.5px] text-danger">{error}</div>}{loading.has('') || searching ? <div className="p-2"><Spinner size={13} className="text-subtle" /></div> : <>{createRow('', 0)}{rows(filter.trim() ? results : folders[''] ?? [])}</>}{filter.trim() && !searching && !results.length && <div className="p-2 text-[11.5px] text-subtle">No matching files.</div>}</div>
       </div>
     </div>
     <div ref={menuAnchor} className="no-drag pointer-events-none fixed h-px w-px" style={{ left: menu?.x ?? 0, top: menu?.y ?? 0 }} />
-    <Popover open={!!menu} onClose={() => setMenu(null)} anchor={menuAnchor} placement="bottom-start" offset={0} className="w-56">
+    <Popover open={!!menu} onClose={() => setMenu(null)} anchor={menuAnchor} placement="bottom-start" offset={0} className="w-56 p-1">
       {menu && (() => {
         const entry = menu.entry
         // New entries go inside a folder, or next to a file.
@@ -239,6 +305,9 @@ export function ProjectFilesPane({ tab, available, renderFile }: { tab: Extract<
           </>}
           <MenuItem icon={<FilePlus size={14} />} label="New File…" onClick={() => act(() => startCreate(folder, false))} />
           <MenuItem icon={<FolderPlus size={14} />} label="New Folder…" onClick={() => act(() => startCreate(folder, true))} />
+          {(entry || clipboard.length > 0) && <MenuSeparator />}
+          {entry && <MenuItem icon={<Copy size={14} />} label={marked.size > 1 ? `Copy ${marked.size} Items` : 'Copy'} onClick={() => act(() => setClipboard(marked.size ? [...marked] : [entry.relativePath]))} />}
+          {clipboard.length > 0 && <MenuItem icon={<ClipboardPaste size={14} />} label={clipboard.length > 1 ? `Paste ${clipboard.length} Items` : 'Paste'} onClick={() => act(() => void paste(folder))} />}
           {entry && <>
             <MenuSeparator />
             <MenuItem icon={<Pencil size={14} />} label="Rename…" onClick={() => act(() => { setCreating(null); setRenaming(entry.relativePath) })} />
@@ -246,7 +315,7 @@ export function ProjectFilesPane({ tab, available, renderFile }: { tab: Extract<
             <MenuItem icon={<Copy size={14} />} label="Copy Relative Path" onClick={() => act(() => copy(entry.relativePath))} />
             <MenuItem icon={<FolderOpen size={14} />} label={REVEAL_LABEL} onClick={() => act(() => void window.galaxy.files.reveal(entry.path))} />
             <MenuSeparator />
-            <MenuItem icon={<Trash2 size={14} />} label="Move to Trash" danger onClick={() => act(() => void trash(entry))} />
+            <MenuItem icon={<Trash2 size={14} />} label={marked.size > 1 ? `Move ${marked.size} Items to Trash` : 'Move to Trash'} danger onClick={() => act(() => void (marked.size > 1 ? trashMarked() : trash(entry)))} />
           </>}
         </>
       })()}

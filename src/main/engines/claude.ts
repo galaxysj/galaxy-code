@@ -15,10 +15,10 @@ import { displayPath, errorMessage, isImagePath, oneLine, resolvePath, truncateE
 type Input = Record<string, unknown>
 
 /** Decode complete strings and the unfinished final string in a streamed edit input. */
-function streamedEditInput(json: string): Input {
+export function streamedEditInput(json: string): Input {
   try { return JSON.parse(json) as Input } catch { /* The tool input is still arriving. */ }
   const input: Input = {}
-  const fields = /"(file_path|path|old_string|new_string|content)"\s*:\s*"((?:\\.|[^"\\])*)/g
+  const fields = /"(file_path|path|old_string|new_string|content|patch)"\s*:\s*"((?:\\.|[^"\\])*)/g
   for (const match of json.matchAll(fields)) {
     let value = match[2]
     // Only trim an incomplete escape; preserve complete literal backslashes.

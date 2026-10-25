@@ -14,6 +14,8 @@ export class AgentTeam {
   private inboxes = new Map<string, AgentMessage[]>([['main', []]])
   private listeners = new Map<string, Set<() => void>>()
   private closed = false
+  /** Subagents keep running when the main turn is stopped; only this aborts them. */
+  private controller = new AbortController()
 
   constructor(private root: Session, private turn: Turn, private run: (session: Session, turn: Turn) => Promise<void>) {}
 
@@ -92,14 +94,15 @@ export class AgentTeam {
     session.team = this
     session.agentId = id
     const prompt = `You are a full-access Galaxy Code subagent. Your ID is ${id}; your parent is ${caller.agentId}. Use all available tools except user-question tools. Work autonomously. Use galaxy.Agent (or Agent) for further delegation and Message to coordinate with main or other agents. Never use read-only Explore/Review agents. Message action=list lists IDs, send delivers a message, read checks your inbox, and wait collects subagent reports. Check your inbox between work steps.\n\n${request.prompt}`
-    const turn: Turn = { ...this.turn, text: prompt, attachments: [], permissionMode: 'full', ultra: false, signal: request.signal }
+    // Composer modes such as Multitask apply to main only.
+    const turn: Turn = { ...this.turn, text: prompt, attachments: [], permissionMode: 'full', ultra: false, mode: undefined, signal: this.controller.signal }
     worker.job = (async () => {
       try {
         await this.run(session, turn)
         await this.wait(undefined, id)
         const reports = session.doc.items.filter((item) => item.kind === 'assistant' && !item.parentId)
         worker.report = reports.map((item) => item.kind === 'assistant' ? item.text : '').filter(Boolean).join('\n\n') || '(Finished without a report.)'
-        worker.state = request.signal.aborted ? 'error' : 'done'
+        worker.state = this.controller.signal.aborted ? 'error' : 'done'
         this.root.update<ToolItem>(id, { status: worker.state, output: worker.report, endedAt: Date.now(), meta: { ...this.root.item<ToolItem>(id)?.meta, agentType: 'general' } })
       } catch (error) {
         worker.report = errorMessage(error)
@@ -120,6 +123,9 @@ export class AgentTeam {
     })()
     return `Started full-access subagent ${id} (${request.description}). It is running in the background. Use Message to communicate or action=wait with to=${id} for its final report.`
   }
+
+  /** Stops every subagent in the team. */
+  abort(): void { this.controller.abort() }
 
   close(): void { this.closed = true; this.listeners.clear(); this.inboxes.clear() }
 }

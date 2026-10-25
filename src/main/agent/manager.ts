@@ -175,6 +175,9 @@ class ChatManager {
   async remove(chatId: string): Promise<void> {
     const session = this.sessions.get(chatId)
     if (session?.running) await this.stop(chatId)
+    // A deleted chat takes its subagents with it, including those of the run just stopped.
+    session?.team?.abort()
+    if (session) this.stopListening(session)
     disposeCodex(chatId)
     disposeAcp(chatId)
     const chat = store.chats.get(chatId)
@@ -210,8 +213,9 @@ class ChatManager {
 
   async stop(chatId: string): Promise<void> {
     const session = this.sessions.get(chatId)
-    // Stopping a chat that waits for an event ends the wait and the subagents it waited for.
-    session?.stopListening?.(true)
+    // Stopping a run stops the main agent only: subagents keep running and their events stay set.
+    // With no run in flight, it cancels the events and the subagents.
+    if (session && !session.controller) this.stopListening(session)
     if (!session?.controller) return
     // Stopping also drops anything waiting behind the current turn.
     if (session.chat.queued.length) session.patchChat({ queued: [] })
@@ -223,8 +227,6 @@ class ChatManager {
     const session = this.session(input.chatId)
     const text = input.text.trim()
     if (!text && input.attachments.length === 0) return
-    // The user speaking again replaces any event the agent was waiting for.
-    session.stopListening?.(false)
     // A new message starts from the reverted point; the undone turns can no longer be redone.
     if (session.chat.reverted || session.doc.engine.undone) {
       delete session.doc.engine.undone
@@ -254,9 +256,11 @@ class ChatManager {
   /**
    * Puts files and the timeline back to just before a user message. Every later turn's
    * edits go too. Fails without changing anything when a file it would restore was
-   * changed by someone else since the chat's last turn.
+   * changed by someone else since the chat's last turn. `messageOnly` leaves the files
+   * alone and only takes the turns out of the timeline. Returns why the files could not be restored, without throwing,
+   * so the renderer can offer a message-only revert; null when it reverted.
    */
-  async revert(chatId: string, itemId: string): Promise<void> {
+  async revert(chatId: string, itemId: string, messageOnly = false): Promise<string | null> {
     const session = this.session(chatId)
     if (session.running) throw new Error('Stop the chat before reverting.')
     const items = session.doc.items
@@ -264,23 +268,27 @@ class ChatManager {
     if (index < 0) throw new Error('That message is no longer in this chat.')
     const message = items[index] as UserItem
     const checkpoints = session.doc.engine.checkpoints ?? {}
-    const target = checkpoints[message.id]?.before
     const later = items.slice(index).filter((item): item is UserItem => item.kind === 'user' && !item.parentId)
-    if (!target || later.some((item) => !checkpoints[item.id]?.after)) {
-      throw new Error('This message was sent before checkpoints were recorded, so its changes cannot be reverted.')
+    let target = ''
+    let source = ''
+    let files: string[] = []
+    if (!messageOnly) {
+      if (!checkpoints[message.id]?.before || later.some((item) => !checkpoints[item.id]?.after)) {
+        return 'This message was sent before checkpoints were recorded, so its changes cannot be reverted.'
+      }
+      target = checkpoints[message.id]!.before
+      source = checkpoints[later[later.length - 1].id].after!
+      const now = await snapshot(chatId, await session.cwd())
+      if (!now) return 'This folder has too many files to revert safely.'
+      files = await changedFiles(chatId, target, source)
+      const touched = new Set(await changedFiles(chatId, source, now))
+      const conflicts = files.filter((path) => touched.has(path))
+      if (conflicts.length) return conflictMessage('revert', conflicts)
     }
-    const source = checkpoints[later[later.length - 1].id].after!
-    const root = await session.cwd()
-    const now = await snapshot(chatId, root)
-    if (!now) throw new Error('This folder has too many files to revert safely.')
-    const files = await changedFiles(chatId, target, source)
-    const touched = new Set(await changedFiles(chatId, source, now))
-    const conflicts = files.filter((path) => touched.has(path))
-    if (conflicts.length) throw new Error(conflictMessage('revert', conflicts))
     const revertedItemIds = new Set(items.slice(index).map((item) => item.id))
     await terminals.stopReverted(chatId, revertedItemIds)
     stopRevertedBackgroundProcesses(chatId, revertedItemIds)
-    await restoreFiles(chatId, root, target, files)
+    if (files.length) await restoreFiles(chatId, await session.cwd(), target, files)
 
     const { undone: _undone, ...engine } = session.doc.engine
     session.doc.engine.undone = { items: items.slice(index), engine: structuredClone(engine), files, target, source }
@@ -292,6 +300,7 @@ class ChatManager {
     disposeAcp(chatId)
     session.patchChat({ reverted: { text: message.text, attachments: message.attachments, ...(message.prompt ? { mentions: message.prompt } : {}) } })
     store.flushDocs()
+    return null
   }
 
   /** Undoes the last revert while nothing new has been sent. */
@@ -300,13 +309,16 @@ class ChatManager {
     if (session.running) throw new Error('Stop the chat before redoing.')
     const undone = session.doc.engine.undone
     if (!undone) throw new Error('There is nothing to redo.')
-    const root = await session.cwd()
-    const now = await snapshot(chatId, root)
-    if (!now) throw new Error('This folder has too many files to redo safely.')
-    const touched = new Set(await changedFiles(chatId, undone.target, now))
-    const conflicts = undone.files.filter((path) => touched.has(path))
-    if (conflicts.length) throw new Error(conflictMessage('redo', conflicts))
-    await restoreFiles(chatId, root, undone.source, undone.files)
+    // A message-only revert left the files alone, so there is nothing to put back.
+    if (undone.files.length) {
+      const root = await session.cwd()
+      const now = await snapshot(chatId, root)
+      if (!now) throw new Error('This folder has too many files to redo safely.')
+      const touched = new Set(await changedFiles(chatId, undone.target, now))
+      const conflicts = undone.files.filter((path) => touched.has(path))
+      if (conflicts.length) throw new Error(conflictMessage('redo', conflicts))
+      await restoreFiles(chatId, root, undone.source, undone.files)
+    }
     const checkpoints = session.doc.engine.checkpoints ?? {}
     session.doc.engine = { ...undone.engine, checkpoints: { ...(undone.engine.checkpoints ?? {}), ...checkpoints } }
     session.replaceItems([...session.doc.items, ...undone.items])
@@ -355,32 +367,53 @@ class ChatManager {
   }
 
   /**
-   * After a turn that set events: shows "Will resume after …" and waits. The first event
-   * to fire resumes the agent with what happened; the others are dropped.
+   * After a turn that set events: shows "Will resume after …" and listens. Each event resumes
+   * the agent once when it fires, and the others stay set, also while the user sends new messages.
    */
-  private listen(session: Session, events: PendingEvent[], work: { team: AgentTeam; controller: AbortController } | null): void {
-    let done = false
-    const stops: (() => void)[] = []
-    const end = (): void => {
-      done = true
-      for (const stop of stops) stop()
-      session.stopListening = null
-      session.patchChat({ resumeAfter: null })
-    }
-    session.stopListening = (abortWork) => {
-      if (done) return
-      end()
-      if (abortWork) work?.controller.abort()
-    }
-    session.patchChat({ resumeAfter: events.map((event) => event.label).join(' or ') })
+  /** `mode` is the composer mode of the turn that set the events; the resumed turn keeps it. */
+  private listen(session: Session, events: PendingEvent[], mode?: AgentMode): void {
     for (const event of events) {
-      if (done) break
-      stops.push(event.start((detail) => {
+      let done = false
+      let stop = (): void => {}
+      const entry = {
+        label: event.label,
+        cancel: () => {
+          if (done) return
+          done = true
+          stop()
+          session.listening.delete(entry)
+          this.showListening(session)
+        }
+      }
+      session.listening.add(entry)
+      stop = event.start((detail) => {
         if (done) return
-        end()
-        void this.runTurn(session, `The event you set fired: ${event.label}.\n\n${detail}\n\nContinue the task.`, [], undefined, { event: event.label })
-      }))
+        entry.cancel()
+        this.resume(session, `The event you set fired: ${event.label}.\n\n${detail}\n\nContinue the task.`, event.label, mode)
+      })
+      if (done) stop()
     }
+    this.showListening(session)
+  }
+
+  private showListening(session: Session): void {
+    // Only the most recently set event is shown.
+    const resumeAfter = [...session.listening].at(-1)?.label ?? null
+    if (session.chat.resumeAfter !== resumeAfter) session.patchChat({ resumeAfter })
+  }
+
+  /** Resumes the agent now, or after the turn in flight. */
+  private resume(session: Session, text: string, label: string, mode?: AgentMode): void {
+    if (session.running) session.pendingResumes.push({ text, label, mode })
+    else void this.runTurn(session, text, [], undefined, { event: label, mode })
+  }
+
+  /** Cancels every event, and aborts subagents still running from earlier turns. */
+  private stopListening(session: Session): void {
+    for (const entry of [...session.listening]) entry.cancel()
+    for (const team of session.background) team.abort()
+    session.background.clear()
+    session.pendingResumes = []
   }
 
   private async runTurn(session: Session, text: string, attachments: SendInput['attachments'], mentions: PromptMentions = { skills: [], files: [], chats: [], browser: false, tools: [] }, extra: { mode?: AgentMode; plan?: string; event?: string } = {}): Promise<void> {
@@ -394,7 +427,8 @@ class ChatManager {
 
     session.lastUserText = text
     session.events = []
-    const userItem = session.add<UserItem>({ kind: 'user', text, ...(extra.event ? { event: extra.event } : {}), attachments, prompt: mentions, ...(mentions.chips?.length ? { mentions: mentions.chips } : {}), ...(mode ? { mode } : {}), ...(extra.plan ? { plan: extra.plan } : {}) })
+    // A turn an event resumed still runs in its mode, but its message shows no mode label.
+    const userItem = session.add<UserItem>({ kind: 'user', text, ...(extra.event ? { event: extra.event } : {}), attachments, prompt: mentions, ...(mentions.chips?.length ? { mentions: mentions.chips } : {}), ...(mode && !extra.event ? { mode } : {}), ...(extra.plan ? { plan: extra.plan } : {}) })
     // Earlier conversation for an agent whose session was reset by a revert.
     const replay = session.doc.engine.replay ? replayTranscript(session.doc.items.slice(0, -1)) : ''
     const parent = this.parentContext(session)
@@ -415,7 +449,8 @@ class ChatManager {
         session.update<UserItem>(userItem.id, { revertible: true })
       }
 
-      const ultra = chat.ultra && model.ultraEffort !== null
+      // Multitask runs its own subagents and cannot be combined with Ultra.
+      const ultra = chat.ultra && model.ultraEffort !== null && mode !== 'multitask'
       delete session.doc.engine.replay
       const turn: Turn = {
         text: [parent.text, replay, text].filter(Boolean).join('\n\n'),
@@ -432,8 +467,8 @@ class ChatManager {
       }
       session.team = new AgentTeam(session, turn, (worker, workerTurn) => this.runEngine(worker, workerTurn))
       await this.runEngine(session, turn)
-      // Subagents an event waits for may outlive the turn.
-      if (!session.events.some((event) => event.keepsTeam)) await session.team.wait()
+      // Subagents an event waits for may outlive the turn, and so do they when the turn is stopped.
+      if (!session.events.some((event) => event.keepsTeam)) await Promise.race([session.team.wait(), new Promise((resolve) => controller.signal.addEventListener('abort', resolve, { once: true }))])
     } catch (err) {
       if (!controller.signal.aborted && !isAbortError(err)) {
         failed = true
@@ -441,20 +476,24 @@ class ChatManager {
         session.notice('error', message)
       }
     } finally {
-      const events = controller.signal.aborted || failed ? [] : session.events
+      // Events stay set when the turn is stopped, since the subagents they wait for keep running.
+      const events = failed ? [] : session.events
       session.events = []
       const team = session.team
-      const background = !!team && events.some((event) => event.keepsTeam) && team.hasRunning()
+      const background = !!team && team.hasRunning() && (controller.signal.aborted || events.some((event) => event.keepsTeam))
       if (!background) await team?.wait()
       browser.finishRun(session.id)
-      if (background) void team!.wait().then(() => team!.close())
+      if (background) {
+        session.background.add(team!)
+        void team!.wait().then(() => { session.background.delete(team!); team!.close() })
+      }
       else team?.close()
       session.team = null
       const interrupted = controller.signal.aborted
       session.cancelPending()
-      // Subagents left running keep their items live.
-      const running = background ? team!.runningIds() : null
-      session.settle(interrupted, running ? (item) => running.has(item.id) || !!item.parentId && running.has(item.parentId) : undefined)
+      // Subagents still running keep their items live, including those an earlier turn left in the background.
+      const running = new Set([...session.background].flatMap((entry) => [...entry.runningIds()]))
+      session.settle(interrupted, (item) => running.has(item.id) || !!item.parentId && running.has(item.parentId))
       const mark = session.doc.engine.checkpoints?.[userItem.id]
       if (mark) {
         const after = await this.checkpoint(session)
@@ -466,12 +505,15 @@ class ChatManager {
       session.patchChat({ status: failed ? 'error' : 'idle', updatedAt: Date.now(), unread: true })
       store.flushDocs()
 
+      if (events.length) this.listen(session, events, mode)
       const next = session.chat.queued[0]
+      const resume = interrupted ? undefined : session.pendingResumes.shift()
       if (next && (next.steer || (!interrupted && !failed))) {
         session.patchChat({ queued: session.chat.queued.slice(1) })
+        if (resume) session.pendingResumes.unshift(resume)
         void this.runTurn(session, next.text, next.attachments, next.mentions, { mode: next.mode, plan: next.plan })
-      } else if (events.length) {
-        this.listen(session, events, background ? { team: team!, controller } : null)
+      } else if (resume) {
+        void this.runTurn(session, resume.text, [], undefined, { event: resume.label, mode: resume.mode })
       }
     }
   }
@@ -509,7 +551,7 @@ class ChatManager {
 function conflictMessage(action: 'revert' | 'redo', paths: string[]): string {
   const list = paths.slice(0, 8).join('\n')
   const more = paths.length > 8 ? `\n…and ${paths.length - 8} more` : ''
-  return `Cannot ${action}: these files were changed outside this chat since then.\n\n${list}${more}\n\nUndo or commit those changes first.`
+  return `Cannot ${action}: these files were changed outside this chat since then.\n\n${list}${more}\n\nUndo or commit those changes first${action === 'revert' ? ', or revert the message only' : ''}.`
 }
 
 /** The visible conversation, for an agent starting over after a revert. */

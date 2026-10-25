@@ -5,7 +5,7 @@ export type { Effort, Subscription }
 
 export type PermissionMode = 'ask' | 'auto' | 'accept-edits' | 'full'
 /** Read-only modes for a single message. Without one the agent works normally. */
-export type AgentMode = 'ask' | 'plan'
+export type AgentMode = 'ask' | 'plan' | 'multitask'
 export type WorkspaceMode = 'local' | 'worktree'
 export type ThemeMode = 'system' | 'light' | 'dark'
 

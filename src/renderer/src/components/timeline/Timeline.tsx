@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import type { AssistantItem, Chat, FileDiff, Item, MentionChip, NoticeItem, ReasoningItem, ToolItem, TurnItem, UserItem } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, plural } from '../../lib/utils'
 import { GIT_COMMAND_ICON, gitCommandFor } from '../../lib/gitCommands'
-import { toolActivityTitle } from '../../lib/toolActivity'
+import { thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
 import { useStore } from '../../store'
 import { DiffStat } from '../DiffView'
 import { Composer } from '../Composer'
@@ -11,7 +11,7 @@ import { Markdown } from '../Markdown'
 import { FileIcon as FileTypeIcon } from '../ProjectFiles'
 import { cleanError } from '../Settings'
 import { Button, CopyButton, IconButton, Modal } from '../ui'
-import { ExploreGroup, isBrowsing, isCompactable, isExplore, isHiddenAgentMessage, PresentTool, ToolBlock, type TimelineContext } from './Tools'
+import { ExploreGroup, RollingText, isBrowsing, isCompactable, isExplore, isHiddenAgentMessage, PresentTool, ToolBlock, type TimelineContext } from './Tools'
 
 const CHIP_ICON = { skill: Package, file: FileText, chat: MessageCircle, browser: Globe, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
 
@@ -45,10 +45,14 @@ const UserMessage = memo(function UserMessage({ item, chatId }: { item: UserItem
   const openFile = useStore((s) => s.openFile)
   const idle = useStore((s) => s.chats[chatId]?.status !== 'running' && s.chats[chatId]?.status !== 'awaiting')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const revert = (): void => {
+  const [error, setError] = useState<{ text: string; files: boolean } | null>(null)
+  const revert = (messageOnly = false): void => {
+    setError(null)
     setBusy(true)
-    window.galaxy.chats.revert(chatId, item.id).catch((err: unknown) => setError(cleanError(err))).finally(() => setBusy(false))
+    window.galaxy.chats.revert(chatId, item.id, messageOnly)
+      .then((problem) => { if (problem) setError({ text: problem, files: true }) })
+      .catch((err: unknown) => setError({ text: cleanError(err), files: false }))
+      .finally(() => setBusy(false))
   }
   return (
     <div className="group/user flex flex-col items-end pb-1 pt-5 first:pt-0">
@@ -69,7 +73,7 @@ const UserMessage = memo(function UserMessage({ item, chatId }: { item: UserItem
           )}
         </div>
       )}
-      {item.mode && <div className="mb-1 text-[11.5px] font-medium text-subtle">{item.mode === 'plan' ? 'Plan mode' : 'Ask mode'}</div>}
+      {item.mode && <div className="mb-1 text-[11.5px] font-medium text-subtle">{item.mode === 'plan' ? 'Plan mode' : item.mode === 'multitask' ? 'Multitask mode' : 'Ask mode'}</div>}
       {item.plan ? (
         <div role="button" tabIndex={0} title="Open the plan" onClick={() => openFile(item.plan!)} onKeyDown={(event) => { if (event.key === 'Enter') openFile(item.plan!) }} className="-mx-2.5 flex flex-col self-stretch rounded-xl bg-elev py-2 pl-2.5 pr-1.5 text-left shadow-[0_0_0_1px_var(--border)]">
           <div className="flex items-center gap-2">
@@ -92,13 +96,13 @@ const UserMessage = memo(function UserMessage({ item, chatId }: { item: UserItem
             <MessageText text={item.text} mentions={item.mentions} />
           </div>
           {item.revertible && idle && (
-            <IconButton label="Revert to before this message" size="sm" disabled={busy} onClick={revert} className="shrink-0 text-subtle">
+            <IconButton label="Revert to before this message" size="sm" disabled={busy} onClick={() => revert()} className="shrink-0 text-subtle">
               <Undo2 size={14} />
             </IconButton>
           )}
         </div>
       )}
-      {error && <ErrorDialog title="Could not revert" message={error} onClose={() => setError(null)} />}
+      {error && <ErrorDialog title="Could not revert" message={error.text} onClose={() => setError(null)} action={error.files ? { label: 'Revert Message Only', onClick: () => revert(true) } : undefined} />}
       <div className="mt-0.5 flex h-5 items-center opacity-0 transition-opacity group-hover/user:opacity-100">
         <CopyButton text={item.text} label="Copy message" size={12} />
       </div>
@@ -106,7 +110,7 @@ const UserMessage = memo(function UserMessage({ item, chatId }: { item: UserItem
   )
 })
 
-export function ErrorDialog({ title, message, onClose }: { title: string; message: string; onClose(): void }): ReactNode {
+export function ErrorDialog({ title, message, onClose, action }: { title: string; message: string; onClose(): void; action?: { label: string; onClick(): void } }): ReactNode {
   return (
     <Modal onClose={onClose} className="w-[420px] max-w-full p-5">
       <div className="flex items-start gap-3">
@@ -116,7 +120,8 @@ export function ErrorDialog({ title, message, onClose }: { title: string; messag
           <div className="selectable mt-1.5 whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-muted">{message}</div>
         </div>
       </div>
-      <div className="mt-5 flex justify-end">
+      <div className="mt-5 flex justify-end gap-2">
+        {action && <Button size="sm" onClick={action.onClick}>{action.label}</Button>}
         <Button variant="primary" size="sm" onClick={onClose}>OK</Button>
       </div>
     </Modal>
@@ -387,12 +392,12 @@ function Blocks({ blocks, ctx, running = false, stickyMessages = false }: { bloc
   )
 }
 
-/** What the agent is doing right now, in a few words, for the collapsed status line. */
-function liveStatus(items: Item[]): string {
+/** What the agent is doing right now, in a few words, for the collapsed status line. Null while it writes its reply. */
+function liveStatus(items: Item[]): string | null {
   for (let index = items.length - 1; index >= 0; index--) {
     const item = items[index]
-    if (item.kind === 'reasoning' && item.streaming) return 'Thinking'
-    if (item.kind === 'assistant' && item.streaming && item.text.trim()) return 'Writing a response'
+    if (item.kind === 'reasoning' && item.streaming) return thinkingTopic(item.text) ?? 'Thinking'
+    if (item.kind === 'assistant' && item.streaming && item.text.trim()) return null
     if (item.kind === 'tool' && (item.status === 'running' || item.status === 'pending')) {
       const title = toolActivityTitle(item)
       return item.tool === 'bash' ? `Running ${title.charAt(0).toLowerCase()}${title.slice(1)}` : title
@@ -409,9 +414,9 @@ function WorkingIndicator({ since, status = 'Planning Next Moves' }: { since: nu
   }, [])
   const elapsed = Date.now() - since
   return (
-    <div className="activity-reveal flex h-7 items-center gap-2 overflow-hidden text-[13.8px] font-[450]">
-      {/* Each new status rolls up into place. */}
-      <span key={status} className="status-roll min-w-0 truncate"><span className="shimmer">{status}</span></span>
+    <div className="flex h-7 items-center gap-2 overflow-hidden text-[13.8px] font-[450]">
+      {/* Only the words that change roll up, the old ones out the top. */}
+      <span className="shimmer min-w-0 truncate"><RollingText text={status} /></span>
       {elapsed > 5000 && <span className="font-mono text-[11px] tabular-nums text-subtle">{formatDuration(elapsed)}</span>}
     </div>
   )
@@ -510,6 +515,7 @@ export function Timeline({ chat, items, root }: TimelineProps): ReactNode {
 
   const lastUser = [...top].reverse().find((i) => i.kind === 'user')
   const hasActivity = top.slice(lastUser ? top.indexOf(lastUser) + 1 : 0).some(hasLiveActivity)
+  const status = liveStatus(top.slice(lastUser ? top.indexOf(lastUser) + 1 : 0))
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -524,7 +530,7 @@ export function Timeline({ chat, items, root }: TimelineProps): ReactNode {
             </div>
           )}
           {chat.reverted && chat.status !== 'running' && <RevertedEditor key={chat.reverted.text} chat={chat} />}
-          {chat.status === 'running' && (!expand ? <WorkingIndicator since={lastUser?.ts ?? Date.now()} status={liveStatus(top.slice(lastUser ? top.indexOf(lastUser) + 1 : 0))} /> : !hasActivity && <WorkingIndicator since={lastUser?.ts ?? Date.now()} />)}
+          {chat.status === 'running' && (!expand ? status !== null && <WorkingIndicator since={lastUser?.ts ?? Date.now()} status={status} /> : !hasActivity && <WorkingIndicator since={lastUser?.ts ?? Date.now()} />)}
         </div>
       </div>
       {!atBottom && (
