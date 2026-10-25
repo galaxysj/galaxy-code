@@ -337,21 +337,9 @@
   --fg-subtle: #808080;
 }
 
+/* Tool output sits on the chat surface's color, so it follows the theme. */
 .activity-output-surface {
-  --bg: #ffffff;
-  --bg-elev: #ffffff;
-  --bg-inset: #ffffff;
-  --fg: #26251e;
-  --fg-muted: #6c6b63;
-  --fg-subtle: #9c9b93;
-  --green: #1f8a52;
-  --red: #c9382c;
-  --border: rgba(38, 37, 30, 0.1);
-  --diff-add: rgba(31, 138, 82, 0.1);
-  --diff-add-gutter: rgba(31, 138, 82, 0.28);
-  --diff-del: rgba(201, 56, 44, 0.09);
-  --diff-del-gutter: rgba(201, 56, 44, 0.26);
-  background: #ffffff;
+  background: var(--bg);
   color: var(--fg);
 }
 

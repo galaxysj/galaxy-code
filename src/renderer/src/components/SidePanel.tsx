@@ -835,10 +835,10 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
               key={entry.id}
               data-tab-id={entry.id}
               onContextMenu={(event) => { event.preventDefault(); setContext({ id: entry.id, x: event.clientX, y: event.clientY }) }}
-              className={cn('tab-enter group/tab flex h-8 items-center rounded-xl border px-2.5 text-[12px] transition-all', active ? 'relative border-black/6 bg-white text-[#25251f] shadow-[0_2px_6px_rgba(0,0,0,0.08)]' : 'border-transparent text-muted hover:bg-hover hover:text-fg')}
+              className={cn('tab-enter group/tab flex h-8 items-center rounded-xl border px-2.5 text-[12px] transition-all', active ? 'relative border-line bg-elev text-fg shadow-[0_2px_6px_rgba(0,0,0,0.08)]' : 'border-transparent text-muted hover:bg-hover hover:text-fg')}
               style={entry.pinned ? { flex: '0 0 54px', width: 54 } : { flex: '1 1 200px', minWidth: 105, maxWidth: 220 }}
             >
-              {renaming === entry.id ? <input autoFocus value={renameValue} aria-label="Tab name" onChange={(event) => setRenameValue(event.target.value)} onBlur={commitRename} onKeyDown={(event) => { if (event.key === 'Enter') commitRename(); if (event.key === 'Escape') setRenaming(null) }} className="min-w-0 flex-1 rounded border border-line-strong bg-white px-1 text-[12px] text-[#25251f]" /> : <button type="button" onClick={() => setPanel(true, entry.id)} className="flex h-full min-w-0 flex-1 items-center gap-2" title={title}>
+              {renaming === entry.id ? <input autoFocus value={renameValue} aria-label="Tab name" onChange={(event) => setRenameValue(event.target.value)} onBlur={commitRename} onKeyDown={(event) => { if (event.key === 'Enter') commitRename(); if (event.key === 'Escape') setRenaming(null) }} className="min-w-0 flex-1 rounded border border-line-strong bg-elev px-1 text-[12px] text-fg" /> : <button type="button" onClick={() => setPanel(true, entry.id)} className="flex h-full min-w-0 flex-1 items-center gap-2" title={title}>
                 {entry.type === 'browser' ? <TabFavicon src={browserStates[entry.id]?.favicon} /> : <Icon size={14} className="shrink-0" />}
                 {!entry.pinned && <span className="min-w-0 truncate">{title}</span>}
               </button>}
@@ -847,7 +847,7 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
                 title="Close tab"
                 aria-label={`Close ${title}`}
                 onClick={() => closeTab(entry.id)}
-                className={cn('ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-md transition-opacity group-hover/tab:opacity-100', active ? 'text-[#777770] opacity-100 hover:bg-black/8 hover:text-black' : 'text-subtle opacity-0 hover:bg-hover hover:text-fg')}
+                className={cn('ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-md transition-opacity group-hover/tab:opacity-100', active ? 'text-muted opacity-100 hover:bg-active hover:text-fg' : 'text-subtle opacity-0 hover:bg-hover hover:text-fg')}
               >
                 <X size={11} />
               </button>

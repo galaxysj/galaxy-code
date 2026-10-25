@@ -8,7 +8,7 @@ import { rememberedRunOptions, useChatId, useRunConfig, useStore } from '../stor
 import { Popover, Switch } from './ui'
 
 function FastIcon({ size = 12 }: { size?: number }): ReactNode {
-  return <Zap size={size} fill="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-black" />
+  return <Zap size={size} fill="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-fg" />
 }
 
 function UltrafastIcon({ size = 12 }: { size?: number }): ReactNode {
@@ -473,7 +473,7 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
                 onClick={() => setRunOptions(nextSpeed(), chatId)}
                 className={cn(
                   '-ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors disabled:opacity-25',
-                  fast ? 'text-black hover:bg-hover' : 'text-muted hover:bg-hover hover:text-fg'
+                  fast ? 'text-fg hover:bg-hover' : 'text-muted hover:bg-hover hover:text-fg'
                 )}
               >
                 {ultrafast ? <UltrafastIcon size={13.5} /> : fast ? <FastIcon size={13.5} /> : <Zap size={13.5} strokeWidth={1.5} />}

@@ -7,3 +7,4 @@ dist
 build/icon.iconset
 *.tsbuildinfo
 *.pdf
+docs
