@@ -58,6 +58,7 @@ function defaultSettings(): Settings {
     completionModelId: null,
     inlineModelId: null,
     instantCommit: false,
+    instantPush: false,
     commitMessageModelId: null,
     autoApprovalModelId: null,
     openRouterBaseUrl: 'https://openrouter.ai/api/v1',

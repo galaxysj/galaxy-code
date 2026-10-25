@@ -528,37 +528,3 @@ export async function runClaude(session: Session, turn: Turn): Promise<void> {
   }
   if (failure && !turn.signal.aborted) throw new Error(failure)
 }
-
-/** One tool-free reply from the Claude account, for utility text such as commit messages. */
-export async function claudeComplete(model: string, system: string, prompt: string, cwd: string, signal: AbortSignal): Promise<string> {
-  const account = store.settings.accounts.claude
-  const executable = account.binaryPath.trim() ? await which(account.binaryPath.trim()) : await which('claude')
-  const controller = new AbortController()
-  const onAbort = (): void => controller.abort()
-  signal.addEventListener('abort', onAbort, { once: true })
-  try {
-    const stream = query({
-      prompt,
-      options: {
-        cwd,
-        model,
-        abortController: controller,
-        tools: [],
-        maxTurns: 1,
-        settingSources: [],
-        persistSession: false,
-        systemPrompt: system,
-        env: { ...(process.env as Record<string, string>), CLAUDE_AGENT_SDK_CLIENT_APP: 'galaxy-code/0.1.0' },
-        ...(executable ? { pathToClaudeCodeExecutable: executable } : {})
-      }
-    })
-    for await (const message of stream) {
-      if (message.type !== 'result') continue
-      if (message.subtype === 'success') return message.result
-      throw new Error(`Claude could not reply (${message.subtype})`)
-    }
-    throw new Error('Claude ended without a reply')
-  } finally {
-    signal.removeEventListener('abort', onAbort)
-  }
-}

@@ -5,6 +5,7 @@ import type { UiEvent } from '@shared/types'
 import { manager } from './agent/manager'
 import { disposeAllAcp } from './engines/acp'
 import { disposeAllCodex } from './engines/codex'
+import { disposeAccountWorkers } from './services/accountWorkers'
 import { registerIpc } from './ipc'
 import { bridge } from './services/bridge'
 import { browser } from './services/browser'
@@ -195,6 +196,7 @@ if (!gotLock) {
     killBackgroundProcesses()
     terminals.closeAll()
     disposeAllCodex()
+    disposeAccountWorkers()
     disposeAllAcp()
     bridge.shutdown()
     void mcp.shutdown()

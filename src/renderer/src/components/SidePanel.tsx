@@ -6,7 +6,6 @@ import '@xterm/xterm/css/xterm.css'
 import {
   ArrowLeft,
   ArrowRight,
-  ArrowUpFromLine,
   ChevronDown,
   Copy,
   Pin,
@@ -23,6 +22,7 @@ import {
   MessageSquareDiff,
   MessagesSquare,
   GitCompare,
+  CloudUpload,
   GitCommitHorizontal,
   Plus,
   PanelRight,
@@ -44,10 +44,10 @@ import { DiffView, DiffStat } from './DiffView'
 import { AgentTimeline } from './timeline/Timeline'
 import { ProjectFilesPane } from './ProjectFiles'
 import { CodeEditor, InlineEditBox } from './CodeEditor'
-import { InlineModel } from '@shared/models'
+import { InlineModel, usableUtilityModels } from '@shared/models'
 import { CloseSideChatDialog, SideChatPane } from './SideChat'
 import { cleanError } from './Settings'
-import { runGitCommand } from '../lib/gitCommands'
+import { isInstant, runGitCommand } from '../lib/gitCommands'
 import type { GitCommand } from '@shared/types'
 
 // Browser
@@ -377,7 +377,8 @@ function TerminalPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean })
   openAsk.current = () => {
     if (!output?.exited) setAsk((current) => current ?? { instruction: '', busy: false, error: '' })
   }
-  const modelId = InlineModel.some((m) => m.ID === inlineModelId) ? (inlineModelId as string) : InlineModel[0].ID
+  const accounts = useStore((s) => s.settings.accounts)
+  const modelId = usableUtilityModels(InlineModel, accounts).some((m) => m.ID === inlineModelId) ? (inlineModelId as string) : InlineModel[0].ID
 
   const generate = async (): Promise<void> => {
     if (!ask || !ask.instruction.trim() || ask.busy) return
@@ -569,7 +570,6 @@ function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): 
   const items = useStore((s) => chatId ? s.items[chatId] : undefined)
   const chatStatus = useStore((s) => chatId ? s.chats[chatId]?.status : undefined)
   const [git, setGit] = useState<{ isRepo: boolean; dirty: boolean; hasRemote: boolean } | null>(null)
-  const [pushing, setPushing] = useState(false)
   const [gitMenu, setGitMenu] = useState(false)
   // An action picked from the menu takes the main button until it finishes.
   const [chosen, setChosen] = useState<'commit' | 'commit-push' | 'push' | null>(null)
@@ -619,8 +619,8 @@ function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): 
     if (committing) return
     setCommitting(command)
     commitStarted.current = false
-    if (useStore.getState().settings.instantCommit) {
-      // No agent turn: loading ends when the commit does.
+    if (isInstant(command)) {
+      // No agent turn: loading ends when the commit or push does.
       await runGitCommand(command, chatId ?? null, tab.cwd)
       setCommitting(null)
       setChosen(null)
@@ -634,20 +634,6 @@ function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): 
       setCommitting(null)
       setChosen(null)
     }, 5000)
-  }
-  const push = async (): Promise<void> => {
-    if (pushing) return
-    setPushing(true)
-    try {
-      const result = await window.galaxy.review.push(tab.cwd)
-      useStore.getState().notify(`Pushed ${result.branch} to ${result.remote}.`)
-      setReload((value) => value + 1)
-    } catch (error) {
-      useStore.getState().notify(cleanError(error), 'error')
-    } finally {
-      setPushing(false)
-      setChosen(null)
-    }
   }
   const initialize = async (): Promise<void> => {
     if (initializing) return
@@ -709,11 +695,11 @@ function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): 
     return () => { cancelled = true }
   }, [tab.cwd, visible, reload, tab.nonce, mode, commit])
   // Main action: Commit & Push, Commit when there is no remote, Push once everything is committed.
-  const gitBusy = pushing || committing !== null
+  const gitBusy = committing !== null
   const gitActions = {
     'commit-push': { label: 'Commit & Push', icon: committing === 'commit-push' ? <Spinner size={12} /> : <GitCommitHorizontal size={13} />, run: () => void askAgent('commit-push') },
     commit: { label: 'Commit', icon: committing === 'commit' ? <Spinner size={12} /> : <GitCommitHorizontal size={13} />, run: () => void askAgent('commit') },
-    push: { label: 'Push', icon: pushing ? <Spinner size={12} /> : <ArrowUpFromLine size={12.5} />, run: () => void push() }
+    push: { label: 'Push', icon: committing === 'push' ? <Spinner size={12} /> : <CloudUpload size={13} />, run: () => void askAgent('push') }
   }
   // Committing needs uncommitted changes, and pushing needs a remote.
   const gitDisabled = (action: keyof typeof gitActions): boolean =>

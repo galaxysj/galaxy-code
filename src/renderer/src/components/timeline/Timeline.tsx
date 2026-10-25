@@ -2,6 +2,7 @@ import { ArrowDown, ChevronRight, CircleAlert, CircleStop, Clock, File as FileIc
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AssistantItem, Chat, FileDiff, Item, MentionChip, NoticeItem, ReasoningItem, ToolItem, TurnItem, UserItem } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, plural } from '../../lib/utils'
+import { GIT_COMMAND_ICON, gitCommandFor } from '../../lib/gitCommands'
 import { toolActivityTitle } from '../../lib/toolActivity'
 import { useStore } from '../../store'
 import { DiffStat } from '../DiffView'
@@ -22,7 +23,8 @@ function MessageText({ text, mentions }: { text: string; mentions?: MentionChip[
   return text.split(pattern).map((part, index) => {
     const chip = byToken.get(part)
     if (!chip) return part
-    const Icon = CHIP_ICON[chip.kind]
+    const command = chip.kind === 'git' ? gitCommandFor(chip.label) : undefined
+    const Icon = command ? GIT_COMMAND_ICON[command] : CHIP_ICON[chip.kind]
     return (
       <span key={index} title={chip.title ?? part} className="whitespace-nowrap text-link" style={chip.kind === 'git' ? { color: 'var(--orange)' } : undefined}>
         <span className="mr-[0.3em] inline-flex h-[1em] items-center align-[-0.15em]">{chip.kind === 'file' ? <FileTypeIcon name={chip.label} size={11} /> : <Icon size={13} />}</span>

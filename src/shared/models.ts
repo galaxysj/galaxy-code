@@ -780,12 +780,15 @@ export const CompletionModel: AccountUtilityModelSpec[] = [
   { DisplayName: 'GPT-6 Luna', ID: 'gpt-6-luna', Subscription: 'Codex' }
 ]
 
-/** Ctrl+I inline edits in the file editor. The edit box picks one; the first entry is the default. Runs on OpenRouter. */
-export const InlineModel: UtilityModelSpec[] = [
-  { DisplayName: 'Haiku', ID: '~anthropic/claude-haiku-latest' },
-  { DisplayName: 'Luna', ID: '~openai/gpt-luna-latest' },
-  { DisplayName: 'Gemini Flash', ID: '~google/gemini-flash-latest' },
-  { DisplayName: 'Sonnet', ID: '~anthropic/claude-sonnet-latest' }
+/** Ctrl+I inline edits in the file editor and terminal. The edit box picks one; the first entry is the default. Account entries show only while that account is on. */
+export const InlineModel: AccountUtilityModelSpec[] = [
+  { DisplayName: 'Haiku', ID: '~anthropic/claude-haiku-latest', Subscription: 'Default' },
+  { DisplayName: 'Luna', ID: '~openai/gpt-luna-latest', Subscription: 'Default' },
+  { DisplayName: 'Gemini Flash', ID: '~google/gemini-flash-latest', Subscription: 'Default' },
+  { DisplayName: 'Sonnet', ID: '~anthropic/claude-sonnet-latest', Subscription: 'Default' },
+  { DisplayName: 'Haiku 5.5', ID: 'claude-haiku-5-5', Subscription: 'Claude' },
+  { DisplayName: 'Sonnet 5.5', ID: 'claude-sonnet-5-5', Subscription: 'Claude' },
+  { DisplayName: 'GPT-6 Luna', ID: 'gpt-6-luna', Subscription: 'Codex' }
 ]
 
 /** Writes the message for Instant commit. Picked in Settings > Git; subscription entries show only while that account is on. */

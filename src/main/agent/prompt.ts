@@ -109,7 +109,10 @@ const GIT_COMMANDS = {
 The user asked you to commit. Check \`git status\` and the diff, stage the changes that belong in this commit, and commit them with a concise message in the style of the repository's recent commits. Leave out files that look unrelated or should not be committed, such as secrets or build output, and say which ones you left out. Do not push.`,
   'commit-push': `# Commit and push
 
-The user asked you to commit and push. Check \`git status\` and the diff, stage the changes that belong in this commit, and commit them with a concise message in the style of the repository's recent commits. Leave out files that look unrelated or should not be committed, such as secrets or build output, and say which ones you left out. Then push the current branch; if it has no upstream, push it with \`git push -u\` to the repository's remote. Report the commit and where it was pushed.`
+The user asked you to commit and push. Check \`git status\` and the diff, stage the changes that belong in this commit, and commit them with a concise message in the style of the repository's recent commits. Leave out files that look unrelated or should not be committed, such as secrets or build output, and say which ones you left out. Then push the current branch; if it has no upstream, push it with \`git push -u\` to the repository's remote. Report the commit and where it was pushed.`,
+  push: `# Push
+
+The user asked you to push. Push the current branch without committing anything; if it has no upstream, push it with \`git push -u\` to the repository's remote. If there are uncommitted changes, leave them alone and mention them. Report where it was pushed.`
 }
 
 export function inlineMentionsBlock(mentions: PromptMentions): string {

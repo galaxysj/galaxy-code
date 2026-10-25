@@ -1,7 +1,7 @@
 import { diffLines } from 'diff'
 import { CornerDownLeft, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { InlineModel } from '@shared/models'
+import { InlineModel, usableUtilityModels, utilityModelLabel } from '@shared/models'
 import { applyMonacoTheme, monaco } from '../lib/monaco'
 import { useStore } from '../store'
 import { Dropdown, Spinner } from './ui'
@@ -244,7 +244,8 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onCompletingCha
 
   // Inline edit
 
-  const modelId = InlineModel.some((m) => m.ID === inlineModelId) ? (inlineModelId as string) : InlineModel[0].ID
+  const accounts = useStore((s) => s.settings.accounts)
+  const modelId = usableUtilityModels(InlineModel, accounts).some((m) => m.ID === inlineModelId) ? (inlineModelId as string) : InlineModel[0].ID
 
   /** Puts the code back to how it was before the edit started and removes everything the edit drew. */
   const restore = (): void => {
@@ -529,7 +530,9 @@ export function InlineEditBox({
   useEffect(() => {
     if (!proposal) input.current?.focus()
   }, [proposal])
-  const model = InlineModel.find((m) => m.ID === modelId) ?? InlineModel[0]
+  const accounts = useStore((s) => s.settings.accounts)
+  const models = usableUtilityModels(InlineModel, accounts)
+  const model = models.find((m) => m.ID === modelId) ?? InlineModel[0]
   return (
     <div
       className="absolute inset-x-3 z-20 mx-auto max-w-[560px] rounded-xl border border-line-strong bg-elev px-3.5 pb-3 pt-2.5 font-sans shadow-pop"
@@ -575,7 +578,7 @@ export function InlineEditBox({
           value={model.ID as string}
           disabled={state.busy}
           onChange={onModel}
-          options={InlineModel.map((entry) => ({ value: entry.ID as string, label: entry.DisplayName }))}
+          options={models.map((entry) => ({ value: entry.ID, label: utilityModelLabel(entry) }))}
           placement="top-start"
           className="h-auto! gap-1! bg-transparent! px-0! text-muted! hover:text-fg!"
         />

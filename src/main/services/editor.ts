@@ -3,7 +3,6 @@ import { basename, dirname } from 'node:path'
 import { CompletionModel, InlineModel, usableUtilityModels } from '@shared/models'
 import { store } from '../store'
 import { expandHome } from '../util'
-import { streamChat } from './openrouter'
 import { runUtilityModel } from './utilityModel'
 
 export interface CompletionRequest {
@@ -251,10 +250,12 @@ export async function completeCode(request: CompletionRequest): Promise<Completi
       model,
       HOLE_FILLER,
       `${folder ? `Files in the same folder:\n${folder}\n\n` : ''}File: ${basename(request.path)}\n\n<QUERY>\n${prefix}{{FILL_HERE}}${suffix}\n</QUERY>\nTASK: Fill the {{FILL_HERE}} hole.${multiline ? '' : ' Keep it to one line.'} Answer only with the completion in <COMPLETION></COMPLETION>, and nothing else.`,
-      dirname(expandHome(request.path)),
-      controller.signal,
-      // Completions must come back fast, so no thinking.
-      { reasoning: { effort: 'none', exclude: true }, max_tokens: multiline ? 500 : 120, temperature: 0 }
+      {
+        cwd: dirname(expandHome(request.path)),
+        signal: controller.signal,
+        // Completions must come back fast, so no thinking.
+        openRouterExtra: { reasoning: { effort: 'none', exclude: true }, max_tokens: multiline ? 500 : 120, temperature: 0 }
+      }
     )
     const nextMatch = raw.match(/<NEXT>([\s\S]*?)<\/NEXT>/)
     const text = postprocess(raw.replace(/<NEXT>[\s\S]*?(<\/NEXT>|$)/, ''), prefix, suffix, multiline, model.ID)
@@ -283,31 +284,27 @@ export function cancelInlineEdit(requestId: string): void {
 
 /** Rewrites the selection, or writes new lines after the cursor's line. Text streams through onText as it arrives. */
 export async function inlineEdit(request: InlineEditRequest, onText: (text: string) => void): Promise<string> {
-  const model = InlineModel.find((m) => m.ID === request.modelId) ?? InlineModel[0]
+  const model = usableUtilityModels(InlineModel, store.settings.accounts).find((m) => m.ID === request.modelId) ?? InlineModel[0]
   const target = request.selection
     ? `Rewrite the code between <SELECTION> and </SELECTION>. Reply with only the replacement for it, keeping its indentation.`
     : `Write new code to go on the lines right after the line that ends at <CURSOR>. Reply with only those new lines, indented to fit the surrounding code.`
   const marked = request.selection ? `${request.before}<SELECTION>${request.selection}</SELECTION>${request.after}` : `${request.before}<CURSOR>${request.after}`
   const controller = new AbortController()
   running.set(request.requestId, controller)
-  let text = ''
   try {
-    const result = await streamChat({
-      model: model.ID,
-      messages: [
-        { role: 'system', content: `You edit code inside an editor. ${target} No explanation and no code fences.` },
-        { role: 'user', content: `File: ${basename(request.path)}\n\n${marked.slice(0, 200_000)}\n\nInstruction: ${request.instruction}` }
-      ],
-      signal: controller.signal,
-      // Thinking would hold back the first streamed line for a long time.
-      effort: 'none',
-      onText(delta) {
-        text += delta
-        onText(unfence(text.replace(/\n?```\s*$/, '')).replace(/^\s*```[^\n]*\n/, ''))
-      },
-      onReasoning() {}
-    })
-    return unfence(result.content || text)
+    const result = await runUtilityModel(
+      model,
+      `You edit code inside an editor. ${target} No explanation and no code fences.`,
+      `File: ${basename(request.path)}\n\n${marked.slice(0, 200_000)}\n\nInstruction: ${request.instruction}`,
+      {
+        cwd: dirname(expandHome(request.path)),
+        signal: controller.signal,
+        onText(sofar) {
+          onText(unfence(sofar.replace(/\n?```\s*$/, '')).replace(/^\s*```[^\n]*\n/, ''))
+        }
+      }
+    )
+    return unfence(result)
   } finally {
     running.delete(request.requestId)
   }
@@ -324,31 +321,19 @@ export interface TerminalCommandRequest {
 
 /** Writes a shell command for the terminal from an instruction. Text streams through onText as it arrives. */
 export async function terminalCommand(request: TerminalCommandRequest, onText: (text: string) => void): Promise<string> {
-  const model = InlineModel.find((m) => m.ID === request.modelId) ?? InlineModel[0]
+  const model = usableUtilityModels(InlineModel, store.settings.accounts).find((m) => m.ID === request.modelId) ?? InlineModel[0]
   const shell = process.env.SHELL?.split('/').pop() || (process.platform === 'win32' ? 'powershell' : 'sh')
   const controller = new AbortController()
   running.set(request.requestId, controller)
-  let text = ''
   const clean = (value: string): string => unfence(value.replace(/\n?```\s*$/, '')).replace(/^\s*```[^\n]*\n/, '').replace(/^\$ /, '').trim()
   try {
-    const result = await streamChat({
-      model: model.ID,
-      messages: [
-        {
-          role: 'system',
-          content: `You write shell commands for a ${shell} terminal on ${process.platform}. Reply with only the command, ready to run: no explanation, no code fences, no leading $. Use one line, joining steps with && when needed.`
-        },
-        { role: 'user', content: `Working directory: ${request.cwd}\n\nRecent terminal output:\n${request.output.slice(-3000)}\n\nInstruction: ${request.instruction}` }
-      ],
-      signal: controller.signal,
-      effort: 'none',
-      onText(delta) {
-        text += delta
-        onText(clean(text))
-      },
-      onReasoning() {}
-    })
-    return clean(result.content || text)
+    const result = await runUtilityModel(
+      model,
+      `You write shell commands for a ${shell} terminal on ${process.platform}. Reply with only the command, ready to run: no explanation, no code fences, no leading $. Use one line, joining steps with && when needed.`,
+      `Working directory: ${request.cwd}\n\nRecent terminal output:\n${request.output.slice(-3000)}\n\nInstruction: ${request.instruction}`,
+      { cwd: request.cwd, signal: controller.signal, onText: (sofar) => onText(clean(sofar)) }
+    )
+    return clean(result)
   } finally {
     running.delete(request.requestId)
   }

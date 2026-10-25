@@ -31,7 +31,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from 'react'
 import type { AgentMode, Attachment, Chat, GitCommand, Item, PermissionMode, ProjectFileEntry, PromptMentions, RevertedMessage, SkillInfo, ToolItem } from '@shared/types'
 import { basename, cn, tildify } from '../lib/utils'
-import { GIT_COMMANDS, gitCommandFor, gitToken, runGitCommand } from '../lib/gitCommands'
+import { GIT_COMMAND_ICON, GIT_COMMANDS, gitCommandFor, gitToken, runGitCommand } from '../lib/gitCommands'
 import { useActiveChat, useChatId, useRunConfig, useStore, type PanelTab } from '../store'
 import { FileIcon as FileTypeIcon } from './ProjectFiles'
 import { AcpOptions } from './AcpOptions'
@@ -752,8 +752,8 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         .slice(-12000)
       mentionedChats.push({ title: referenced.title, excerpt })
     }
-    // A typed @commit or @commit-push works like the picked one.
-    const git = selected.find((item) => item.kind === 'git')?.command ?? (/^@(commit-push|commit)(?=\s|$)/.exec(outgoing.trim())?.[1] as GitCommand | undefined)
+    // A typed @commit, @commit-push or @push works like the picked one.
+    const git = selected.find((item) => item.kind === 'git')?.command ?? (/^@(commit-push|commit|push)(?=\s|$)/.exec(outgoing.trim())?.[1] as GitCommand | undefined)
     const mentions: PromptMentions = {
       ...(git ? { git } : {}),
       skills: selected.flatMap((item) => item.kind === 'skill' ? [{ name: item.name, path: item.path }] : []),
@@ -866,7 +866,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         {!settingsOpen && mention && mentionEntries.length > 0 && (
           <div ref={mentionList} role="listbox" aria-label={mention.trigger === '/' ? 'Commands' : 'Mentions'} className={cn('absolute left-2 right-2 z-40 max-h-80 overflow-y-auto flex flex-col gap-0.5 rounded-2xl border border-line bg-elev p-2 shadow-pop', edit ? 'top-full mt-2' : 'bottom-full mb-2')}>
             {mentionEntries.map((entry, index) => {
-              const Icon = entry.mode ? MODES[entry.mode].icon : CHIP_ICON[entry.kind]
+              const Icon = entry.mode ? MODES[entry.mode].icon : entry.git ? GIT_COMMAND_ICON[entry.git] : CHIP_ICON[entry.kind]
               const heading = index === 0 || MENU_HEADINGS[mentionEntries[index - 1].kind] !== MENU_HEADINGS[entry.kind] ? MENU_HEADINGS[entry.kind] : null
               return (
                 <div key={entry.id} role="presentation">
@@ -1115,7 +1115,7 @@ function ChatChips({ chat, items }: { chat: Chat; items: Item[] | undefined }): 
           }}
           className={chip}
         >
-          {committing === command ? <Spinner size={12} /> : <GitCommitHorizontal size={13.5} />}
+          {committing === command ? <Spinner size={12} /> : (() => { const Icon = GIT_COMMAND_ICON[command]; return <Icon size={13.5} /> })()}
           {GIT_COMMANDS[command].label}
         </button>
       ))}
@@ -1166,7 +1166,7 @@ function ComposerChips({ text, mentions }: { text: string; mentions: SelectedMen
       {text.split(pattern).map((part, index) => {
         const item = byToken.get(part)
         if (!item) return part
-        const Icon = CHIP_ICON[item.kind]
+        const Icon = item.kind === 'git' ? GIT_COMMAND_ICON[item.command] : CHIP_ICON[item.kind]
         return (
           <span key={index} className="text-link" style={item.kind === 'git' ? { color: 'var(--orange)' } : undefined}>
             <span className="relative">

@@ -161,6 +161,8 @@ export interface Settings {
   inlineModelId: string | null
   /** Commit buttons commit at once with a generated message instead of asking the agent. */
   instantCommit: boolean
+  /** The Push button pushes at once instead of asking the agent. */
+  instantPush: boolean
   /** ID from CommitMessageModel in models.ts. */
   commitMessageModelId: string | null
   /** ID from AutoApprovalModel in models.ts. */
@@ -296,13 +298,13 @@ export interface PromptMentions {
   tools: { server: string; name: string }[]
   /** Terminal tabs, or text selected in one, as they were when the message was sent. */
   terminals?: { name: string; tabId: string; cwd: string; text: string; selection: boolean }[]
-  /** Set by /commit or /commit-push: commit the working tree, and push after it for commit-push. */
+  /** Set by @Commit, @Commit & Push or @Push: commit the working tree, push after it, or only push. */
   git?: GitCommand
   /** Where each pick sits in the text, so the message can show it as a chip. */
   chips?: MentionChip[]
 }
 
-export type GitCommand = 'commit' | 'commit-push'
+export type GitCommand = 'commit' | 'commit-push' | 'push'
 
 export interface MentionChip {
   token: string

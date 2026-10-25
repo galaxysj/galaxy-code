@@ -164,6 +164,9 @@ function GeneralSection(): ReactNode {
               />
             </RowItem>
           )}
+          <RowItem label="Instant push" hint="Push pushes the current branch right away instead of asking the agent. Commit &amp; Push follows Instant commit. Mentioning @Push still asks the agent.">
+            <Switch checked={settings.instantPush} onChange={(instantPush) => void update({ instantPush })} label="Instant push" />
+          </RowItem>
         </Card>
       </Section>
       <Section title="Permissions" description="How new chats start. You can change the mode for any chat from the message box.">
@@ -217,6 +220,7 @@ function ModelsSection(): ReactNode {
   const update = useStore((s) => s.updateSettings)
   const notify = useStore((s) => s.notify)
   const completionModels = usableUtilityModels(CompletionModel, settings.accounts)
+  const inlineModels = usableUtilityModels(InlineModel, settings.accounts)
   const [name, setName] = useState('')
   const [id, setId] = useState('')
   const [subscription, setSubscription] = useState<Subscription>('Default')
@@ -278,7 +282,7 @@ function ModelsSection(): ReactNode {
           <RowItem label="Tab completion" hint="Suggests the rest of the line as you type; Tab accepts it.">
             <Switch checked={settings.tabCompletion !== false} onChange={(tabCompletion) => void update({ tabCompletion })} label="Tab completion" />
           </RowItem>
-          <RowItem label="Completion model" hint="Claude and Codex models run on that signed-in account and start their CLI for each suggestion, so they are slower than OpenRouter models.">
+          <RowItem label="Completion model" hint="Claude and Codex models run on that signed-in account through a CLI kept running in the background. The first suggestion after a pause starts it, so it is slower.">
             <Select
               label="Completion model"
               value={completionModels.some((m) => m.ID === settings.completionModelId) ? (settings.completionModelId as string) : completionModels[0].ID}
@@ -289,9 +293,9 @@ function ModelsSection(): ReactNode {
           <RowItem label="Inline edit model" hint="Ctrl+I in the editor. The edit box can switch it too.">
             <Select
               label="Inline edit model"
-              value={InlineModel.some((m) => m.ID === settings.inlineModelId) ? (settings.inlineModelId as string) : InlineModel[0].ID}
+              value={inlineModels.some((m) => m.ID === settings.inlineModelId) ? (settings.inlineModelId as string) : inlineModels[0].ID}
               onChange={(value) => void update({ inlineModelId: value })}
-              options={InlineModel.map((model) => ({ value: model.ID as string, label: model.DisplayName }))}
+              options={inlineModels.map((model) => ({ value: model.ID, label: utilityModelLabel(model) }))}
             />
           </RowItem>
         </Card>

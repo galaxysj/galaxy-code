@@ -41,7 +41,7 @@ export async function instantCommit(cwd: string, push: boolean): Promise<{ hash:
   const recent = await git(cwd, ['log', '-10', '--format=%s'])
   const system = 'Write a git commit message for the staged changes below. A subject line of at most 72 characters in the imperative mood, then, only if the change needs it, a blank line and a short body. Match the style of the recent subjects when there are any. Reply with the message only, no quotes or code fences.'
   const prompt = `Recent subjects:\n${recent.ok && recent.out ? recent.out : '(none)'}\n\nStat:\n${stat.out}\n\nDiff:\n${diff.stdout.slice(0, 40000)}`
-  const reply = await runUtilityModel(model, system, prompt, cwd, AbortSignal.timeout(model.Subscription === 'Default' ? 60000 : 120000))
+  const reply = await runUtilityModel(model, system, prompt, { cwd, signal: AbortSignal.timeout(model.Subscription === 'Default' ? 60000 : 120000) })
   const message = reply.trim().replace(/^```\w*\n?|\n?```$/g, '').trim()
   if (!message) throw new Error(`${model.DisplayName} returned an empty commit message.`)
   const committed = await run('git', ['commit', '-m', message], { cwd, timeout: 120000 })

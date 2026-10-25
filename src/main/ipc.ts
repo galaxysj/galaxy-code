@@ -27,6 +27,7 @@ import { browser } from './services/browser'
 import { terminals } from './services/terminal'
 import { listProjectFiles, searchProjectFiles } from './services/projectFiles'
 import { gitInfo, gitState, instantCommit, pushBranch } from './services/git'
+import { disposeAccountWorkers } from './services/accountWorkers'
 import { mcp } from './services/mcp'
 import { signInWithOpenRouter, testKey } from './services/openrouter'
 import { analyticsRows } from './services/analytics'
@@ -201,6 +202,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
       if (enablingAntigravity || enablingAcp) await confirmAntigravityUse(true)
       const settings = store.saveSettings(patch)
       if (patch.mcpServers) void mcp.sync()
+      // Warm utility CLIs pick up a changed account or binary path on their next start.
+      if (patch.accounts) disposeAccountWorkers()
       emitSettings()
       return settings
     },
