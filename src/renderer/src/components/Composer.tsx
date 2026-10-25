@@ -55,7 +55,6 @@ function PermissionPicker(): ReactNode {
   const { permissionMode } = useRunConfig()
   const setPermissionMode = useStore((s) => s.setPermissionMode)
   const chatId = useChatId()
-  const autoModel = useStore((s) => s.autoApprovalModel.name)
   const current = PERMISSION_MODES.find((m) => m.value === permissionMode) ?? PERMISSION_MODES[0]
   return (
     <>
@@ -87,7 +86,7 @@ function PermissionPicker(): ReactNode {
               <span className="min-w-0 flex-1">
                 <span className="block text-[12.5px] text-fg">{mode.label}</span>
                 <span className="block text-[11.5px] leading-snug text-muted">
-                  {mode.value === 'auto' && autoModel ? 'Approves routine work and asks you about risky actions.' : mode.description}
+                  {mode.value === 'auto' ? 'Approves routine work and asks you about risky actions.' : mode.description}
                 </span>
               </span>
               {mode.value === permissionMode && <Check size={13} className="mt-[3px] shrink-0 text-fg" />}

@@ -572,6 +572,17 @@ export const AgentModel: AgentModelSpec[] = [
     Off: true
   },
   {
+    DisplayName: 'DeepSeek V4.1 Flash',
+    ID: 'deepseek/deepseek-v4.1-flash',
+    Subscription: 'Default',
+    Efforts: ['low', 'high', 'max'],
+    DefaultEffort: 'high',
+    UltraEffort: 'max',
+    FastMode: false,
+    Vision: false,
+    Off: false
+  },
+  {
     DisplayName: 'GLM 5.3',
     ID: 'z-ai/glm-5.3',
     Subscription: 'Default',
@@ -762,7 +773,6 @@ export const InlineModel: UtilityModelSpec[] = [
   { DisplayName: 'Sonnet', ID: '~anthropic/claude-sonnet-latest' }
 ]
 
-/** The single model Auto mode asks, through the OpenRouter Decisions API, whether an action is safe. */
 /** Writes the message for Instant commit. Picked in Settings > Appearance. */
 export const CommitMessageModel: UtilityModelSpec[] = [
   { DisplayName: 'Luna', ID: '~openai/gpt-luna-latest' },
@@ -770,9 +780,15 @@ export const CommitMessageModel: UtilityModelSpec[] = [
   { DisplayName: 'Gemini Flash', ID: '~google/gemini-flash-latest' }
 ]
 
-export const AutoApprovalModel: UtilityModelSpec = {
-  DisplayName: 'GPT-6 Luna Decisions',
-  ID: 'openai/gpt-6-luna-decisions'
+/** Auto mode asks this model, through the OpenRouter Decisions API, whether an action is safe. Settings picks one; the first entry is the default. */
+export const AutoApprovalModel: UtilityModelSpec[] = [
+  { DisplayName: 'Luna Decisions', ID: 'openai/gpt-6-luna-decisions' },
+  { DisplayName: 'Jev', ID: '~typesafe/jev-latest' },
+  { DisplayName: 'Microsoft Decision ', ID: 'microsoft/microsoft-decision-1' }
+]
+
+export function resolveAutoApprovalModel(id: string | null | undefined): UtilityModelSpec {
+  return AutoApprovalModel.find((model) => model.ID === id) ?? AutoApprovalModel[0]
 }
 
 /** Names new chats from the first message. Runs on OpenRouter. */

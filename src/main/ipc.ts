@@ -5,7 +5,6 @@ import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { IPC_CHAT_EVENT, IPC_INVOKE, IPC_UI_EVENT, type Rect } from '@shared/api'
 import { resolveImageModels, resolveModels } from '@shared/catalog'
-import { AutoApprovalModel } from '@shared/models'
 import type {
   AccountId,
   Attachment,
@@ -189,7 +188,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
         chats: store.chatList(),
         models: resolveModels(store.settings),
         imageModels: resolveImageModels(),
-        autoApprovalModel: { name: AutoApprovalModel.DisplayName, id: AutoApprovalModel.ID },
         mcp: mcp.statuses(),
         platform: process.platform,
         homeDir: homedir(),

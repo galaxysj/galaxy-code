@@ -163,6 +163,8 @@ export interface Settings {
   instantCommit: boolean
   /** ID from CommitMessageModel in models.ts. */
   commitMessageModelId: string | null
+  /** ID from AutoApprovalModel in models.ts. */
+  autoApprovalModelId: string | null
   openRouterBaseUrl: string
   accounts: Record<AccountId, AccountSettings>
   /** Master switch for the agents reached over the Agent Client Protocol. */
@@ -574,7 +576,6 @@ export interface Bootstrap {
   chats: Chat[]
   models: ResolvedModel[]
   imageModels: ResolvedImageModel[]
-  autoApprovalModel: { name: string; id: string }
   mcp: McpServerStatus[]
   platform: string
   homeDir: string

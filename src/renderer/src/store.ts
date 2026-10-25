@@ -142,7 +142,6 @@ interface State {
   antigravityConsent: string | null
   attachmentPreview: Attachment | null
   imageModels: ResolvedImageModel[]
-  autoApprovalModel: { name: string; id: string }
   mcp: McpServerStatus[]
   browser: BrowserState
   browserStates: Record<string, BrowserState>
@@ -432,7 +431,6 @@ export const useStore = create<State>((set, get) => {
     antigravityConsent: null,
     attachmentPreview: null,
     imageModels: resolveImageModels(),
-    autoApprovalModel: { name: '', id: '' },
     mcp: [],
     browser: EMPTY_BROWSER,
     browserStates: {},
@@ -481,7 +479,6 @@ export const useStore = create<State>((set, get) => {
           chats,
           models: boot.models,
           imageModels: boot.imageModels,
-          autoApprovalModel: boot.autoApprovalModel,
           mcp: boot.mcp,
           draft: draftFor(boot.models, boot.settings, lastProject)
         })

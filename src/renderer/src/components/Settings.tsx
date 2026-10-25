@@ -39,7 +39,7 @@ import {
   type UsageWindow
 } from '@shared/types'
 import { AcpAgents } from '@shared/acp-registry'
-import { CommitMessageModel, CompletionModel, InlineModel } from '@shared/models'
+import { AutoApprovalModel, CommitMessageModel, CompletionModel, InlineModel, resolveAutoApprovalModel } from '@shared/models'
 import { cn, tildify } from '../lib/utils'
 import { useStore, type SettingsSection } from '../store'
 import { SUBSCRIPTION_LABELS } from './ModelPicker'
@@ -102,7 +102,6 @@ function GeneralSection(): ReactNode {
   const settings = useStore((s) => s.settings)
   const update = useStore((s) => s.updateSettings)
   const version = useStore((s) => s.version)
-  const autoModel = useStore((s) => s.autoApprovalModel)
   return (
     <>
       <Section title="Appearance">
@@ -183,9 +182,14 @@ function GeneralSection(): ReactNode {
           </RowItem>
           <RowItem
             label="Auto approval model"
-            hint="Auto reviews each action with Luna Decisions. A deny probability of 50% or more asks for your approval in the message box. It needs an OpenRouter key."
+            hint="Auto reviews each action with this model. A deny probability of 50% or more asks for your approval in the message box. It needs an OpenRouter key."
           >
-            <span className="shrink-0 font-mono text-[11.5px] text-muted">{autoModel.id}</span>
+            <Select
+              label="Auto approval model"
+              value={resolveAutoApprovalModel(settings.autoApprovalModelId).ID}
+              onChange={(value) => void update({ autoApprovalModelId: value })}
+              options={AutoApprovalModel.map((model) => ({ value: model.ID, label: model.DisplayName }))}
+            />
           </RowItem>
         </Card>
       </Section>

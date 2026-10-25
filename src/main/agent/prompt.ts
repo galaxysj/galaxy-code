@@ -88,7 +88,7 @@ function permissionBlock(mode: PermissionMode): string {
     return 'Permission mode: Accept Edits. File changes inside the working directory are allowed automatically. Commands, browser actions and file changes outside that directory require user approval, as in Ask for Approval. Do not use commands to bypass file approval. If declined, do not retry or work around it.'
   }
   if (mode === 'auto') {
-    return 'Permission mode: Auto. Luna Decisions reviews commands, edits and browser actions against the user\'s request and existing authorization. Actions with a deny probability below 50% run automatically; 50% or more pauses for the user to approve in the message box. If an action is declined, do not retry it or route around it. Adjust the approach or ask.'
+    return 'Permission mode: Auto. An approval model reviews commands, edits and browser actions against the user\'s request and existing authorization. Actions with a deny probability below 50% run automatically; 50% or more pauses for the user to approve in the message box. If an action is declined, do not retry it or route around it. Adjust the approach or ask.'
   }
   return 'Permission mode: Ask for approval. Reading and searching run freely. Commands, file changes and browser actions wait for the user to approve each one, so batch related changes sensibly and say briefly what an action is for. If the user declines, do not retry it or route around it.'
 }

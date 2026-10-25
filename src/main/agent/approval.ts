@@ -1,10 +1,11 @@
-import { AutoApprovalModel } from '@shared/models'
+import { resolveAutoApprovalModel } from '@shared/models'
 import { lstat, readFile, realpath } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { app } from 'electron'
 import type { PermissionMode, ToolItem, ToolKind } from '@shared/types'
 import { decideRisk, MissingKeyError } from '../services/openrouter'
+import { store } from '../store'
 import { makeDiff } from '../tools/diff'
 import { parseEditPatch, patchFiles, previewEditPatch } from '../tools/patch'
 import { errorMessage, resolvePath } from '../util'
@@ -202,10 +203,11 @@ export async function gate(session: Session, mode: PermissionMode, request: Gate
       reason = decision.reason
     } catch (err) {
       if (session.controller?.signal.aborted || !session.running) return { allowed: false, message: 'Stopped by user.' }
+      const model = resolveAutoApprovalModel(store.settings.autoApprovalModelId).DisplayName
       reason =
         err instanceof MissingKeyError
-          ? `Auto approval needs an OpenRouter key to reach ${AutoApprovalModel.DisplayName}`
-          : `${AutoApprovalModel.DisplayName} could not be reached (${errorMessage(err)})`
+          ? `Auto approval needs an OpenRouter key to reach ${model}`
+          : `${model} could not be reached (${errorMessage(err)})`
     }
   }
 
