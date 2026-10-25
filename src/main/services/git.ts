@@ -2,10 +2,10 @@ import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { GitInfo, WorktreeInfo } from '@shared/types'
-import { CommitMessageModel } from '@shared/models'
+import { CommitMessageModel, usableUtilityModels } from '@shared/models'
 import { store } from '../store'
 import { exists, newId, run, slugify } from '../util'
-import { complete } from './openrouter'
+import { runUtilityModel } from './utilityModel'
 
 async function git(cwd: string, args: string[], timeout = 20000): Promise<{ ok: boolean; out: string; err: string }> {
   const result = await run('git', args, { cwd, timeout })
@@ -29,7 +29,9 @@ export async function gitState(cwd: string): Promise<{ isRepo: boolean; dirty: b
 
 /** Instant commit: stage everything, have the commit message model write the message, commit, and push when asked. */
 export async function instantCommit(cwd: string, push: boolean): Promise<{ hash: string; message: string; pushed: { branch: string; remote: string } | null }> {
-  if (!store.openRouterKey) throw new Error('Instant commit writes the message with an OpenRouter model. Add an OpenRouter key in Settings first.')
+  // An account model falls back to the default when its account is switched off.
+  const model = usableUtilityModels(CommitMessageModel, store.settings.accounts).find((entry) => entry.ID === store.settings.commitMessageModelId) ?? CommitMessageModel[0]
+  if (model.Subscription === 'Default' && !store.openRouterKey) throw new Error('Instant commit writes the message with an OpenRouter model. Add an OpenRouter key in Settings first.')
   const added = await git(cwd, ['add', '-A'])
   if (!added.ok) throw new Error(`git add failed:\n${added.err || added.out}`)
   const stat = await git(cwd, ['diff', '--cached', '--stat'])
@@ -37,14 +39,9 @@ export async function instantCommit(cwd: string, push: boolean): Promise<{ hash:
   if (!stat.out) throw new Error('There are no changes to commit.')
   const diff = await run('git', ['diff', '--cached', '--no-color', '--no-ext-diff'], { cwd, timeout: 30000 })
   const recent = await git(cwd, ['log', '-10', '--format=%s'])
-  const model = CommitMessageModel.find((entry) => entry.ID === store.settings.commitMessageModelId) ?? CommitMessageModel[0]
-  const reply = await complete(model.ID, [
-    {
-      role: 'system',
-      content: 'Write a git commit message for the staged changes below. A subject line of at most 72 characters in the imperative mood, then, only if the change needs it, a blank line and a short body. Match the style of the recent subjects when there are any. Reply with the message only, no quotes or code fences.'
-    },
-    { role: 'user', content: `Recent subjects:\n${recent.ok && recent.out ? recent.out : '(none)'}\n\nStat:\n${stat.out}\n\nDiff:\n${diff.stdout.slice(0, 40000)}` }
-  ], AbortSignal.timeout(60000))
+  const system = 'Write a git commit message for the staged changes below. A subject line of at most 72 characters in the imperative mood, then, only if the change needs it, a blank line and a short body. Match the style of the recent subjects when there are any. Reply with the message only, no quotes or code fences.'
+  const prompt = `Recent subjects:\n${recent.ok && recent.out ? recent.out : '(none)'}\n\nStat:\n${stat.out}\n\nDiff:\n${diff.stdout.slice(0, 40000)}`
+  const reply = await runUtilityModel(model, system, prompt, cwd, AbortSignal.timeout(model.Subscription === 'Default' ? 60000 : 120000))
   const message = reply.trim().replace(/^```\w*\n?|\n?```$/g, '').trim()
   if (!message) throw new Error(`${model.DisplayName} returned an empty commit message.`)
   const committed = await run('git', ['commit', '-m', message], { cwd, timeout: 120000 })

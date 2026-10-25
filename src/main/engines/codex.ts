@@ -507,3 +507,33 @@ export async function runCodex(session: Session, turn: Turn): Promise<void> {
   }
   if (failure && !turn.signal.aborted) throw new Error(failure)
 }
+
+/** One reply from the Codex account in a throwaway read-only thread, for utility text such as commit messages. */
+export async function codexComplete(model: string, instructions: string, prompt: string, cwd: string, signal: AbortSignal): Promise<string> {
+  const rpc = await startCodexProcess([], cwd)
+  try {
+    const started = await rpc.request<{ thread: { id: string } }>('thread/start', { cwd, model, approvalPolicy: 'never', sandbox: 'read-only', developerInstructions: instructions }, 60000)
+    const threadId = started.thread.id
+    let text = ''
+    const reply = new Promise<string>((resolve, reject) => {
+      rpc.onExit((reason) => reject(new Error(reason)))
+      signal.addEventListener('abort', () => reject(new Error('Timed out waiting for Codex')), { once: true })
+      rpc.onNotification = (method, rawParams) => {
+        const params = (rawParams ?? {}) as Json
+        if (params.threadId && params.threadId !== threadId) return
+        if (method === 'item/completed') {
+          const item = params.item as Json
+          if (item.type === 'agentMessage' && item.text) text = String(item.text)
+        } else if (method === 'turn/completed') {
+          const done = params.turn as Json
+          if (done.status === 'failed') reject(new Error(String((done.error as Json | null)?.message ?? 'Codex could not complete the turn')))
+          else resolve(text)
+        }
+      }
+    })
+    await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: prompt, text_elements: [] }], cwd, model, approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly', networkAccess: false } })
+    return await reply
+  } finally {
+    rpc.kill()
+  }
+}

@@ -1,9 +1,10 @@
 import { readdir, writeFile } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
-import { CompletionModel, InlineModel } from '@shared/models'
+import { CompletionModel, InlineModel, usableUtilityModels } from '@shared/models'
 import { store } from '../store'
 import { expandHome } from '../util'
-import { complete, streamChat } from './openrouter'
+import { streamChat } from './openrouter'
+import { runUtilityModel } from './utilityModel'
 
 export interface CompletionRequest {
   path: string
@@ -233,8 +234,8 @@ export async function completeCode(request: CompletionRequest): Promise<Completi
   abortQuietly(pending)
   const controller = new AbortController()
   pending = controller
-  if (!store.openRouterKey) return NONE
-  const model = CompletionModel.find((m) => m.ID === store.settings.completionModelId) ?? CompletionModel[0]
+  const model = usableUtilityModels(CompletionModel, store.settings.accounts).find((m) => m.ID === store.settings.completionModelId) ?? CompletionModel[0]
+  if (model.Subscription === 'Default' && !store.openRouterKey) return NONE
   // Whole lines of context, about 6000 characters before and 2000 after.
   const cut = request.prefix.length > 6000 ? request.prefix.indexOf('\n', request.prefix.length - 6000) + 1 : 0
   const prefix = request.prefix.slice(cut)
@@ -246,15 +247,11 @@ export async function completeCode(request: CompletionRequest): Promise<Completi
   const siblings = await readdir(dirname(expandHome(request.path)), { withFileTypes: true }).catch(() => [])
   const folder = siblings.slice(0, 80).map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name)).join('\n')
   try {
-    const raw = await complete(
-      model.ID,
-      [
-        { role: 'system', content: HOLE_FILLER },
-        {
-          role: 'user',
-          content: `${folder ? `Files in the same folder:\n${folder}\n\n` : ''}File: ${basename(request.path)}\n\n<QUERY>\n${prefix}{{FILL_HERE}}${suffix}\n</QUERY>\nTASK: Fill the {{FILL_HERE}} hole.${multiline ? '' : ' Keep it to one line.'} Answer only with the completion in <COMPLETION></COMPLETION>, and nothing else.`
-        }
-      ],
+    const raw = await runUtilityModel(
+      model,
+      HOLE_FILLER,
+      `${folder ? `Files in the same folder:\n${folder}\n\n` : ''}File: ${basename(request.path)}\n\n<QUERY>\n${prefix}{{FILL_HERE}}${suffix}\n</QUERY>\nTASK: Fill the {{FILL_HERE}} hole.${multiline ? '' : ' Keep it to one line.'} Answer only with the completion in <COMPLETION></COMPLETION>, and nothing else.`,
+      dirname(expandHome(request.path)),
       controller.signal,
       // Completions must come back fast, so no thinking.
       { reasoning: { effort: 'none', exclude: true }, max_tokens: multiline ? 500 : 120, temperature: 0 }

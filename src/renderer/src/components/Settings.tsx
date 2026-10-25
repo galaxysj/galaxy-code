@@ -39,7 +39,7 @@ import {
   type UsageWindow
 } from '@shared/types'
 import { AcpAgents } from '@shared/acp-registry'
-import { AutoApprovalModel, CommitMessageModel, CompletionModel, InlineModel, resolveAutoApprovalModel } from '@shared/models'
+import { AutoApprovalModel, CommitMessageModel, CompletionModel, InlineModel, resolveAutoApprovalModel, usableUtilityModels, utilityModelLabel } from '@shared/models'
 import { cn, tildify } from '../lib/utils'
 import { useStore, type SettingsSection } from '../store'
 import { SUBSCRIPTION_LABELS } from './ModelPicker'
@@ -102,6 +102,7 @@ function GeneralSection(): ReactNode {
   const settings = useStore((s) => s.settings)
   const update = useStore((s) => s.updateSettings)
   const version = useStore((s) => s.version)
+  const commitModels = usableUtilityModels(CommitMessageModel, settings.accounts)
   return (
     <>
       <Section title="Appearance">
@@ -154,12 +155,12 @@ function GeneralSection(): ReactNode {
             <Switch checked={settings.instantCommit} onChange={(instantCommit) => void update({ instantCommit })} label="Instant commit" />
           </RowItem>
           {settings.instantCommit && (
-            <RowItem label="Commit message model" hint="Runs on your OpenRouter key.">
+            <RowItem label="Commit message model" hint="OpenRouter models run on your OpenRouter key. Claude and Codex models run on that signed-in account.">
               <Select
                 label="Commit message model"
-                value={CommitMessageModel.some((m) => m.ID === settings.commitMessageModelId) ? (settings.commitMessageModelId as string) : CommitMessageModel[0].ID}
+                value={commitModels.some((m) => m.ID === settings.commitMessageModelId) ? (settings.commitMessageModelId as string) : commitModels[0].ID}
                 onChange={(value) => void update({ commitMessageModelId: value })}
-                options={CommitMessageModel.map((model) => ({ value: model.ID, label: model.DisplayName }))}
+                options={commitModels.map((model) => ({ value: model.ID, label: utilityModelLabel(model) }))}
               />
             </RowItem>
           )}
@@ -215,6 +216,7 @@ function ModelsSection(): ReactNode {
   const imageModels = useStore((s) => s.imageModels)
   const update = useStore((s) => s.updateSettings)
   const notify = useStore((s) => s.notify)
+  const completionModels = usableUtilityModels(CompletionModel, settings.accounts)
   const [name, setName] = useState('')
   const [id, setId] = useState('')
   const [subscription, setSubscription] = useState<Subscription>('Default')
@@ -271,17 +273,17 @@ function ModelsSection(): ReactNode {
         </Card>
       </Section>
 
-      <Section title="Editor" description="Models for editing files in the Files panel. Both run on your OpenRouter key and are listed in src/shared/models.ts.">
+      <Section title="Editor" description="Models for editing files in the Files panel, listed in src/shared/models.ts. OpenRouter models run on your OpenRouter key.">
         <Card>
           <RowItem label="Tab completion" hint="Suggests the rest of the line as you type; Tab accepts it.">
             <Switch checked={settings.tabCompletion !== false} onChange={(tabCompletion) => void update({ tabCompletion })} label="Tab completion" />
           </RowItem>
-          <RowItem label="Completion model">
+          <RowItem label="Completion model" hint="Claude and Codex models run on that signed-in account and start their CLI for each suggestion, so they are slower than OpenRouter models.">
             <Select
               label="Completion model"
-              value={CompletionModel.some((m) => m.ID === settings.completionModelId) ? (settings.completionModelId as string) : CompletionModel[0].ID}
+              value={completionModels.some((m) => m.ID === settings.completionModelId) ? (settings.completionModelId as string) : completionModels[0].ID}
               onChange={(value) => void update({ completionModelId: value })}
-              options={CompletionModel.map((model) => ({ value: model.ID as string, label: model.DisplayName }))}
+              options={completionModels.map((model) => ({ value: model.ID, label: utilityModelLabel(model) }))}
             />
           </RowItem>
           <RowItem label="Inline edit model" hint="Ctrl+I in the editor. The edit box can switch it too.">

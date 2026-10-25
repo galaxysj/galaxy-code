@@ -54,6 +54,20 @@ export interface UtilityModelSpec {
   ID: string
 }
 
+/** 'Default' runs on OpenRouter; 'Claude' and 'Codex' run on the signed-in account. */
+export interface AccountUtilityModelSpec extends UtilityModelSpec {
+  Subscription: 'Default' | 'Claude' | 'Codex'
+}
+
+/** Entries whose connection is available: OpenRouter ones always, account ones while that account is on. */
+export function usableUtilityModels<T extends AccountUtilityModelSpec>(models: T[], accounts: Record<string, { enabled: boolean } | undefined>): T[] {
+  return models.filter((model) => model.Subscription === 'Default' || accounts[model.Subscription === 'Claude' ? 'claude' : 'codex']?.enabled)
+}
+
+export function utilityModelLabel(model: AccountUtilityModelSpec): string {
+  return model.Subscription === 'Default' ? model.DisplayName : `${model.DisplayName} (${model.Subscription})`
+}
+
 export const AgentModel: AgentModelSpec[] = [
   // OpenRouter claude
   {
@@ -757,12 +771,13 @@ export const ImageModel: ImageModelSpec[] = [
 
 ]
 
-/** Tab completion in the file editor. Settings picks one; the first entry is the default. Runs on OpenRouter. */
-export const CompletionModel: UtilityModelSpec[] = [
-  { DisplayName: 'Haiku', ID: '~anthropic/claude-haiku-latest' },
-  { DisplayName: 'Luna', ID: '~openai/gpt-luna-latest' },
-  { DisplayName: 'Mercury 3', ID: 'inception/mercury-3' },
-  
+/** Tab completion in the file editor. Settings picks one; the first entry is the default. Account entries show only while that account is on. */
+export const CompletionModel: AccountUtilityModelSpec[] = [
+  { DisplayName: 'Haiku', ID: '~anthropic/claude-haiku-latest', Subscription: 'Default' },
+  { DisplayName: 'Luna', ID: '~openai/gpt-luna-latest', Subscription: 'Default' },
+  { DisplayName: 'Mercury 3', ID: 'inception/mercury-3', Subscription: 'Default' },
+  { DisplayName: 'Haiku 5.5', ID: 'claude-haiku-5-5', Subscription: 'Claude' },
+  { DisplayName: 'GPT-6 Luna', ID: 'gpt-6-luna', Subscription: 'Codex' }
 ]
 
 /** Ctrl+I inline edits in the file editor. The edit box picks one; the first entry is the default. Runs on OpenRouter. */
@@ -773,11 +788,14 @@ export const InlineModel: UtilityModelSpec[] = [
   { DisplayName: 'Sonnet', ID: '~anthropic/claude-sonnet-latest' }
 ]
 
-/** Writes the message for Instant commit. Picked in Settings > Appearance. */
-export const CommitMessageModel: UtilityModelSpec[] = [
-  { DisplayName: 'Luna', ID: '~openai/gpt-luna-latest' },
-  { DisplayName: 'Haiku', ID: '~anthropic/claude-haiku-latest' },
-  { DisplayName: 'Gemini Flash', ID: '~google/gemini-flash-latest' }
+/** Writes the message for Instant commit. Picked in Settings > Git; subscription entries show only while that account is on. */
+export const CommitMessageModel: AccountUtilityModelSpec[] = [
+  { DisplayName: 'Luna', ID: '~openai/gpt-luna-latest', Subscription: 'Default' },
+  { DisplayName: 'Haiku', ID: '~anthropic/claude-haiku-latest', Subscription: 'Default' },
+  { DisplayName: 'Gemini Flash', ID: '~google/gemini-flash-latest', Subscription: 'Default' },
+  { DisplayName: 'Haiku 5.5', ID: 'claude-haiku-5-5', Subscription: 'Claude' },
+  { DisplayName: 'Sonnet 5.5', ID: 'claude-sonnet-5-5', Subscription: 'Claude' },
+  { DisplayName: 'GPT-6 Luna', ID: 'gpt-6-luna', Subscription: 'Codex' }
 ]
 
 /** Auto mode asks this model, through the OpenRouter Decisions API, whether an action is safe. Settings picks one; the first entry is the default. */
