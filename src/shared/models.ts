@@ -41,6 +41,12 @@ export interface AgentModelSpec {
   Vision?: boolean
   /** true ships the model switched off until the user turns it on in Settings. */
   Off?: boolean
+  /** Speed preselected the first time the model is picked. Fast needs FastMode, Ultrafast needs UltrafastMode. Defaults to 'Standard'. */
+  DefaultSpeed?: 'Standard' | 'Fast' | 'Ultrafast'
+  /** Context window in tokens. History is compacted when a prompt reaches 90% of it. Unset falls back to 200,000. */
+  ContextWindow?: number
+  /** Context sizes to choose from in the model picker, such as [300_000, 1_000_000]. Picking one sets where history is compacted. Unset shows no choice. */
+  ContextOptions?: number[]
 }
 
 export interface ImageModelSpec {
@@ -71,8 +77,20 @@ export function utilityModelLabel(model: AccountUtilityModelSpec): string {
 export const AgentModel: AgentModelSpec[] = [
   // OpenRouter claude
   {
+    DisplayName: 'Sonnet 5.5',
+    ID: 'anthropic/claude-sonnet-5.5',
+    ContextOptions: [300_000, 1_000_000],
+    Brand: 'Claude',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    DefaultEffort: 'high',
+    UltraEffort: 'xhigh',
+    FastMode: false
+  },
+  {
     DisplayName: 'Opus 5.5',
     ID: 'anthropic/claude-opus-5.5',
+    ContextOptions: [300_000, 1_000_000],
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -83,6 +101,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Fable 5.1',
     ID: 'anthropic/claude-fable-5.1',
+    ContextOptions: [300_000, 1_000_000],
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -91,19 +110,11 @@ export const AgentModel: AgentModelSpec[] = [
     FastMode: false,
     Off: true
   },
-  {
-    DisplayName: 'Sonnet 5.5',
-    ID: 'anthropic/claude-sonnet-5.5',
-    Brand: 'Claude',
-    Subscription: 'Default',
-    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
-    FastMode: false
-  },
+
   {
     DisplayName: 'Haiku 5.5',
     ID: 'anthropic/claude-haiku-5.5',
+    ContextOptions: [300_000, 1_000_000],
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -115,6 +126,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Sonnet 5',
     ID: 'anthropic/claude-sonnet-5',
+    ContextOptions: [300_000, 1_000_000],
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -126,6 +138,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Haiku 4.5',
     ID: 'anthropic/claude-haiku-4.5',
+    ContextWindow: 200_000,
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: [],
@@ -136,6 +149,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Opus 5',
     ID: 'anthropic/claude-opus-5',
+    ContextOptions: [300_000, 1_000_000],
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -147,6 +161,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Opus 4.8',
     ID: 'anthropic/claude-opus-4.8',
+    ContextOptions: [300_000, 1_000_000],
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -157,6 +172,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Opus 4.7',
     ID: 'anthropic/claude-opus-4.7',
+    ContextOptions: [300_000, 1_000_000],
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -167,6 +183,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Opus 4.6',
     ID: 'anthropic/claude-opus-4.6',
+    ContextOptions: [300_000, 1_000_000],
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -177,6 +194,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Opus 4.5',
     ID: 'anthropic/claude-opus-4.5',
+    ContextWindow: 200_000,
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -187,6 +205,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Opus 4.1',
     ID: 'anthropic/claude-opus-4.1',
+    ContextWindow: 200_000,
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -197,6 +216,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Sonnet 4.6',
     ID: 'anthropic/claude-sonnet-4.6',
+    ContextOptions: [300_000, 1_000_000],
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -207,6 +227,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Sonnet 4.5',
     ID: 'anthropic/claude-sonnet-4.5',
+    ContextOptions: [300_000, 1_000_000],
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -217,6 +238,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Fable 5',
     ID: 'anthropic/claude-fable-5',
+    ContextOptions: [300_000, 1_000_000],
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -233,17 +255,18 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-6 Astra',
     ID: 'openai/gpt-6-astra',
+    ContextOptions: [272_000, 1_050_000],
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     UltraEffort: 'xhigh',
-    FastMode: true
-,
+    FastMode: true,
     UltrafastMode: true
   },
   {
     DisplayName: 'GPT-6.1 Sol',
     ID: 'openai/gpt-6.1-sol',
+    ContextOptions: [272_000, 1_050_000],
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -255,6 +278,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-6 Luna',
     ID: 'openai/gpt-6-luna',
+    ContextOptions: [272_000, 1_050_000],
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
@@ -268,6 +292,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Codex 5.3',
     ID: 'openai/gpt-5.3-codex',
+    ContextWindow: 400_000,
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
@@ -279,6 +304,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-5.6 Sol',
     ID: 'openai/gpt-5.6-sol',
+    ContextOptions: [272_000, 1_050_000],
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
@@ -290,6 +316,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-5.6 Terra',
     ID: 'openai/gpt-5.6-terra',
+    ContextOptions: [272_000, 1_050_000],
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
@@ -301,6 +328,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-5.6 Luna',
     ID: 'openai/gpt-5.6-luna',
+    ContextOptions: [272_000, 1_050_000],
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
@@ -312,6 +340,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-5.5',
     ID: 'openai/gpt-5.5',
+    ContextOptions: [272_000, 1_050_000],
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
@@ -323,6 +352,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-6 Sol',
     ID: 'openai/gpt-6-sol',
+    ContextOptions: [272_000, 1_050_000],
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
@@ -333,6 +363,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-5.4',
     ID: 'openai/gpt-5.4',
+    ContextOptions: [272_000, 1_050_000],
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
@@ -343,6 +374,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-5.4 Mini',
     ID: 'openai/gpt-5.4-mini',
+    ContextWindow: 400_000,
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
@@ -353,6 +385,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-5.4 Nano',
     ID: 'openai/gpt-5.4-nano',
+    ContextWindow: 400_000,
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high'],
@@ -363,6 +396,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Codex 5.2',
     ID: 'openai/gpt-5.2-codex',
+    ContextWindow: 400_000,
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -373,6 +407,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-5.2',
     ID: 'openai/gpt-5.2',
+    ContextWindow: 400_000,
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
@@ -383,6 +418,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Codex 5.1 Max',
     ID: 'openai/gpt-5.1-codex-max',
+    ContextWindow: 400_000,
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -393,6 +429,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Codex 5.1',
     ID: 'openai/gpt-5.1-codex',
+    ContextWindow: 400_000,
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
@@ -403,6 +440,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Codex 5.1 Mini',
     ID: 'openai/gpt-5.1-codex-mini',
+    ContextWindow: 400_000,
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
@@ -413,6 +451,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-5.1',
     ID: 'openai/gpt-5.1',
+    ContextWindow: 400_000,
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high'],
@@ -423,6 +462,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-5',
     ID: 'openai/gpt-5',
+    ContextWindow: 400_000,
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['minimal', 'low', 'medium', 'high'],
@@ -433,6 +473,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-5 Mini',
     ID: 'openai/gpt-5-mini',
+    ContextWindow: 400_000,
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['minimal', 'low', 'medium', 'high'],
@@ -443,6 +484,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-5 Nano',
     ID: 'openai/gpt-5-nano',
+    ContextWindow: 400_000,
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['minimal', 'low', 'medium', 'high'],
@@ -456,6 +498,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Gemini 4 Argon',
     ID: 'google/gemini-4-argon',
+    ContextOptions: [272_000, 1_048_576],
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
@@ -466,6 +509,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Gemini 3.7 Flash',
     ID: 'google/gemini-3.7-flash',
+    ContextWindow: 272_000,
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
@@ -476,6 +520,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Gemini 3.6 Flash',
     ID: 'google/gemini-3.6-flash',
+    ContextWindow: 272_000,
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
@@ -486,6 +531,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Gemini 3.5 Flash',
     ID: 'google/gemini-3.5-flash',
+    ContextWindow: 272_000,
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
@@ -496,6 +542,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Gemini 3.5 Flash Lite',
     ID: 'google/gemini-3.5-flash-lite',
+    ContextWindow: 272_000,
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
@@ -506,6 +553,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Gemini 3.1 Flash Lite',
     ID: 'google/gemini-3.1-flash-lite',
+    ContextWindow: 272_000,
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
@@ -516,6 +564,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Gemini 3 Flash',
     ID: 'google/gemini-3-flash-preview',
+    ContextWindow: 272_000,
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
@@ -526,6 +575,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Gemini 3.8 Flash',
     ID: 'google/gemini-3.8-flash',
+    ContextWindow: 272_000,
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
@@ -536,6 +586,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Gemini 3.1 Pro',
     ID: 'google/gemini-3.1-pro-preview',
+    ContextWindow: 272_000,
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
@@ -546,27 +597,31 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Grok 4.7',
     ID: 'x-ai/grok-4.7',
+    ContextOptions: [256_000, 500_000],
     Brand: 'Grok',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
     DefaultEffort: 'high',
     UltraEffort: 'xhigh',
-    FastMode: false,
+    FastMode: true,
+    DefaultSpeed: 'Fast',
     Off: true
   },
   {
     DisplayName: 'Kimi K3',
     ID: 'moonshotai/kimi-k3',
+    ContextWindow: 272_000,
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
     UltraEffort: 'high',
-    FastMode: false,
+    FastMode: true,
     Off: true
   },
   {
     DisplayName: 'Kimi K3.1 Pro',
     ID: 'moonshotai/kimi-k3.1-pro',
+    ContextOptions: [272_000, 1_048_576],
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
@@ -577,6 +632,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'DeepSeek V4 Pro',
     ID: 'deepseek/deepseek-v4-pro-0813',
+    ContextOptions: [272_000, 1_048_576],
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
@@ -588,17 +644,20 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'DeepSeek V4.1 Flash',
     ID: 'deepseek/deepseek-v4.1-flash',
+    ContextOptions: [272_000, 1_048_576],
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
     UltraEffort: 'max',
-    FastMode: false,
+    FastMode: true,
+    DefaultSpeed: 'Fast',
     Vision: false,
     Off: false
   },
   {
     DisplayName: 'GLM 5.3',
     ID: 'z-ai/glm-5.3',
+    ContextOptions: [272_000, 1_048_576],
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
@@ -610,28 +669,33 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Grok 4.6',
     ID: 'x-ai/grok-4.6',
+    ContextOptions: [256_000, 500_000],
     Brand: 'Grok',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
     DefaultEffort: 'high',
     UltraEffort: 'xhigh',
-    FastMode: false,
+    FastMode: true,
+    DefaultSpeed: 'Fast',
     Off: true
   },
   {
     DisplayName: 'Grok 4.5',
     ID: 'x-ai/grok-4.5',
+    ContextOptions: [256_000, 500_000],
     Brand: 'Grok',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
     DefaultEffort: 'high',
     UltraEffort: 'xhigh',
-    FastMode: false,
+    FastMode: true,
+    DefaultSpeed: 'Fast',
     Off: true
   },
   {
     DisplayName: 'Muse Wonder',
     ID: 'meta/muse-wonder',
+    ContextOptions: [272_000, 1_048_576],
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
     DefaultEffort: 'medium',
@@ -641,6 +705,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Muse Spark 1.3',
     ID: 'meta/muse-spark-1.3',
+    ContextOptions: [272_000, 1_048_576],
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
     DefaultEffort: 'medium',
@@ -651,6 +716,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Kimi K2.7 Code',
     ID: 'moonshotai/kimi-k2.7-code',
+    ContextWindow: 262_144,
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
@@ -661,6 +727,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GLM 5.3 Flash',
     ID: 'z-ai/glm-5.3-flash',
+    ContextOptions: [272_000, 1_048_576],
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
@@ -672,6 +739,7 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GLM 5.2',
     ID: 'z-ai/glm-5.2',
+    ContextOptions: [272_000, 1_048_576],
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',

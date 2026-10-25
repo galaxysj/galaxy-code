@@ -5,12 +5,12 @@ import type { AgentMode, ToolItem, ToolKind } from '@shared/types'
 import { gate } from '../agent/approval'
 import { mcp, type McpTool } from '../services/mcp'
 import type { ChatToolSpec } from '../services/openrouter'
-import { errorMessage, isAbortError, oneLine, resolvePath } from '../util'
+import { errorMessage, isAbortError, oneLine } from '../util'
 
 /** Longer tool results are saved to a temporary file, and the agent gets only their beginning. */
 const MAX_RESULT = 30_000
 const RESULT_PREVIEW = 2_000
-import { createTool, editTool, globTool, grepTool, listTool, readTool } from './fs'
+import { editTool, globTool, grepTool, listTool, readTool } from './fs'
 import {
   askTool,
   browserTool,
@@ -103,7 +103,6 @@ export const ALL_TOOLS: ToolDef[] = [
   bashTool,
   eventTool,
   editTool,
-  createTool,
   browserTool,
   agentTool,
   listTabsTool,
@@ -123,11 +122,10 @@ export const BRIDGE_TOOLS: ToolDef[] = [agentTool, messageTool, editTool, lintTo
 export const PLANS_DIR = join(homedir(), '.galaxy', 'plans')
 
 function planPaths(tool: ToolDef, input: Record<string, unknown>, cwd: string): string[] {
-  if (tool.name === 'Create') return [resolvePath(cwd, str(input, 'path', true))]
   return patchFiles(parseEditPatch(str(input, 'patch', true), cwd), cwd)
 }
 
-/** Create or Edit limited to Markdown files directly inside ~/.galaxy/plans. Those writes need no approval. */
+/** Edit limited to Markdown files directly inside ~/.galaxy/plans. Those writes need no approval. */
 function planOnly(tool: ToolDef): ToolDef {
   return {
     ...tool,
@@ -150,7 +148,7 @@ function planOnly(tool: ToolDef): ToolDef {
 /** Ask answers from what it can read. Plan reads and writes only its plan files. */
 export function toolsForMode(mode: Exclude<AgentMode, 'multitask'>): ToolDef[] {
   if (mode === 'ask') return [...EXPLORE_TOOLS, askTool]
-  return [...EXPLORE_TOOLS, planOnly(createTool), planOnly(editTool), askTool]
+  return [...EXPLORE_TOOLS, planOnly(editTool), askTool]
 }
 
 export function toolsForSubagent(_type: string): ToolDef[] {

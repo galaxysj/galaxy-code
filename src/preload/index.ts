@@ -59,7 +59,8 @@ const api: GalaxyApi = {
     answer: call('chats.answer'),
     unqueue: call('chats.unqueue'),
     revert: call('chats.revert'),
-    redo: call('chats.redo')
+    redo: call('chats.redo'),
+    compact: call('chats.compact')
   },
   files: {
     listProject: call('files.listProject'),

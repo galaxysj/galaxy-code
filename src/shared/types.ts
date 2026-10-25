@@ -37,6 +37,12 @@ export interface ResolvedModel {
   defaultOff?: boolean
   /** OpenRouter's router, which picks a model per request. Offered apart from the list. */
   auto?: boolean
+  /** Context window in tokens, from models.ts. */
+  contextWindow?: number
+  /** Speed before the user picks one, from models.ts. */
+  defaultSpeed?: 'Standard' | 'Fast' | 'Ultrafast'
+  /** Context sizes the picker offers, from models.ts. */
+  contextOptions?: number[]
 }
 
 export interface ResolvedImageModel {
@@ -163,6 +169,8 @@ export interface Settings {
   instantCommit: boolean
   /** The Push button pushes at once instead of asking the agent. */
   instantPush: boolean
+  /** 'default' lists models with an options menu beside it; 'slider' is the effort slider. */
+  modelPickerStyle: 'default' | 'slider'
   /** ID from CommitMessageModel in models.ts. */
   commitMessageModelId: string | null
   /** ID from AutoApprovalModel in models.ts. */
@@ -225,6 +233,8 @@ export interface Chat {
   fast: boolean
   /** With fast on, runs at the Ultrafast tier instead. */
   ultrafast?: boolean
+  /** Context size picked from the model's contextOptions; unset uses its contextWindow. */
+  context?: number | null
   permissionMode: PermissionMode
   workspace: WorkspaceMode
   worktree: WorktreeInfo | null
@@ -526,6 +536,7 @@ export interface NewChatInput {
   ultra: boolean
   fast: boolean
   ultrafast?: boolean
+  context?: number | null
   permissionMode: PermissionMode
   workspace: WorkspaceMode
   acpConfig?: Record<string, string>

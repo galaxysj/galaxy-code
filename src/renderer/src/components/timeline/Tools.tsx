@@ -31,7 +31,7 @@ import {
   Wrench
 } from 'lucide-react'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { EXPLORE_KINDS, type AskQuestion, type Item, type ReasoningItem, type TaskEntry, type ToolItem, type ToolKind } from '@shared/types'
+import { EXPLORE_KINDS, type AskQuestion, type FileDiff, type Item, type ReasoningItem, type TaskEntry, type ToolItem, type ToolKind } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, plural, relativeTo } from '../../lib/utils'
 import { attemptedTitle, isTerminalRead, isToolOutputRead, readPath, thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
 import { useStore } from '../../store'
@@ -528,6 +528,13 @@ function BashTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactNode
   )
 }
 
+/** A finished edit says what it did: Created, Deleted or Edited, then the file or the file count. */
+function editedTitle(item: ToolItem, diffs: FileDiff[]): string {
+  if (!diffs.length) return item.title
+  const verb = diffs.every((diff) => diff.created) ? 'Created' : diffs.every((diff) => diff.deleted) ? 'Deleted' : 'Edited'
+  return `${verb} ${diffs.length === 1 ? basename(diffs[0].path) : plural(diffs.length, 'file')}`
+}
+
 function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): ReactNode {
   const openFile = useStore((s) => s.openFile)
   const homeDir = useStore((s) => s.homeDir)
@@ -558,15 +565,15 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
       <div className="px-3 py-1">
       <Row
         icon={<Icon size={13.5} className="text-subtle" />}
-        title={attemptedTitle(item) ?? item.title}
+        title={attemptedTitle(item) ?? (live ? '' : editedTitle(item, diffs))}
         hint={failureReason(item)}
-        detail={item.tool === 'memory' ? item.detail : item.detail && item.detail !== basename(item.detail) ? item.detail : undefined}
-        live={isLive(item)}
+        detail={live ? undefined : item.tool === 'memory' ? item.detail : item.detail && item.detail !== basename(item.detail) ? item.detail : undefined}
+        live={live}
         open={open}
-        onToggle={toggle}
+        onToggle={live ? undefined : toggle}
         trailing={
           <>
-            <DiffStat added={added} removed={removed} />
+            {!live && <DiffStat added={added} removed={removed} />}
             <StatusMark item={item} />
           </>
         }
@@ -592,7 +599,7 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
               <DiffView diff={diff} maxHeight={null} monochrome={live} />
             </div>
           ))}
-          {diffs.length === 0 && inputPreview !== null && <pre className="selectable whitespace-pre-wrap break-words px-3 font-mono text-[13.2px] text-muted">{inputPreview}</pre>}
+          {diffs.length === 0 && inputPreview !== null && <pre className="selectable whitespace-pre-wrap break-words px-3 font-mono text-[13.2px] text-fg">{inputPreview}</pre>}
           {live && diffs.length === 0 && inputPreview === null && <div className="shimmer px-3 text-[13.2px]">Preparing changes…</div>}
           {item.status === 'error' && item.error && <div className="px-3 py-2 text-[13.2px] text-danger">{item.error}</div>}
           </div>

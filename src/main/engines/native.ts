@@ -16,12 +16,17 @@ import { isImagePath, resolvePath, truncateEnd, truncateMiddle } from '../util'
 import { basename } from 'node:path'
 import { streamedEditInput } from './claude'
 import { makeDiff } from '../tools/diff'
-import { previewEditPatch } from '../tools/patch'
 
 const MAX_STEPS = 250
 const PLAN_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789'
-/** Prompt size at which older history is folded into a summary. */
-const COMPACT_AT_TOKENS = 180_000
+/** Context window for models whose size models.ts does not give. */
+const DEFAULT_CONTEXT_WINDOW = 200_000
+
+/** Prompt size at which older history is folded into a summary: 90% of the model's context window. */
+export function compactAt(model: { contextWindow?: number; contextOptions?: number[] }, picked?: number | null): number {
+  const size = picked && model.contextOptions?.includes(picked) ? picked : model.contextWindow ?? DEFAULT_CONTEXT_WINDOW
+  return Math.floor(size * 0.9)
+}
 
 async function userMessage(text: string, attachments: Attachment[], vision: boolean): Promise<ChatMessage> {
   if (attachments.length === 0) return { role: 'user', content: text }
@@ -85,6 +90,15 @@ function transcript(messages: ChatMessage[]): string {
   return lines.join('\n\n')
 }
 
+/** Summarizes a chat's stored history now, as /compact asks. Returns false when there is nothing to fold. */
+export async function compactChat(session: Session, modelId: string, signal: AbortSignal): Promise<boolean> {
+  const history = (session.doc.engine.history ?? []) as ChatMessage[]
+  if (history.length < 2) return false
+  const compacted = await compact(session, modelId, history, signal)
+  session.doc.engine.history = compacted
+  return true
+}
+
 async function compact(session: Session, modelId: string, messages: ChatMessage[], signal: AbortSignal): Promise<ChatMessage[]> {
   const summary = await complete(
     modelId,
@@ -138,17 +152,15 @@ function editPreviews(session: Session, env: ToolEnv): { update(call: ChatToolCa
       const abs = resolvePath(env.cwd, input.path)
       title = `Create ${basename(abs)}`
       diffs = [makeDiff(abs, null, typeof input.content === 'string' ? input.content : '')]
-    } else if (name === 'Edit' && typeof input.patch === 'string') {
-      const patch = input.patch.includes('*** End Patch') ? input.patch : `${input.patch.replace(/\n[^\n]*$/, '')}\n*** End Patch`
-      // A half-written hunk may not parse yet; keep the last diff that did.
-      diffs = await previewEditPatch(patch, env.cwd).catch(() => undefined)
-      if (diffs?.length) title = `Edit ${diffs.length === 1 ? basename(diffs[0].path) : `${diffs.length} files`}`
     }
-    if (!diffs) return
-    if (shown.has(call.id)) session.update<ToolItem>(call.id, { title, meta: { ...session.item<ToolItem>(call.id)?.meta, diffs } })
+    // An Edit shows its patch as plain text while it is written; the diff appears once it runs.
+    const patch = name === 'Edit' && typeof input.patch === 'string' ? input.patch : undefined
+    if (!diffs && patch === undefined) return
+    const fields = patch !== undefined ? { input: { patch } } : { meta: { ...session.item<ToolItem>(call.id)?.meta, diffs } }
+    if (shown.has(call.id)) session.update<ToolItem>(call.id, { title, ...fields })
     else {
       shown.add(call.id)
-      session.add<ToolItem>({ id: call.id, kind: 'tool', tool: name === 'Create' ? 'create' : 'edit', name, title, input: {}, status: 'pending', meta: { diffs }, parentId: env.parentId })
+      session.add<ToolItem>({ id: call.id, kind: 'tool', tool: name === 'Create' ? 'create' : 'edit', name, title, input: {}, status: 'pending', parentId: env.parentId, ...fields })
     }
   }
   return {
@@ -189,7 +201,8 @@ async function loop(options: LoopOptions): Promise<string> {
       signal,
       onText: (delta) => writer.text(delta),
       onReasoning: (delta) => writer.reasoning(delta),
-      onToolCall: (call) => previews.update(call)
+      // Thinking and text are over once the model starts writing a tool call.
+      onToolCall: (call) => { writer.end(); previews.update(call) }
     })
     writer.end()
     await previews.settle()
@@ -270,7 +283,7 @@ async function loop(options: LoopOptions): Promise<string> {
 
     if (signal.aborted) break
 
-    if (options.allowCompaction && result.usage && result.usage.inputTokens > COMPACT_AT_TOKENS) {
+    if (options.allowCompaction && result.usage && result.usage.inputTokens >= compactAt(turn.model, session.chat.context)) {
       const compacted = await compact(session, turn.model.id, options.messages, signal)
       options.messages.splice(0, options.messages.length, ...compacted)
     }

@@ -37,6 +37,8 @@ export interface Draft {
   fast: boolean
   /** With fast on, runs at the Ultrafast tier. */
   ultrafast: boolean
+  /** Context size picked from the model's contextOptions. */
+  context?: number | null
   permissionMode: PermissionMode
   /** Values picked for an ACP agent's session options, by option id. */
   acpConfig?: Record<string, string>
@@ -105,16 +107,36 @@ interface Prefs {
   lastProjectId: string | null
   /** Composer mode chips per chat (or 'new'), so they survive a restart. */
   modes: Record<string, AgentMode>
+  /** Context size last picked per model. */
+  context: Record<string, number>
 }
 
 const PREFS_KEY = 'galaxy.prefs'
 
 function loadPrefs(): Prefs {
   try {
-    return { models: {}, efforts: {}, ultra: {}, fast: {}, ultrafast: {}, acp: {}, lastProjectId: null, modes: {}, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') }
+    return { models: {}, efforts: {}, ultra: {}, fast: {}, ultrafast: {}, acp: {}, lastProjectId: null, modes: {}, context: {}, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') }
   } catch {
-    return { models: {}, efforts: {}, ultra: {}, fast: {}, ultrafast: {}, acp: {}, lastProjectId: null, modes: {} }
+    return { models: {}, efforts: {}, ultra: {}, fast: {}, ultrafast: {}, acp: {}, lastProjectId: null, modes: {}, context: {} }
   }
+}
+
+/** The speed the user last picked for a model, or the model's DefaultSpeed until they pick one. */
+function speedPref(model: ResolvedModel, key: string): { fast: boolean; ultrafast: boolean } {
+  const fast = prefs.fast[key] ?? (model.defaultSpeed === 'Fast' || model.defaultSpeed === 'Ultrafast')
+  const ultrafast = prefs.ultrafast[key] ?? model.defaultSpeed === 'Ultrafast'
+  return { fast: model.fastMode && fast, ultrafast: model.ultrafastMode && fast && ultrafast }
+}
+
+/** The context size last picked for a model, when it is still one the model offers. */
+function contextPref(model: ResolvedModel, key: string): number | null {
+  const picked = prefs.context[key]
+  return picked && model.contextOptions?.includes(picked) ? picked : null
+}
+
+/** A model's remembered options, for showing them beside it in the picker's list. */
+export function rememberedRunOptions(model: ResolvedModel): { effort: Effort | null; ultra: boolean; fast: boolean; ultrafast: boolean; context: number | null } {
+  return { effort: normalizeEffort(model, prefs.efforts[model.key] ?? null), ultra: !!model.ultraEffort && prefs.ultra[model.key] === true, ...speedPref(model, model.key), context: contextPref(model, model.key) }
 }
 
 /** Saves the mode chips that are on; turned-off ones are dropped. */
@@ -185,11 +207,12 @@ interface State {
   setDraft(patch: Partial<Draft>): void
   /** Run-option actions act on `chatId` when given (a side chat), else on the open chat or the draft. */
   pickModel(modelKey: string, chatId?: string | null): void
+  resetModelOptions(modelKey: string, chatId?: string | null): void
   pickSubscription(subscription: Subscription, chatId?: string | null): void
   refreshAccounts(): Promise<void>
   loadAcpOptions(agentId: string, fresh?: boolean, chatId?: string | null): Promise<void>
   setAcpOption(optionId: string, value: string, chatId?: string | null): void
-  setRunOptions(patch: { effort?: Effort | null; ultra?: boolean; fast?: boolean; ultrafast?: boolean }, chatId?: string | null): void
+  setRunOptions(patch: { effort?: Effort | null; ultra?: boolean; fast?: boolean; ultrafast?: boolean; context?: number | null }, chatId?: string | null): void
   setPermissionMode(mode: PermissionMode, chatId?: string | null): void
   send(text: string, attachments: Attachment[], mentions?: PromptMentions, steer?: boolean, mode?: AgentMode, plan?: string, chatId?: string | null): Promise<void>
   updateSettings(patch: Partial<Settings>): Promise<void>
@@ -232,8 +255,9 @@ function draftFor(models: ResolvedModel[], settings: Settings, projectId: string
     modelKey: key,
     effort: model ? normalizeEffort(model, prefs.efforts[key] ?? null) : null,
     ultra: !!model?.ultraEffort && prefs.ultra[key] === true,
-    fast: !!model?.fastMode && prefs.fast[key] === true,
-    ultrafast: !!model?.ultrafastMode && prefs.ultrafast[key] === true,
+    fast: !!model && speedPref(model, key).fast,
+    ultrafast: !!model && speedPref(model, key).ultrafast,
+    context: model ? contextPref(model, key) : null,
     permissionMode: settings.defaultPermissionMode,
     acpConfig: acpPrefs(model?.subscription)
   }
@@ -552,8 +576,9 @@ export const useStore = create<State>((set, get) => {
         modelKey,
         effort: normalizeEffort(model, prefs.efforts[modelKey] ?? null),
         ultra: !!model.ultraEffort && prefs.ultra[modelKey] === true,
-        fast: model.fastMode && prefs.fast[modelKey] === true,
-        ultrafast: model.ultrafastMode && prefs.ultrafast[modelKey] === true,
+        fast: speedPref(model, modelKey).fast,
+        ultrafast: speedPref(model, modelKey).ultrafast,
+        context: contextPref(model, modelKey),
         acpConfig: acpPrefs(model.subscription)
       }
       if (id) {
@@ -634,6 +659,28 @@ export const useStore = create<State>((set, get) => {
       } else set({ draft: { ...s.draft, acpConfig: { ...(s.draft.acpConfig ?? {}), [optionId]: value } } })
     },
 
+    resetModelOptions(modelKey, chatId) {
+      const s = get()
+      const model = findModel(s.models, modelKey)
+      if (!model) return
+      delete prefs.efforts[modelKey]
+      delete prefs.ultra[modelKey]
+      delete prefs.fast[modelKey]
+      delete prefs.ultrafast[modelKey]
+      delete prefs.context[modelKey]
+      savePrefs(prefs)
+      const id = chatId === undefined ? s.activeChatId : chatId
+      const chat = id ? s.chats[id] : null
+      if ((chat ? chat.modelKey : s.draft.modelKey) === modelKey) {
+        const patch = { effort: model.defaultEffort, ultra: false, ...speedPref(model, modelKey), context: null }
+        if (chat) void window.galaxy.chats.update(chat.id, patch)
+        else set({ draft: { ...s.draft, ...patch } })
+      } else {
+        // Refresh summaries that read the remembered options outside Zustand.
+        set({ models: [...s.models] })
+      }
+    },
+
     setRunOptions(patch, chatId) {
       const s = get()
       const id = chatId === undefined ? s.activeChatId : chatId
@@ -643,6 +690,7 @@ export const useStore = create<State>((set, get) => {
       if (patch.ultra !== undefined) prefs.ultra[key] = patch.ultra
       if (patch.fast !== undefined) prefs.fast[key] = patch.fast
       if (patch.ultrafast !== undefined) prefs.ultrafast[key] = patch.ultrafast
+      if (patch.context) prefs.context[key] = patch.context
       savePrefs(prefs)
       if (chat) void window.galaxy.chats.update(chat.id, patch)
       else set({ draft: { ...s.draft, ...patch } })
@@ -921,6 +969,8 @@ export function useRunConfig(): {
   ultra: boolean
   fast: boolean
   ultrafast: boolean
+  /** Context size in use: the picked option, else the model's window. */
+  context: number | null
   permissionMode: PermissionMode
   /** Set when the model is an ACP agent, whose own session options replace effort and Fast. */
   acp: { agentId: string; options: AcpConfigOption[]; values: Record<string, string>; loading: boolean; error: string | null } | null
@@ -944,6 +994,7 @@ export function useRunConfig(): {
     ultra: !!model?.ultraEffort && source.ultra,
     fast: !!model?.fastMode && source.fast,
     ultrafast: !!model?.ultrafastMode && source.fast && source.ultrafast === true,
+    context: model && source.context && model.contextOptions?.includes(source.context) ? source.context : model?.contextWindow ?? null,
     permissionMode: source.permissionMode,
     acp: agentId
       ? {

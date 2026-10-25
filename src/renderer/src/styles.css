@@ -227,6 +227,10 @@
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
+/* The model picker's scrollbar shows only on hover, and see-through. */
+.picker-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--fg) 16%, transparent);
+}
 
 /* Activity text: a soft highlight sweeping across the label while work is in flight. */
 @keyframes sweep {

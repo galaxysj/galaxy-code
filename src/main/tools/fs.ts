@@ -1,13 +1,12 @@
 import { spawn } from 'node:child_process'
 import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, join } from 'node:path'
 import { rgPath as bundledRgPath } from '@vscode/ripgrep'
 import type { ToolItem } from '@shared/types'
 import { outsideReadApproval } from '../agent/approval'
 import { skillNameForPath } from '../services/skills'
 import { displayPath, exists, isImagePath, looksBinary, mimeOf, resolvePath, truncateEnd } from '../util'
-import { makeDiff } from './diff'
 import { applyEditPatch, parseEditPatch, patchFiles, previewEditPatch } from './patch'
 import { bool, num, plural, str, ToolInputError, type ToolDef } from './types'
 
@@ -322,51 +321,3 @@ Update File hunks use a space for unchanged context, - for removed lines and + f
   }
 }
 
-export const createTool: ToolDef = {
-  name: 'Create',
-  kind: 'create',
-  description:
-    'Write a file with the given content, creating parent directories as needed. Overwrites the file if it exists, so prefer Edit for changes to existing files.',
-  parameters: {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: 'File to write.' },
-      content: { type: 'string', description: 'Full content of the file.' }
-    },
-    required: ['path', 'content']
-  },
-  present(input, ctx) {
-    const abs = resolvePath(ctx.cwd, String(input.path ?? ''))
-    return { title: `Create ${basename(abs)}`, detail: displayPath(ctx.cwd, abs) }
-  },
-  approval(input, ctx) {
-    const abs = resolvePath(ctx.cwd, String(input.path ?? ''))
-    const content = String(input.content ?? '')
-    return {
-      action: {
-        tool: 'Create',
-        file: abs,
-        inside_workspace: abs.startsWith(ctx.cwd + '/'),
-        bytes: content.length,
-        content_preview: content.slice(0, 1500)
-      },
-      sessionKey: 'edit',
-      sessionLabel: 'Allow all edits in this chat'
-    }
-  },
-  async execute(input, ctx) {
-    const abs = resolvePath(ctx.cwd, str(input, 'path', true))
-    if (typeof input.content !== 'string') throw new ToolInputError('Missing required parameter: content')
-    const info = await stat(abs).catch(() => null)
-    if (info?.isDirectory()) throw new Error(`${abs} is a directory`)
-    const before = info ? await readFile(abs, 'utf8').catch(() => '') : null
-    await mkdir(dirname(abs), { recursive: true })
-    await writeFile(abs, input.content, 'utf8')
-    const diff = makeDiff(abs, before, input.content)
-    const lines = input.content === '' ? 0 : input.content.split('\n').length
-    return {
-      text: `${before === null ? 'Created' : 'Overwrote'} ${abs} (${plural(lines, 'line')}).`,
-      meta: { diffs: [diff] }
-    }
-  }
-}

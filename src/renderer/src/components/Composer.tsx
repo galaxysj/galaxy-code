@@ -323,6 +323,24 @@ const SIDE_COMMANDS = ['side', 'btw']
 const MULTITASK_ULTRA = "Multitask can't be used with Ultra mode."
 const SIDE_COMMAND = /^\/(?:side|btw)(?:\s+|$)/i
 
+/** How full the context is, as a ring toward the point where history is compacted (90% of the window). Details on hover. */
+function ContextRing({ used, size, subscription }: { used: number; size: number; subscription: string }): ReactNode {
+  const limit = Math.floor(size * 0.9)
+  const ratio = Math.min(1, used / limit)
+  const radius = 6
+  const circumference = 2 * Math.PI * radius
+  const auto = subscription === 'Default'
+  const title = `Context: ${used.toLocaleString()} of ${size.toLocaleString()} tokens (${Math.round((used / size) * 100)}%)${auto ? `\nCompacts automatically at ${limit.toLocaleString()} (90%). Type /compact to do it now.` : ''}`
+  return (
+    <span title={title} aria-label={title} className="mx-1 flex h-7 w-5 shrink-0 items-center justify-center">
+      <svg width="16" height="16" viewBox="0 0 16 16" className="-rotate-90">
+        <circle cx="8" cy="8" r={radius} fill="none" stroke="currentColor" strokeWidth="2" className="text-line-strong" />
+        <circle cx="8" cy="8" r={radius} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - ratio)} className={ratio >= 0.85 ? 'text-warn' : 'text-subtle'} />
+      </svg>
+    </span>
+  )
+}
+
 function ModeChip({ mode, onClear }: { mode: AgentMode; onClear(): void }): ReactNode {
   const { label, description, icon: Icon, tone } = MODES[mode]
   return (
@@ -425,6 +443,12 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const storedMode = useStore((s) => s.composerMode[key])
   const setComposerMode = useStore((s) => s.setComposerMode)
   const mode = modesAvailable ? storedMode : undefined
+  // /compact summarizes a Galaxy model's history; account and ACP agents keep their own context.
+  const canCompact = !edit && !!chat && modesAvailable
+  const compactChat = (): void => {
+    if (!chat) return
+    void window.galaxy.chats.compact(chat.id).catch((error: unknown) => useStore.getState().notify(String(error instanceof Error ? error.message : error), 'error'))
+  }
   // Multitask hides Ultra, so the composer stops showing it too.
   const ultra = runConfig.ultra && mode !== 'multitask'
   const textarea = useRef<HTMLTextAreaElement>(null)
@@ -533,6 +557,9 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
             const disabled = value === 'multitask' && ultra
             return { id: `mode:${value}`, kind: 'mode' as const, name: MODES[value].label, detail: disabled ? MULTITASK_ULTRA : MODES[value].description, mode: value, disabled }
           }),
+        ...(canCompact && 'compact'.startsWith(mention.query.toLowerCase())
+          ? [{ id: 'command:compact', kind: 'command' as const, name: 'Compact', detail: 'Summarize the conversation so far to free up context.' }]
+          : []),
         ...(!edit && SIDE_COMMANDS.some((command) => command.startsWith(mention.query.toLowerCase()))
           ? [{ id: 'command:side', kind: 'command' as const, name: 'Side Chat', detail: 'Open a side chat in the panel. It is deleted when closed.' }]
           : []),
@@ -599,6 +626,11 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
     if (entry.kind === 'model' && entry.modelKey) {
       pickModel(entry.modelKey, chatId)
       replaceMention('')
+      return
+    }
+    if (entry.id === 'command:compact') {
+      replaceMention('')
+      compactChat()
       return
     }
     if (entry.kind === 'command' && mention) {
@@ -735,6 +767,12 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
 
   const submit = async (steer = false): Promise<void> => {
     if (!canSend) return
+    if (!edit && /^\/compact\s*$/i.test(text.trim()) && canCompact) {
+      setText(key, '')
+      setMention(null)
+      compactChat()
+      return
+    }
     const side = edit ? null : SIDE_COMMAND.exec(text)
     if (side) {
       setText(key, '')
@@ -821,7 +859,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   }
 
   return (
-    <div className={cn(!edit && 'mx-auto w-full max-w-[780px] px-6', !edit && (centered ? 'pb-0' : 'pb-4'))}>
+    <div className={cn(!edit && 'mx-auto w-full px-6', !edit && (centered ? 'max-w-[680px] pb-0' : 'max-w-[780px] pb-4'))}>
       {!edit && !compact && !chat?.side && (
         <div className="mb-1.5 flex h-6 items-center gap-1.5 pl-1">
           {!chat && <ProjectChip chat={chat} />}
@@ -1037,7 +1075,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
                 : `Ask ${model.name} to build, fix, or explain something`
               : chat ? (running ? 'Queue a follow-up…' : 'Ask for follow-up changes') : 'Describe a task, ask a question, or paste an error'
           }
-          className={cn('relative block max-h-[40vh] min-h-[44px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[14.7px] leading-[1.55] placeholder:text-subtle', chipTokens.length > 0 && 'text-transparent caret-[var(--fg)]')}
+          className={cn('relative block max-h-[40vh] w-full resize-none', centered ? 'min-h-[80px]' : 'min-h-[44px]', 'bg-transparent px-4 pb-1 pt-3.5 text-[14.7px] leading-[1.55] placeholder:text-subtle', chipTokens.length > 0 && 'text-transparent caret-[var(--fg)]')}
         />
         </div>
         <div className="composer-toolbar flex flex-wrap items-center gap-0.5 px-2 pb-2 pt-1">
@@ -1049,6 +1087,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
           </div>
           <div className="composer-actions ml-auto flex min-w-0 max-w-full items-center">
             {!acp && <span className="composer-model flex min-w-0 items-center"><ModelPicker noUltra={mode === 'multitask'} /></span>}
+            {chat && model && <ContextRing used={chat.usage.contextTokens} size={runConfig.context ?? 200_000} subscription={model.subscription} />}
             {running && !canSend ? (
               <button
                 type="button"

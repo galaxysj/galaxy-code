@@ -19,7 +19,7 @@ import {
 import { disposeAcp, runAcp } from '../engines/acp'
 import { runClaude } from '../engines/claude'
 import { disposeCodex, runCodex } from '../engines/codex'
-import { runNative } from '../engines/native'
+import { compactChat, runNative } from '../engines/native'
 import { changedFiles, removeCheckpoints, restoreFiles, snapshot } from '../services/checkpoints'
 import { createWorktree, gitInfo, removeWorktree } from '../services/git'
 import { browser } from '../services/browser'
@@ -93,6 +93,7 @@ class ChatManager {
       ultra: input.ultra,
       fast: input.fast,
       ultrafast: input.ultrafast === true,
+      context: input.context ?? null,
       permissionMode: input.permissionMode,
       workspace: input.projectId ? input.workspace : 'local',
       worktree: null,
@@ -157,6 +158,7 @@ class ChatManager {
     if (patch.ultra !== undefined) allowed.ultra = patch.ultra
     if (patch.fast !== undefined) allowed.fast = patch.fast
     if (patch.ultrafast !== undefined) allowed.ultrafast = patch.ultrafast
+    if (patch.context !== undefined) allowed.context = patch.context
     if (patch.acpConfig !== undefined) allowed.acpConfig = { ...(session.chat.acpConfig ?? {}), ...patch.acpConfig }
     if (patch.modelKey !== undefined && patch.modelKey !== session.chat.modelKey) {
       // Another agent's options mean nothing here.
@@ -301,6 +303,32 @@ class ChatManager {
     session.patchChat({ reverted: { text: message.text, attachments: message.attachments, ...(message.prompt ? { mentions: message.prompt } : {}) } })
     store.flushDocs()
     return null
+  }
+
+  /** /compact: folds the chat's history into a summary now, for Galaxy models. */
+  async compact(chatId: string): Promise<void> {
+    const session = this.session(chatId)
+    if (session.running) throw new Error('Wait for the chat to finish before compacting.')
+    const model = findModel(this.models(), session.chat.modelKey)
+    if (model?.subscription !== 'Default') throw new Error('/compact works with Galaxy models only.')
+    const controller = new AbortController()
+    session.controller = controller
+    session.patchChat({ status: 'running' })
+    try {
+      if (!(await compactChat(session, model.id, controller.signal))) {
+        session.notice('info', 'There is nothing to compact yet.')
+        return
+      }
+      // The summary is now the whole context; estimate its size until the next reply reports it.
+      const summary = JSON.stringify(session.doc.engine.history ?? [])
+      session.patchChat({ usage: { ...session.chat.usage, contextTokens: Math.ceil(summary.length / 4) } })
+    } catch (err) {
+      if (!controller.signal.aborted) session.notice('error', `Could not compact: ${errorMessage(err)}`)
+    } finally {
+      session.controller = null
+      session.patchChat({ status: 'idle' })
+      store.flushDocs()
+    }
   }
 
   /** Undoes the last revert while nothing new has been sent. */

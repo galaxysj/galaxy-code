@@ -208,7 +208,6 @@ function Welcome(): ReactNode {
 }
 
 const EMPTY_ITEMS: never[] = []
-const MIN_PANEL_HEIGHT = 640
 const MIN_PANEL_WIDTH = 360
 
 export function App(): ReactNode {
@@ -249,8 +248,9 @@ export function App(): ReactNode {
 
   const availablePanelWidth = viewport.width - (sidebarOpen ? sidebarWidth : 0) - 420
   useEffect(() => {
-    if (panelOpen && (viewport.height < MIN_PANEL_HEIGHT || availablePanelWidth < MIN_PANEL_WIDTH)) useStore.getState().setPanel(false)
-  }, [panelOpen, viewport.height, availablePanelWidth])
+    // Only a lack of width closes the panel; a short window keeps it open.
+    if (panelOpen && availablePanelWidth < MIN_PANEL_WIDTH) useStore.getState().setPanel(false)
+  }, [panelOpen, availablePanelWidth])
 
   useEffect(() => {
     if (savedSidebar) setSidebarWidth(savedSidebar)

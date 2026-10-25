@@ -38,7 +38,10 @@ function fromSpec(spec: AgentModelSpec, disabled: Set<string>, enabled: Set<stri
     vision: spec.Vision !== false,
     custom: false,
     enabled: spec.Off ? enabled.has(key) : !disabled.has(key),
-    defaultOff: spec.Off === true
+    defaultOff: spec.Off === true,
+    ...(spec.ContextWindow ? { contextWindow: spec.ContextWindow } : {}),
+    ...(spec.DefaultSpeed ? { defaultSpeed: spec.DefaultSpeed } : {}),
+    ...(spec.ContextOptions?.length ? { contextOptions: spec.ContextOptions } : {})
   }
 }
 

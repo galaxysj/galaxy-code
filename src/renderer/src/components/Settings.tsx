@@ -149,6 +149,20 @@ function GeneralSection(): ReactNode {
           </RowItem>
         </Card>
       </Section>
+      <Section title="Composer">
+        <Card>
+          <RowItem label="Model picker style" hint="Default lists models with their effort and options beside them. Slider shows one model with an effort slider.">
+            <Segmented<'default' | 'slider'>
+              value={settings.modelPickerStyle ?? 'default'}
+              onChange={(modelPickerStyle) => void update({ modelPickerStyle })}
+              options={[
+                { value: 'default', label: 'Default' },
+                { value: 'slider', label: 'Slider' }
+              ]}
+            />
+          </RowItem>
+        </Card>
+      </Section>
       <Section title="Git">
         <Card>
           <RowItem label="Instant commit" hint="Commit and Commit &amp; Push commit right away with a message written by the model below, instead of asking the agent. Mentioning @Commit still asks the agent.">

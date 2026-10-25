@@ -101,6 +101,8 @@ export interface GalaxyApi {
     revert(chatId: string, itemId: string, messageOnly?: boolean): Promise<string | null>
     /** Undoes the last revert. */
     redo(chatId: string): Promise<void>
+    /** /compact: summarizes the chat's history now. Galaxy models only. */
+    compact(chatId: string): Promise<void>
   }
 
   files: {

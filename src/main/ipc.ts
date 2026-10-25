@@ -294,6 +294,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'chats.unqueue': (chatId: string, messageId: string) => manager.unqueue(chatId, messageId),
     'chats.revert': (chatId: string, itemId: string, messageOnly?: boolean) => manager.revert(chatId, itemId, messageOnly === true),
     'chats.redo': (chatId: string) => manager.redo(chatId),
+    'chats.compact': (chatId: string) => manager.compact(chatId),
 
     'files.pickAttachments': async () => {
       const win = requestWindow()
