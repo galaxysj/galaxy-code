@@ -21,7 +21,6 @@ import { parseEditPatch, patchFiles } from './patch'
 import { eventTool, waitTool } from './events'
 import { lintTool } from './lint'
 import { bashTool } from './shell'
-import { terminalTool } from './terminal'
 import { str, ToolInputError, type ToolContext, type ToolDef, type ToolResult } from './types'
 
 export const SUBAGENT_TYPES = {
@@ -96,7 +95,6 @@ const EXPLORE_TOOLS: ToolDef[] = [readTool, grepTool, globTool, listTool, lintTo
 export const ALL_TOOLS: ToolDef[] = [
   ...EXPLORE_TOOLS,
   bashTool,
-  terminalTool,
   eventTool,
   editTool,
   createTool,
@@ -113,7 +111,7 @@ export const ALL_TOOLS: ToolDef[] = [
 ]
 
 /** Tools Galaxy Code lends to account CLIs. */
-export const BRIDGE_TOOLS: ToolDef[] = [agentTool, messageTool, editTool, lintTool, waitTool, eventTool, terminalTool, browserTool, listTabsTool, askTool, taskTool, presentTool, openTool, memoryTool, imageGenerationTool]
+export const BRIDGE_TOOLS: ToolDef[] = [agentTool, messageTool, editTool, lintTool, waitTool, eventTool, browserTool, listTabsTool, askTool, taskTool, presentTool, openTool, memoryTool, imageGenerationTool]
 
 /** Where Plan mode keeps its plans, relative to the working directory. */
 export const PLANS_DIR = join('.galaxy', 'plans')

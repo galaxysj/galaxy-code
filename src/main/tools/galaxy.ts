@@ -365,7 +365,7 @@ export const openTool: ToolDef = {
   name: 'Open',
   kind: 'open',
   description:
-    'Open a tab beside the chat. type=file (default) opens path at line. type=terminal opens a shell in the workspace and returns its tabId for the Terminal tool. type=review opens workspace changes. Existing tabs stay open. It does not return file content; use Read for that.',
+    'Open a tab beside the chat. type=file (default) opens path at line. type=terminal opens a shell in the workspace for the user and returns its tabId. type=review opens workspace changes. Existing tabs stay open. It does not return file content; use Read for that.',
   parameters: {
     type: 'object',
     properties: {

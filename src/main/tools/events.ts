@@ -81,7 +81,7 @@ If you set several, the first to fire resumes you and the rest are dropped. A ne
     } else {
       const target = str(input, 'target', true)
       const quietMs = (num(input, 'quiet_seconds') ?? 5) * 1000
-      if (!terminals.list().some((tab) => tab.tabId === target)) throw new ToolInputError(`No open terminal with tabId ${target}. Use Terminal action=list to find IDs.`)
+      if (!terminals.list().some((tab) => tab.tabId === target)) throw new ToolInputError(`No open terminal with tabId ${target}. Terminal tabIds come from the user's terminal mentions or Open type=terminal.`)
       const tail = (): string => terminals.read(target).slice(-4000)
       event = {
         label: 'Terminal finishes',
