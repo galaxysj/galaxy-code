@@ -284,7 +284,6 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     UltraEffort: 'xhigh',
     FastMode: true,
-    UltrafastMode: true
   },
   {
     DisplayName: 'GPT-6 Luna',
