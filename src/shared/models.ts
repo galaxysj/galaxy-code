@@ -276,6 +276,16 @@ export const AgentModel: AgentModelSpec[] = [
     UltrafastMode: true
   },
   {
+    DisplayName: 'GPT-6.1 Terra',
+    ID: 'openai/gpt-6.1-terra',
+    ContextOptions: [272_000, 1_050_000],
+    Brand: 'GPT',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    UltraEffort: 'xhigh',
+    FastMode: true,
+  },
+  {
     DisplayName: 'GPT-6 Luna',
     ID: 'openai/gpt-6-luna',
     ContextOptions: [272_000, 1_050_000],
