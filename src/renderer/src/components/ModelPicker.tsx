@@ -1,5 +1,5 @@
 import { Check, ChevronDown, ChevronLeft, ChevronRight, RotateCcw, Search, Settings2, Sparkles, Zap } from 'lucide-react'
-import { AUTO_MODEL } from '@shared/catalog'
+import { AUTO_MODEL, PREMIUM_MODEL } from '@shared/catalog'
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { AcpAgents } from '@shared/acp-registry'
 import { EFFORT_LABELS, type Effort, type ResolvedModel, type Subscription } from '@shared/types'
@@ -236,6 +236,16 @@ function MenuRow({ label, checked, onClick, className }: { label: ReactNode; che
   )
 }
 
+/** A checkable row under Auto that switches it to the Premium router. */
+function PremiumRow({ checked, onChange, className }: { checked: boolean; onChange(on: boolean): void; className?: string }): ReactNode {
+  return (
+    <button type="button" role="checkbox" aria-checked={checked} onClick={() => onChange(!checked)} className={cn('flex h-7 items-center gap-2 rounded-md px-2 text-left text-[12px] transition-colors hover:bg-hover', checked ? 'text-fg' : 'text-muted', className)}>
+      <span className={cn('flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border', checked ? 'border-accent bg-accent text-on-accent' : 'border-line-strong')}>{checked && <Check size={10} strokeWidth={3} />}</span>
+      <span className="min-w-0 flex-1 truncate">Premium</span>
+    </button>
+  )
+}
+
 /** The Default style: every model in a list, with the picked model's context, effort and options in a menu beside it. */
 function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
   const anchor = useRef<HTMLButtonElement>(null)
@@ -311,12 +321,20 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
         <div ref={listBox} className="picker-scroll flex w-[228px] shrink-0 flex-col overflow-y-auto overscroll-contain rounded-lg bg-elev shadow-pop" style={{ maxHeight: listHeight + 64 + 37 }}>
           <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search models" className="h-8 shrink-0 bg-transparent px-3 text-[12px] placeholder:text-subtle" />
           {subscription === 'Default' && !needle && (
-            <div className="flex h-8 shrink-0 items-center justify-between border-b border-line px-3 text-[12px]">
-              <span>Auto</span>
-              <Switch checked={auto} onChange={(on) => pickModel(on ? AUTO_MODEL.key : (visible[0]?.key ?? AUTO_MODEL.key), chatId)} label="Auto" />
+            <div className="shrink-0 border-b border-line px-3 text-[12px]">
+              <div className="flex h-8 items-center justify-between">
+                <span>Auto</span>
+                <Switch checked={auto} onChange={(on) => pickModel(on ? AUTO_MODEL.key : (visible[0]?.key ?? AUTO_MODEL.key), chatId)} label="Auto" />
+              </div>
+              {/* With Auto on, Premium swaps the free router for OpenRouter's Auto Router. */}
+              {auto && <>
+                <PremiumRow checked={model?.key === PREMIUM_MODEL.key} onChange={(on) => pickModel(on ? PREMIUM_MODEL.key : AUTO_MODEL.key, chatId)} className="-mx-2 w-[calc(100%+1rem)]" />
+                <p className="pb-2 pt-1 text-[11.5px] leading-snug text-subtle">{model?.description}</p>
+              </>}
             </div>
           )}
-          <div className="shrink-0 p-1">
+          {/* Auto and Premium pick the model themselves, so the list stays closed until it is turned off or a search starts. */}
+          {(!auto || !!needle) && <div className="shrink-0 p-1">
             {visible.length === 0 && <div className="px-3 py-6 text-center text-[12px] text-subtle">{subscription ? 'No models match.' : 'Choose a signed-in subscription or Local.'}</div>}
             {visible.map((entry) => {
               const checked = entry.key === model?.key
@@ -351,8 +369,8 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
                 </div>
               )
             })}
-          </div>
-          <ConfigureModels onOpen={() => setOpen(false)} />
+          </div>}
+          {(!auto || !!needle) && <ConfigureModels onOpen={() => setOpen(false)} />}
         </div>
         {/* Keep options out of the popover's measured width so toggling Edit never moves the model list. */}
         {side && (
@@ -405,7 +423,7 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
 
   const auto = !!model?.auto
   const hasEffort = !!model && !auto && model.efforts.length > 0
-  const label = !model ? '' : auto ? 'Auto' : ultra ? 'Ultra' : effort ? EFFORT_LABELS[effort] : 'Standard'
+  const label = !model ? '' : auto ? model.name : ultra ? 'Ultra' : effort ? EFFORT_LABELS[effort] : 'Standard'
   // Reset goes back to the model's DefaultSpeed from models.ts.
   const defaultFast = !!model?.fastMode && (model.defaultSpeed === 'Fast' || model.defaultSpeed === 'Ultrafast')
   const defaultUltrafast = defaultFast && !!model?.ultrafastMode && model.defaultSpeed === 'Ultrafast'
@@ -500,7 +518,8 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
                 <RotateCcw size={13} />
               </button>
             </div>
-            {auto && <p className="mt-2 px-1 text-center text-[11.5px] leading-snug text-subtle">Picks the best model for each request automatically.</p>}
+            {auto && <PremiumRow checked={model.key === PREMIUM_MODEL.key} onChange={(on) => pickModel(on ? PREMIUM_MODEL.key : AUTO_MODEL.key, chatId)} className="mt-2 w-full" />}
+            {model.description && <p className="mt-2 px-1 text-center text-[11.5px] leading-snug text-subtle">{model.description}</p>}
             {hasEffort && (
               <div className="mt-2.5" title={ultra ? `Ultra orchestrates parallel subagents at ${EFFORT_LABELS[model.ultraEffort as Effort].toLowerCase()} effort` : undefined}>
                 <EffortSlider model={model} effort={effort} ultra={ultra} allowUltra={!noUltra} onChange={(next) => setRunOptions(next, chatId)} />

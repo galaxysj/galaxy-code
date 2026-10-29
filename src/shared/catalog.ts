@@ -63,11 +63,11 @@ function fromCustom(model: CustomModel, disabled: Set<string>): ResolvedModel {
   }
 }
 
-/** OpenRouter's Auto Router: it chooses a model for each request, so it has no effort or Fast. */
+/** OpenRouter's Free Models Router: it sends each request to a free model, so it has no effort or Fast. */
 export const AUTO_MODEL: ResolvedModel = {
-  key: modelKey('Default', 'openrouter/auto'),
+  key: modelKey('Default', 'openrouter/free'),
   name: 'Auto',
-  id: 'openrouter/auto',
+  id: 'openrouter/free',
   subscription: 'Default',
   efforts: [],
   defaultEffort: null,
@@ -77,7 +77,17 @@ export const AUTO_MODEL: ResolvedModel = {
   vision: true,
   custom: false,
   enabled: true,
-  auto: true
+  auto: true,
+  description: 'Sends each request to a free model on OpenRouter.'
+}
+
+/** OpenRouter's Auto Router, offered as a Premium check under Auto. Its key is the one Auto had before. */
+export const PREMIUM_MODEL: ResolvedModel = {
+  ...AUTO_MODEL,
+  key: modelKey('Default', 'openrouter/auto'),
+  name: 'Premium',
+  id: 'openrouter/auto',
+  description: 'Picks the best model for each request automatically.'
 }
 
 /** ACP agents pick their model inside the session, so each gets one entry that stands for the agent. */
@@ -108,6 +118,7 @@ export function resolveModels(settings: Pick<Settings, 'customModels' | 'disable
   const out: ResolvedModel[] = []
   for (const model of [
     AUTO_MODEL,
+    PREMIUM_MODEL,
     ...AgentModel.map((spec) => fromSpec(spec, disabled, enabled)),
     ...AcpAgents.map((agent) => fromAcpAgent(agent.DisplayName)),
     ...settings.customModels.filter((custom) => !ACP_ACCOUNTS.includes(SUBSCRIPTION_ACCOUNT[custom.subscription] ?? '')).map((custom) => fromCustom(custom, disabled))

@@ -330,9 +330,14 @@ function ContextRing({ used, size, subscription }: { used: number; size: number;
   const radius = 6
   const circumference = 2 * Math.PI * radius
   const auto = subscription === 'Default'
-  const title = `Context: ${used.toLocaleString()} of ${size.toLocaleString()} tokens (${Math.round((used / size) * 100)}%)${auto ? `\nCompacts automatically at ${limit.toLocaleString()} (90%). Type /compact to do it now.` : ''}`
+  const summary = `Context: ${used.toLocaleString()} of ${size.toLocaleString()} tokens (${Math.round((used / size) * 100)}%)`
+  const hint = auto ? `Compacts automatically at ${limit.toLocaleString()} (90%). Type /compact to do it now.` : ''
   return (
-    <span title={title} aria-label={title} className="mx-1 flex h-7 w-5 shrink-0 items-center justify-center">
+    <span aria-label={`${summary}${hint ? `. ${hint}` : ''}`} className="group/ring relative mx-1 flex h-7 w-5 shrink-0 cursor-default items-center justify-center">
+      <span className="pointer-events-none absolute bottom-full right-0 z-30 mb-1 w-max max-w-[280px] rounded-lg border border-line bg-elev px-2.5 py-1.5 text-[12px] leading-snug text-fg opacity-0 shadow-pop transition-opacity group-hover/ring:opacity-100">
+        <span className="block tabular-nums">{summary}</span>
+        {hint && <span className="mt-0.5 block text-muted">{hint}</span>}
+      </span>
       <svg width="16" height="16" viewBox="0 0 16 16" className="-rotate-90">
         <circle cx="8" cy="8" r={radius} fill="none" stroke="currentColor" strokeWidth="2" className="text-line-strong" />
         <circle cx="8" cy="8" r={radius} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - ratio)} className={ratio >= 0.85 ? 'text-warn' : 'text-subtle'} />
@@ -1087,7 +1092,6 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
           </div>
           <div className="composer-actions ml-auto flex min-w-0 max-w-full items-center">
             {!acp && <span className="composer-model flex min-w-0 items-center"><ModelPicker noUltra={mode === 'multitask'} /></span>}
-            {chat && model && <ContextRing used={chat.usage.contextTokens} size={runConfig.context ?? 200_000} subscription={model.subscription} />}
             {running && !canSend ? (
               <button
                 type="button"
@@ -1117,6 +1121,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
       <div className="mt-2 flex min-h-7 items-center justify-start gap-1 [&>div:first-child]:pr-0 [&>button:first-child]:pr-0">
         {footer ?? <SubscriptionPicker />}
         {!edit && <PermissionPicker />}
+        {chat && model && <span className="ml-auto flex"><ContextRing used={chat.usage.contextTokens} size={runConfig.context ?? 200_000} subscription={model.subscription} /></span>}
       </div>
     </div>
   )

@@ -456,16 +456,18 @@ export async function testKey(): Promise<{ ok: boolean; message: string }> {
   }
 }
 
-/** Account balance: credits bought and spent, and the key's own limit when it has one. */
-export async function openRouterCredits(): Promise<{ total: number; used: number; keyLimit: number | null; keyRemaining: number | null }> {
+/** Account balance: credits bought and spent, the key's own limit when it has one, and whether credits were ever bought. */
+export async function openRouterCredits(): Promise<{ total: number; used: number; keyLimit: number | null; keyRemaining: number | null; freeTier: boolean }> {
   const [credits, key] = await Promise.all([
     fetch(`${baseUrl()}/credits`, { headers: authHeaders(), signal: AbortSignal.timeout(15000) }),
     fetch(`${baseUrl()}/key`, { headers: authHeaders(), signal: AbortSignal.timeout(15000) })
   ])
   if (!credits.ok) throw new Error(await readError(credits))
   const balance = ((await credits.json()) as { data?: { total_credits?: number; total_usage?: number } }).data ?? {}
-  const info = key.ok ? (((await key.json()) as { data?: { limit?: number | null; limit_remaining?: number | null } }).data ?? {}) : {}
-  return { total: balance.total_credits ?? 0, used: balance.total_usage ?? 0, keyLimit: info.limit ?? null, keyRemaining: info.limit_remaining ?? null }
+  const info = key.ok ? (((await key.json()) as { data?: { limit?: number | null; limit_remaining?: number | null; is_free_tier?: boolean } }).data ?? {}) : {}
+  // is_free_tier is true until the account buys credits; fall back to the balance when the key lookup fails.
+  const freeTier = info.is_free_tier ?? (balance.total_credits ?? 0) <= 0
+  return { total: balance.total_credits ?? 0, used: balance.total_usage ?? 0, keyLimit: info.limit ?? null, keyRemaining: info.limit_remaining ?? null, freeTier }
 }
 
 /** Browser sign-in: OpenRouter mints a key for this app and hands it to a loopback callback. */

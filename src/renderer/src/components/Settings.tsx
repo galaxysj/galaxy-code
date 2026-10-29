@@ -38,6 +38,7 @@ import {
   type UsageReport,
   type UsageWindow
 } from '@shared/types'
+import { AUTO_MODEL } from '@shared/catalog'
 import { AcpAgents } from '@shared/acp-registry'
 import { AutoApprovalModel, CommitMessageModel, CompletionModel, InlineModel, resolveAutoApprovalModel, usableUtilityModels, utilityModelLabel } from '@shared/models'
 import { cn, tildify } from '../lib/utils'
@@ -544,6 +545,26 @@ function AnalyticsSection({ rows }: { rows: AnalyticsRow[] | null }): ReactNode 
   )
 }
 
+/** Free router requests sent today. OpenRouter allows 1,000 a day once credits are bought, 50 before. Each agent loop step is one request. */
+function AutoUsage({ rows, freeTier }: { rows: AnalyticsRow[] | null; freeTier: boolean }): ReactNode {
+  const limit = freeTier ? 50 : 1000
+  const today = dayKey(new Date())
+  const count = (rows ?? []).filter((row) => row.day === today && row.modelKey === AUTO_MODEL.key).reduce((sum, row) => sum + row.calls, 0)
+  const used = Math.min(100, (count / limit) * 100)
+  return (
+    <div className="px-3.5 py-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-[12.5px] text-fg">Auto Usage</span>
+        <span className="text-[12px] tabular-nums text-muted">{count.toLocaleString()} of {limit.toLocaleString()} agent loops today</span>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-hover">
+        <div className={cn('h-full rounded-full', used >= 90 ? 'bg-danger' : used >= 70 ? 'bg-warn' : 'bg-[var(--slider)]')} style={{ width: `${used}%` }} />
+      </div>
+      <div className="mt-1.5 text-[11.5px] text-subtle">{freeTier ? 'Buy credits on OpenRouter to raise the limit to 1,000 a day.' : 'Credits purchased: 1,000 a day.'}</div>
+    </div>
+  )
+}
+
 function UsageSection(): ReactNode {
   const [report, setReport] = useState<UsageReport | null>(null)
   const [rows, setRows] = useState<AnalyticsRow[] | null>(null)
@@ -590,6 +611,7 @@ function UsageSection(): ReactNode {
                     })()}
                   </div>
                 </div>
+                <AutoUsage rows={rows} freeTier={openrouter.freeTier} />
                 {openrouter.keyLimit !== null && (
                   <RowItem label="This key's limit" hint={openrouter.keyRemaining !== null ? `${money(openrouter.keyRemaining)} left on this key` : undefined}>
                     <span className="text-[12.5px] tabular-nums text-muted">{money(openrouter.keyLimit)}</span>

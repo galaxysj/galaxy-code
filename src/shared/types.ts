@@ -37,6 +37,8 @@ export interface ResolvedModel {
   defaultOff?: boolean
   /** OpenRouter's router, which picks a model per request. Offered apart from the list. */
   auto?: boolean
+  /** One line the picker shows under a router entry. */
+  description?: string
   /** Context window in tokens, from models.ts. */
   contextWindow?: number
   /** Speed before the user picks one, from models.ts. */
@@ -269,7 +271,7 @@ export interface PlanUsage {
 
 /** null for a provider that is off or has no key. */
 export interface UsageReport {
-  openrouter: { total: number; used: number; keyLimit: number | null; keyRemaining: number | null } | { error: string } | null
+  openrouter: { total: number; used: number; keyLimit: number | null; keyRemaining: number | null; freeTier: boolean } | { error: string } | null
   claude: PlanUsage | null
   codex: PlanUsage | null
 }
