@@ -91,10 +91,12 @@ function registerCompletions(): void {
  * The file editor, built on Monaco. Ghost-text completions accept with Tab, and a second Tab
  * jumps to where the model expects the next edit. Ctrl+I opens an inline edit, Ctrl+S saves.
  */
-export function CodeEditor({ path, initial, line, onDirtyChange, onCompletingChange }: { path: string; initial: string; line?: number; onDirtyChange?(dirty: boolean): void; onCompletingChange?(completing: boolean): void }): ReactNode {
+export function CodeEditor({ path, initial, line, onDirtyChange, onTextChange, onSaved, onCompletingChange }: { path: string; initial: string; line?: number; onDirtyChange?(dirty: boolean): void; onTextChange?(text: string): void; onSaved?(text: string): void; onCompletingChange?(completing: boolean): void }): ReactNode {
   const host = useRef<HTMLDivElement>(null)
   const editorRef = useRef<Editor | null>(null)
   const savedVersion = useRef(0)
+  /** Text sent to onTextChange. It comes back as `initial` and must not overwrite newer typing. */
+  const reported = useRef(new Set<string>())
   const [edit, setEdit] = useState<InlineEditState | null>(null)
   const [proposal, setProposal] = useState<Proposal | null>(null)
   const [boxTop, setBoxTop] = useState<number | null>(null)
@@ -102,8 +104,8 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onCompletingCha
   const inlineModelId = useStore((s) => s.settings.inlineModelId)
   const update = useStore((s) => s.updateSettings)
   const notify = useStore((s) => s.notify)
-  const latest = useRef({ path, onDirtyChange, onCompletingChange, notify })
-  latest.current = { path, onDirtyChange, onCompletingChange, notify }
+  const latest = useRef({ path, onDirtyChange, onTextChange, onSaved, onCompletingChange, notify })
+  latest.current = { path, onDirtyChange, onTextChange, onSaved, onCompletingChange, notify }
   /** Things the inline edit needs to put back or clean up. */
   const inline = useRef<{ zone: string | null; decorations: monaco.editor.IEditorDecorationsCollection | null; original: string; shownLength: number; stopped: string | null; proposalKey: monaco.editor.IContextKey<boolean> | null }>({
     zone: null,
@@ -194,6 +196,7 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onCompletingCha
         await window.galaxy.files.write(latest.current.path, text)
         savedVersion.current = version
         latest.current.onDirtyChange?.(model.getAlternativeVersionId() !== savedVersion.current)
+        latest.current.onSaved?.(text)
       } catch (error) {
         latest.current.notify(`Could not save: ${String(error)}`, 'error')
       }
@@ -202,7 +205,14 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onCompletingCha
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI, () => openInlineEdit.current())
     editor.addCommand(monaco.KeyMod.WinCtrl | monaco.KeyCode.KeyI, () => openInlineEdit.current())
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyZ, () => declineRef.current(), 'galaxyProposal')
-    const changes = model.onDidChangeContent(() => latest.current.onDirtyChange?.(model.getAlternativeVersionId() !== savedVersion.current))
+    const changes = model.onDidChangeContent(() => {
+      latest.current.onDirtyChange?.(model.getAlternativeVersionId() !== savedVersion.current)
+      if (!latest.current.onTextChange) return
+      const text = model.getValue()
+      reported.current.add(text)
+      if (reported.current.size > 20) reported.current.delete(reported.current.values().next().value!)
+      latest.current.onTextChange(text)
+    })
 
     return () => {
       keys.dispose()
@@ -220,7 +230,7 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onCompletingCha
   // A reload from disk replaces the text only when there are no unsaved changes.
   useEffect(() => {
     const model = editorRef.current?.getModel()
-    if (!model || model.getValue() === initial) return
+    if (!model || model.getValue() === initial || reported.current.delete(initial)) return
     if (model.getAlternativeVersionId() !== savedVersion.current) return
     model.pushEditOperations([], [{ range: model.getFullModelRange(), text: initial }], () => null)
     savedVersion.current = model.getAlternativeVersionId()

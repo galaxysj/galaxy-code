@@ -1,4 +1,4 @@
-import { readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import { CompletionModel, InlineModel, usableUtilityModels } from '@shared/models'
 import { store } from '../store'
@@ -22,7 +22,9 @@ export interface InlineEditRequest {
 }
 
 export async function saveFile(path: string, content: string): Promise<void> {
-  await writeFile(expandHome(path), content, 'utf8')
+  const target = expandHome(path)
+  await mkdir(dirname(target), { recursive: true })
+  await writeFile(target, content, 'utf8')
 }
 
 /** Drops a fenced code block wrapper, which models add even when told not to. */

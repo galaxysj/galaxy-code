@@ -4,6 +4,7 @@ import { findModel, resolveModels } from '@shared/catalog'
 import type { AnalyticsRow } from '@shared/types'
 import { store } from '../store'
 import { writeJsonAtomic } from '../util'
+import { standardPrices } from './openrouter'
 
 /** Token and cost totals per local day and model, kept apart from chats so deleting a chat keeps its spend. */
 type Totals = Record<string, { input: number; output: number; cost: number; calls: number }>
@@ -61,12 +62,24 @@ export function recordUsage(modelKey: string, input: number, output: number, cos
     }, 2000)
 }
 
-export function analyticsRows(): AnalyticsRow[] {
+/** The id OpenRouter lists a model under. Account models name the same model their own way, such as claude-opus-5-5. */
+function priceId(modelKey: string): string {
+  const subscription = modelKey.slice(0, modelKey.indexOf(':'))
+  const id = modelKey.slice(modelKey.indexOf(':') + 1)
+  if (subscription === 'Claude') return `anthropic/${id.replace(/-(\d+)-(\d+)$/, '-$1.$2')}`
+  if (subscription === 'Codex') return `openai/${id}`
+  return id
+}
+
+export async function analyticsRows(): Promise<AnalyticsRow[]> {
   const models = resolveModels(store.settings)
+  const prices = await standardPrices()
   return Object.entries(load()).map(([key, entry]) => {
     const [day, modelKey] = [key.slice(0, key.indexOf('|')), key.slice(key.indexOf('|') + 1)]
     const model = findModel(models, modelKey)
     const subscription = modelKey.slice(0, modelKey.indexOf(':'))
-    return { day, modelKey, name: model?.name ?? modelKey.slice(modelKey.indexOf(':') + 1), subscription: model?.subscription ?? subscription, ...entry }
+    const price = prices.get(priceId(modelKey))
+    const equivalent = !entry.cost && price ? entry.input * price.input + entry.output * price.output : 0
+    return { day, modelKey, name: model?.name ?? modelKey.slice(modelKey.indexOf(':') + 1), subscription: model?.subscription ?? subscription, ...entry, equivalent }
   })
 }

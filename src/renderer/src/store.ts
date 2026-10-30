@@ -21,12 +21,13 @@ import {
   type ResolvedModel,
   type SecretState,
   type Settings,
+  type SkillInfo,
   type Subscription,
   type UiEvent,
   type WorkspaceMode
 } from '@shared/types'
 
-export type SettingsSection = 'general' | 'models' | 'providers' | 'accounts' | 'usage' | 'acp' | 'mcp' | 'skills'
+export type SettingsSection = 'general' | 'models' | 'providers' | 'subscriptions' | 'usage' | 'customize'
 
 export interface Draft {
   projectId: string | null
@@ -78,13 +79,10 @@ export interface OpenFile {
 }
 
 /** A terminal tab, or text selected in it, to mention in the composer. */
-export interface QueuedMention {
-  kind: 'terminal'
-  name: string
-  tabId: string
-  cwd: string
-  selection?: string
-}
+export type QueuedMention =
+  | { kind: 'terminal'; name: string; tabId: string; cwd: string; selection?: string }
+  /** `text` follows the mention in the message. */
+  | { kind: 'skill'; skill: SkillInfo; text: string }
 
 export type PanelTab = (
   | { id: string; type: 'file'; path: string; title: string }
@@ -453,7 +451,7 @@ export const useStore = create<State>((set, get) => {
     homeDir: '',
     version: '',
     settings: {} as Settings,
-    secrets: { openRouterKey: false, openRouterKeyHint: null },
+    secrets: { openRouterKey: false, openRouterKeyHint: null, providerKeys: {} },
     projects: [],
     chats: {},
     items: {},
@@ -709,7 +707,7 @@ export const useStore = create<State>((set, get) => {
       const source = target ? s.chats[target] : s.draft
       const model = findModel(s.models, source?.modelKey)
       if (!model || !availableSubscriptions(s.settings, s.accountStatuses).includes(model.subscription)) {
-        s.notify('Choose a model from Local or a signed-in subscription first', 'error')
+        s.notify('Choose a model from Galaxy or a signed-in subscription first', 'error')
         return
       }
       let chatId = target
@@ -877,7 +875,7 @@ export const useStore = create<State>((set, get) => {
       const config = source ?? s.draft
       const model = findModel(s.models, config.modelKey)
       if (!model || !availableSubscriptions(s.settings, s.accountStatuses).includes(model.subscription)) {
-        s.notify('Choose a model from Local or a signed-in subscription first', 'error')
+        s.notify('Choose a model from Galaxy or a signed-in subscription first', 'error')
         return
       }
       const projectId = source ? source.projectId : s.draft.projectId

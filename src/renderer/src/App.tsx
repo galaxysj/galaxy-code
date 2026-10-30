@@ -1,5 +1,6 @@
 import { CircleAlert, PanelLeft, PanelRight, SquarePen } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { hasModelKey } from '@shared/catalog'
 import type { Chat } from '@shared/types'
 import { cn, formatTokens, tildify } from './lib/utils'
 import { useActiveChat, useStore } from './store'
@@ -178,12 +179,13 @@ function ChatHeader({ chat, sidebarOpen }: { chat: Chat | null; sidebarOpen: boo
 }
 
 function Welcome(): ReactNode {
-  const hasKey = useStore((s) => s.secrets.openRouterKey)
+  const secrets = useStore((s) => s.secrets)
+  const settings = useStore((s) => s.settings)
   const draft = useStore((s) => s.draft)
   const models = useStore((s) => s.models)
   const project = useStore((s) => s.projects.find((p) => p.id === s.draft.projectId))
   const model = models.find((m) => m.key === draft.modelKey)
-  const needsKey = model?.subscription === 'Default' && !hasKey
+  const needsKey = model?.subscription === 'Default' && !hasModelKey(secrets, settings, model.id)
   return (
     <div className="flex min-h-0 flex-1 flex-col justify-center pb-[12vh]">
       <h1 className="mb-6 text-center text-[24px] font-semibold tracking-[-0.02em] text-fg">

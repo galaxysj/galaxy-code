@@ -93,7 +93,8 @@ function permissionBlock(mode: PermissionMode): string {
   return 'Permission mode: Ask for approval. Reading and searching run freely. Commands, file changes and browser actions wait for the user to approve each one, so batch related changes sensibly and say briefly what an action is for. If the user declines, do not retry it or route around it.'
 }
 
-function skillsBlock(skills: SkillInfo[]): string {
+function skillsBlock(all: SkillInfo[]): string {
+  const skills = all.filter((skill) => skill.implicit !== false)
   if (skills.length === 0) return ''
   const list = skills.map((s) => `- ${s.name}: ${s.description || 'No description.'}\n  ${tildify(s.path)}`).join('\n')
   return `# Skills
@@ -127,7 +128,15 @@ function memoryBlock(ctx: PromptContext): string {
     : `${tildify(ctx.memoryFile)} is empty so far.`
   return `# Memory
 
-You keep notes across chats in a memory file, managed with the Memory tool. It reflects what was true when written; if a note names a file or command, check it still exists before relying on it. Save something when the user corrects how you work, states a lasting preference, or you learn a project fact that the code does not show. Do not save what the code or git history already records, or what only matters to this chat.
+You keep notes across chats in a memory file, managed with the Memory tool. It reflects what was true when written; if a note names a file or command, check it still exists before relying on it. Save actively as you work, without being asked: whenever the user corrects how you work, states a preference, or you learn something a later chat could use that the code does not show. Do not save what the code or git history already records, or what only matters to this chat.
+
+Keep the file as topics, each a heading followed by Markdown:
+
+# Topic
+Content
+
+# Topic 2
+Content
 
 ${body}`
 }
@@ -213,7 +222,7 @@ const CORE = `You are Galaxy Code, an AI agent that works in the user's projects
 - Browser drives the in-app browser. When a change needs to be seen in a page, use it to look at what you built, not just to assume it renders. ListTabs lists each browser tab's title, URL and 1-based tabIndex, including background tabs, without changing focus.
 - Agent starts a full-access background subagent with its own context and all tools except user questions. It returns an ID immediately. Message supports list, send (to and text), read, and wait. Main has ID main. Check your inbox between steps and wait for workers before your final answer.
 - Task tracks multi-step work so the user can see progress. Keep it current as you go.
-- Open opens file or review tabs beside the chat. Browser's only tab selector is tabIndex (1-based); use ListTabs to find indices. Browser navigate without tabIndex opens a new tab and returns its index; use that tabIndex for later actions. navigate background:true (default) preserves the user's selected tab and sidebar; background:false reveals the sidebar and selects the page. Use false when the user asks to open or see a page, true for background research and checks. Other browser actions preserve the user's selection. Present delivers finished files the user asked for.
+- Open opens file or review tabs beside the chat. Browser's only tab selector is tabIndex (1-based); use ListTabs to find indices. Each Browser call has a short title and a list of steps that run in order and stop at the first error; batch the steps you can predict, such as navigate then snapshot. A first navigate step without tabIndex opens a new tab and returns its index; later steps stay on that tab, and later calls pass that tabIndex. navigate background:true (default) preserves the user's selected tab and sidebar; background:false reveals the sidebar and selects the page. Use false when the user asks to open or see a page, true for background research and checks. Other browser actions preserve the user's selection. Present delivers finished files the user asked for.
 - WebSearch and WebFetch reach the internet for documentation and current facts.
 
 # Writing to the user
@@ -288,8 +297,8 @@ export function buildBridgeInstructions(ctx: PromptContext, bridgeTools: string[
       Agent: 'Agent starts a full-access background subagent with all tools except user-question tools. Use galaxy.Agent instead of built-in agents. It returns an agent ID immediately. Wait for all workers before your final answer.',
       Edit: 'Use galaxy.Edit for file edits instead of built-in edit/patch tools. It applies V4A patches with @galaxysj/v4a and displays live changes and permission diffs in the app. Pass only patch, wrapped in *** Begin Patch / *** End Patch. Read existing files first. Use *** Update File with bare @@ or a context anchor and space/-/+ lines; *** Add File, *** Delete File and *** Move to are supported. Paths are relative to the working directory. Do not pass old_string/new_string or numeric unified-diff hunk headers.',
       Message: 'Message coordinates main and subagents: list lists IDs, send with to and text delivers a message, read receives messages, wait collects reports. Check your inbox between steps. Main has ID main.',
-      Browser: 'Browser uses only tabIndex (1-based) to select tabs. Navigate without tabIndex opens a new tab and returns its index. For navigate, background:true (default) preserves the user\'s selected tab and sidebar; background:false reveals the sidebar and selects the page. Use false when asked to open/show a page, true for background research and checks. Other actions preserve selection. All actions on existing tabs require tabIndex; use ListTabs to find current indices.',
-      ListTabs: 'ListTabs lists open browser tabs with title, URL and 1-based tabIndex in sidebar order, including background tabs. Use its index to target Browser without changing the selected tab. If no tabs exist, call galaxy.Browser with action:create and the requested URL; background:false shows it to the user. Do not ask the user to create a tab.',
+      Browser: 'Each call takes a short title and a list of steps that run in order and stop at the first error; batch the steps you can predict, such as navigate then snapshot. Browser uses only tabIndex (1-based) to select tabs. A first navigate step without tabIndex opens a new tab and returns its index; a step without tabIndex stays on the previous step\'s tab. For navigate, background:true (default) preserves the user\'s selected tab and sidebar; background:false reveals the sidebar and selects the page. Use false when asked to open/show a page, true for background research and checks. Other actions preserve selection. The first step on an existing tab requires tabIndex; use ListTabs to find current indices.',
+      ListTabs: 'ListTabs lists open browser tabs with title, URL and 1-based tabIndex in sidebar order, including background tabs. Use its index to target Browser without changing the selected tab. If no tabs exist, call galaxy.Browser with a create step and the requested URL; background:false shows it to the user. Do not ask the user to create a tab.',
       Ask: 'Ask puts questions to the user with selectable options and waits for the answer.',
       Task: 'Task shows the user a task list for multi-step work. Each call replaces the whole list.',
       Present: 'Present hands finished deliverable files to the user as cards.',

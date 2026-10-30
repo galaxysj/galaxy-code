@@ -5,6 +5,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ButtonHTMLAttributes,
   type ReactNode,
   type RefObject
@@ -102,6 +103,19 @@ interface PopoverProps {
   children: ReactNode
 }
 
+let openPopovers = 0
+const popoverListeners = new Set<() => void>()
+
+function subscribePopovers(listener: () => void): () => void {
+  popoverListeners.add(listener)
+  return () => popoverListeners.delete(listener)
+}
+
+/** Whether a popover is on screen. Native views sit above all HTML, so they must step aside for it. */
+export function usePopoverShown(): boolean {
+  return useSyncExternalStore(subscribePopovers, () => openPopovers > 0)
+}
+
 /** A floating panel anchored to an element. Closes on outside press or Escape, and flips to stay on screen. */
 export function Popover({ open, onClose, anchor, placement = 'bottom-start', offset = 6, className, children }: PopoverProps): ReactNode {
   const ref = useRef<HTMLDivElement>(null)
@@ -142,6 +156,17 @@ export function Popover({ open, onClose, anchor, placement = 'bottom-start', off
       window.removeEventListener('resize', position)
     }
   }, [open, position])
+
+  const shown = open || present
+  useLayoutEffect(() => {
+    if (!shown) return
+    openPopovers++
+    popoverListeners.forEach((listener) => listener())
+    return () => {
+      openPopovers--
+      popoverListeners.forEach((listener) => listener())
+    }
+  }, [shown])
 
   // Keep the panel mounted briefly so closing has the same visual continuity as opening.
   useEffect(() => {
@@ -273,6 +298,14 @@ export function Dropdown<T extends string>({ value, options, onChange, label, di
 
 export function MenuSeparator(): ReactNode {
   return <div className="my-1 h-px bg-line" />
+}
+
+/** A skill's small icon. With a brand color an SVG takes that color; a skill with no icon colors its fallback. */
+export function SkillIcon({ icon, color, size, fallback }: { icon?: string; color?: string; size: number; fallback: ReactNode }): ReactNode {
+  if (!icon) return <span className="inline-flex" style={{ color }}>{fallback}</span>
+  if (!color || !icon.startsWith('data:image/svg')) return <img src={icon} alt="" width={size} height={size} className="shrink-0" draggable={false} />
+  const mask = `url("${icon}") center / contain no-repeat`
+  return <span aria-hidden="true" className="inline-block shrink-0" style={{ width: size, height: size, backgroundColor: color, mask, WebkitMask: mask }} />
 }
 
 interface ModalProps {

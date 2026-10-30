@@ -38,8 +38,9 @@ import type { ReviewCommit } from '@shared/api'
 import { isReviewTextDiff } from '@shared/review'
 import { basename, cn, formatBytes, languageForPath, relativeTo } from '../lib/utils'
 import { useStore, type OpenFile, type PanelTab } from '../store'
+import { LiveMarkdown } from './LiveMarkdown'
 import { Markdown } from './Markdown'
-import { Button, CopyButton, Dropdown, IconButton, MenuItem, MenuSeparator, Popover, Segmented, Spinner, type DropdownOption } from './ui'
+import { Button, CopyButton, Dropdown, IconButton, MenuItem, MenuSeparator, Popover, Segmented, Spinner, usePopoverShown, type DropdownOption } from './ui'
 import { DiffView, DiffStat } from './DiffView'
 import { AgentTimeline } from './timeline/Timeline'
 import { ProjectFilesPane } from './ProjectFiles'
@@ -63,21 +64,36 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
   const hasPage = state.url !== ''
   const createTab = useStore((s) => s.createPanelTab)
   const openSideChat = useStore((s) => s.openSideChat)
+  const covered = usePopoverShown()
+  // A still of the page, shown in place of the native view while a popover needs to sit above it.
+  const [frame, setFrame] = useState<string | null>(null)
+  const stepAside = covered && !!frame
 
   useEffect(() => {
     if (!editing) setAddress(state.url)
   }, [state.url, editing])
 
+  useEffect(() => {
+    if (covered && visible && hasPage) {
+      let alive = true
+      void window.galaxy.browser.frame(tabId).then((image) => { if (alive) setFrame(image) }).catch(() => {})
+      return () => { alive = false }
+    }
+    // The still stays a moment so the page does not blink while the native view comes back.
+    const timer = window.setTimeout(() => setFrame(null), 150)
+    return () => window.clearTimeout(timer)
+  }, [covered, visible, hasPage, tabId])
+
   // The page is a native view layered over the window; keep it glued to this placeholder.
   const sync = useCallback(() => {
     const el = host.current
-    if (!el || !visible || !hasPage) {
+    if (!el || !visible || !hasPage || stepAside) {
       void window.galaxy.browser.setBounds(null, tabId)
       return
     }
     const rect = el.getBoundingClientRect()
     void window.galaxy.browser.setBounds({ x: rect.left, y: rect.top, width: rect.width, height: rect.height }, tabId)
-  }, [visible, hasPage, tabId])
+  }, [visible, hasPage, stepAside, tabId])
 
   useLayoutEffect(() => {
     sync()
@@ -143,6 +159,7 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
       </div>
       <div className="relative min-h-0 flex-1 p-1.5">
         <div ref={host} className="h-full w-full overflow-hidden rounded-lg">
+          {frame && hasPage && <img src={frame} alt="" draggable={false} className="h-full w-full" />}
           {!hasPage && (
             <div className="flex h-full flex-col items-center justify-center gap-5 px-5 text-center">
               <div><div className="mb-2 text-[19px] font-medium text-fg">New tab</div><div className="text-[12px] text-subtle">Enter a website above, or open a tool.</div></div>
@@ -224,6 +241,8 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
   const [mode, setMode] = useState<'preview' | 'source'>('preview')
   const [reload, setReload] = useState(0)
   const [dirty, setDirty] = useState(false)
+  const savedText = useRef('')
+  const liveText = useRef('')
   const [completing, setCompleting] = useState(false)
 
   // Reload when the agent finishes an edit to this file.
@@ -247,12 +266,29 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
       setDirty(false)
     }
     void window.galaxy.files.read(file.path).then((result) => {
-      if (!cancelled) setView(result)
+      if (cancelled) return
+      setView(result)
+      savedText.current = liveText.current = result.content ?? ''
     })
     return () => {
       cancelled = true
     }
   }, [file.path, file.nonce, reload, editStamp])
+
+  const editLive = (text: string): void => {
+    liveText.current = text
+    setDirty(text !== savedText.current)
+    // Source view opens from this too, so unsaved edits carry over.
+    setView((current) => (current ? { ...current, content: text } : current))
+  }
+  const savedLive = (text: string): void => {
+    savedText.current = text
+    setDirty(liveText.current !== text)
+  }
+  const saveLive = (text: string): void => {
+    liveText.current = text
+    window.galaxy.files.write(file.path, text).then(() => savedLive(text)).catch((error: unknown) => useStore.getState().notify(String(error), 'error'))
+  }
 
   const isMarkdown = /\.(md|mdx|markdown)$/i.test(file.path)
   const isHtml = /\.html?$/i.test(file.path)
@@ -324,12 +360,16 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
           <div className="flex h-full items-center justify-center overflow-auto p-6" style={{ background: 'repeating-conic-gradient(var(--bg-hover) 0% 25%, transparent 0% 50%) 50% / 18px 18px' }}>
             <img src={view.dataUrl} alt={view.name} className="max-h-full max-w-full rounded object-contain shadow-pop" draggable={false} />
           </div>
+        ) : isMarkdown && mode === 'preview' && view.kind === 'text' && !view.truncated ? (
+          <div className="flex h-full flex-col">
+            <LiveMarkdown key={`${file.path}:${file.nonce}:${reload}:${editStamp}`} initial={view.content ?? ''} onChange={editLive} onSave={saveLive} />
+          </div>
         ) : isMarkdown && mode === 'preview' ? (
           <div className="h-full overflow-y-auto px-6 py-5">
-            <Markdown text={view.content ?? ''} root={file.path.slice(0, file.path.lastIndexOf('/'))} />
+            <Markdown text={view.content ?? ''} root={file.path.slice(0, file.path.lastIndexOf('/'))} html />
           </div>
         ) : view.kind === 'text' && !view.truncated ? (
-          <CodeEditor path={file.path} initial={view.content ?? ''} line={file.line} onDirtyChange={setDirty} onCompletingChange={setCompleting} />
+          <CodeEditor path={file.path} initial={view.content ?? ''} line={file.line} onDirtyChange={isMarkdown ? undefined : setDirty} onTextChange={isMarkdown ? editLive : undefined} onSaved={isMarkdown ? savedLive : undefined} onCompletingChange={setCompleting} />
         ) : (
           <SourceView content={view.content ?? ''} path={file.path} line={file.line} />
         )}

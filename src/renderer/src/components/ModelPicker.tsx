@@ -1,5 +1,5 @@
 import { Check, ChevronDown, ChevronLeft, ChevronRight, RotateCcw, Search, Settings2, Sparkles, Zap } from 'lucide-react'
-import { AUTO_MODEL, PREMIUM_MODEL } from '@shared/catalog'
+import { AUTO_MODEL, PREMIUM_MODEL, type ProviderId } from '@shared/catalog'
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { AcpAgents } from '@shared/acp-registry'
 import { EFFORT_LABELS, type Effort, type ResolvedModel, type Subscription } from '@shared/types'
@@ -16,7 +16,7 @@ function UltrafastIcon({ size = 12 }: { size?: number }): ReactNode {
 }
 
 export const SUBSCRIPTION_LABELS: Record<Subscription, string> = {
-  Default: 'OpenRouter',
+  Default: 'Galaxy',
   Claude: 'Claude',
   Codex: 'Codex',
   ...Object.fromEntries(AcpAgents.map((agent) => [agent.DisplayName, agent.DisplayName]))
@@ -122,7 +122,7 @@ function EffortSlider({ model, effort, ultra, allowUltra, onChange }: EffortSlid
 
 function ModelList({ current, subscription, allowUltra, onPick, onBack, onClose }: { current: ResolvedModel | null; subscription: Subscription | null; allowUltra: boolean; onPick(key: string): void; onBack(): void; onClose(): void }): ReactNode {
   const models = useStore((s) => s.models)
-  const hasKey = useStore((s) => s.secrets.openRouterKey)
+  const hasKey = useStore((s) => s.secrets.openRouterKey || s.settings.customProviders.length > 0 || Object.keys(s.secrets.providerKeys).some((id) => !s.settings.disabledProviders.includes(id as ProviderId)))
   const [query, setQuery] = useState('')
 
   const groups = useMemo(() => {
@@ -161,11 +161,11 @@ function ModelList({ current, subscription, allowUltra, onPick, onBack, onClose 
             <span className="flex w-3.5 shrink-0 justify-end">{current?.auto && <Check size={13} />}</span>
           </button>
         )}
-        {groups.length === 0 && <div className="px-3 py-6 text-center text-[12px] text-subtle">{subscription ? 'No models match.' : 'Choose a signed-in subscription or Local.'}</div>}
+        {groups.length === 0 && <div className="px-3 py-6 text-center text-[12px] text-subtle">{subscription ? 'No models match.' : 'Choose a signed-in subscription or Galaxy.'}</div>}
         {groups.map((group) => (
           <div key={group.subscription} className="mb-1 last:mb-0">
             <div className="flex h-6 items-center justify-between px-2 text-[11px] font-medium text-subtle">
-              <span>{group.subscription === 'Default' ? 'Local' : (SUBSCRIPTION_LABELS[group.subscription] ?? group.subscription)}</span>
+              <span>{SUBSCRIPTION_LABELS[group.subscription] ?? group.subscription}</span>
               {group.subscription === 'Default' && !hasKey && (
                 <button type="button" className="text-warn hover:underline" onClick={() => useStore.setState({ settingsOpen: 'providers' })}>
                   Add API key
@@ -335,7 +335,7 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
           )}
           {/* Auto and Premium pick the model themselves, so the list stays closed until it is turned off or a search starts. */}
           {(!auto || !!needle) && <div className="shrink-0 p-1">
-            {visible.length === 0 && <div className="px-3 py-6 text-center text-[12px] text-subtle">{subscription ? 'No models match.' : 'Choose a signed-in subscription or Local.'}</div>}
+            {visible.length === 0 && <div className="px-3 py-6 text-center text-[12px] text-subtle">{subscription ? 'No models match.' : 'Choose a signed-in subscription or Galaxy.'}</div>}
             {visible.map((entry) => {
               const checked = entry.key === model?.key
               const options = checked ? { ...current, context } : rememberedRunOptions(entry)

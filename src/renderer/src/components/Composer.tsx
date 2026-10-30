@@ -40,7 +40,7 @@ import { ModelBrandIcon } from './SubscriptionIcon'
 import type { ModelBrand } from '@shared/models'
 import { ApprovalPrompt } from './ApprovalPrompt'
 import { SubscriptionPicker } from './SubscriptionPicker'
-import { Button, MenuItem, MenuSeparator, Popover, Segmented, Spinner, TextInput } from './ui'
+import { Button, MenuItem, MenuSeparator, Popover, Segmented, SkillIcon, Spinner, TextInput } from './ui'
 
 const PERMISSION_MODES: { value: PermissionMode; label: string; description: string }[] = [
   { value: 'auto', label: 'Auto', description: 'A safety model approves routine work and asks you about risky actions.' },
@@ -312,6 +312,11 @@ function AttachmentChip({ file, onRemove }: { file: Attachment; onRemove(): void
   )
 }
 
+/** Everything in the one-line composer but the text and the model name: padding, gaps and the two round buttons. */
+const COMPACT_CHROME = 100
+/** Matches `.composer-compact .composer-model`. */
+const COMPACT_MODEL_MAX = 260
+
 const MODES: Record<AgentMode, { label: string; command: string; description: string; placeholder: string; icon: typeof Globe; tone: string }> = {
   ask: { label: 'Ask', command: 'ask', description: 'Answer questions with read-only tools. Nothing is changed.', placeholder: 'Ask questions', icon: CircleQuestionMark, tone: 'var(--green)' },
   plan: { label: 'Plan', command: 'plan', description: 'Research and write a plan to ~/.galaxy/plans before building.', placeholder: 'Describe what to plan', icon: FileText, tone: 'var(--orange)' },
@@ -404,7 +409,7 @@ function selectedFrom(mentions: PromptMentions | undefined): SelectedMention[] {
     }
     if (chip.kind === 'skill') {
       const skill = mentions.skills.find((entry) => entry.name === chip.label)
-      return skill ? [{ id, kind: 'skill', token: chip.token, name: skill.name, path: skill.path }] : []
+      return skill ? [{ id, kind: 'skill', token: chip.token, name: skill.name, displayName: chip.displayName, path: skill.path, icon: chip.icon, color: chip.color }] : []
     }
     if (chip.kind === 'mcp') {
       if (chip.title) return [{ id: `mcp:${chip.title}`, kind: 'mcp', token: chip.token, server: chip.title, name: chip.label }]
@@ -458,6 +463,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const ultra = runConfig.ultra && mode !== 'multitask'
   const textarea = useRef<HTMLTextAreaElement>(null)
   const wrapProbe = useRef<HTMLDivElement>(null)
+  const modelSlot = useRef<HTMLSpanElement>(null)
   const messageBox = useRef<HTMLDivElement>(null)
   const layoutSnapshot = useRef<{ key: string; compact: boolean; height: number; positions: Map<Element, DOMRect> } | null>(null)
   const layoutAnimations = useRef<Animation[]>([])
@@ -480,6 +486,13 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
     let current = useStore.getState().composerText[key] ?? ''
     const added: SelectedMention[] = []
     for (const item of queued) {
+      if (item.kind === 'skill') {
+        const { skill } = item
+        const token = `@ ${skill.displayName ?? skill.name}`
+        added.push({ id: `skill:${skill.path}`, kind: 'skill', token, name: skill.name, displayName: skill.displayName, path: skill.path, icon: skill.icon, color: skill.brandColor })
+        current = `${current}${current && !/\s$/.test(current) ? ' ' : ''}${token} ${item.text}`
+        continue
+      }
       let token = `@ ${item.name}`
       for (let n = 2; current.includes(token); n++) token = `@ ${item.name} ${n}`
       added.push({ id: `terminal:${item.tabId}:${token}`, kind: 'terminal', token, name: token.slice(2), tabId: item.tabId, cwd: item.cwd, selection: item.selection })
@@ -572,19 +585,19 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
           .filter((entry) => !acp && entry.enabled && entry.subscription === subscription &&
             (!mention.query || `${entry.name} ${entry.id}`.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase().includes(mention.query.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase())))
           .map((entry) => ({ id: `model:${entry.key}`, kind: 'model' as const, brand: entry.brand, name: entry.name, detail: entry.key === model?.key ? `${entry.name} · Selected` : `Switch to ${entry.name}`, modelKey: entry.key })),
-        ...skills.filter((skill) => `${skill.name} ${skill.description}`.toLowerCase().includes(mention.query.toLowerCase())).map((skill) => ({ id: `skill:${skill.path}`, kind: 'skill' as const, name: skill.name, detail: skill.description || skill.scope, path: skill.path }))
+        ...skills.filter((skill) => `${skill.displayName ?? ''} ${skill.name} ${skill.description}`.toLowerCase().includes(mention.query.toLowerCase())).map((skill) => ({ id: `skill:${skill.path}`, kind: 'skill' as const, name: skill.name, detail: skill.description || skill.scope, path: skill.path, displayName: skill.displayName, icon: skill.icon, color: skill.brandColor }))
       ]
     : mention?.trigger === '@'
       ? [
           { id: 'upload', kind: 'upload' as const, name: 'Add files or photos', detail: 'Upload attachments from your computer.' },
-          ...skills.map((skill) => ({ id: `skill:${skill.path}`, kind: 'skill' as const, name: skill.name, detail: skill.description || skill.scope, path: skill.path })),
+          ...skills.map((skill) => ({ id: `skill:${skill.path}`, kind: 'skill' as const, name: skill.name, detail: skill.description || skill.scope, path: skill.path, displayName: skill.displayName, icon: skill.icon, color: skill.brandColor })),
           { id: 'browser', kind: 'browser' as const, name: 'Browser', detail: 'Use the in-app browser for this task.' },
           ...(Object.keys(GIT_COMMANDS) as GitCommand[]).map((command) => ({ id: `git:${command}`, kind: 'git' as const, name: GIT_COMMANDS[command].label, detail: GIT_COMMANDS[command].detail, git: command })),
           ...mcp.filter((server) => server.state === 'ready').map((server) => ({ id: `mcp:${server.id}`, kind: 'mcp' as const, name: mcpServers.find((config) => config.id === server.id)?.name ?? server.id, detail: `${server.tools.length} tools`, server: server.id })),
           ...terminalTabs.map((tab) => ({ id: `terminal:${tab.id}`, kind: 'terminal' as const, name: tab.customTitle || tab.title, detail: tab.cwd, tabId: tab.id, cwd: tab.cwd })),
           ...recentChats.slice(0, 12).map((entry) => ({ id: `chat:${entry.id}`, kind: 'chat' as const, name: entry.title || 'Untitled chat', detail: '', chatId: entry.id })),
           ...mentionFiles.map((file) => ({ id: `file:${file.path}`, kind: 'file' as const, name: file.relativePath.split('/').pop() ?? file.relativePath, detail: file.relativePath.includes('/') ? file.relativePath.slice(0, file.relativePath.lastIndexOf('/')) : '', path: file.path }))
-        ].filter((entry) => !mention.query || entry.kind === 'file' || entry.name.toLowerCase().includes(mention.query.toLowerCase()))
+        ].filter((entry: MentionEntry) => !mention.query || entry.kind === 'file' || `${entry.displayName ?? ''} ${entry.name}`.toLowerCase().includes(mention.query.toLowerCase()))
       : []
 
   const updateMention = (value: string, caret: number): void => {
@@ -665,9 +678,9 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
       return
     }
     // Every pick becomes an "@ name" token: the chip icon covers the @ and the space keeps it off the name.
-    const token = `@ ${entry.name}`
+    const token = `@ ${entry.displayName ?? entry.name}`
     let selected: SelectedMention | null = null
-    if (entry.kind === 'skill' && entry.path) selected = { id: entry.id, kind: 'skill', token, name: entry.name, path: entry.path }
+    if (entry.kind === 'skill' && entry.path) selected = { id: entry.id, kind: 'skill', token, name: entry.name, displayName: entry.displayName, path: entry.path, icon: entry.icon, color: entry.color }
     else if (entry.kind === 'file' && entry.path) selected = { id: entry.id, kind: 'file', token, name: entry.name, path: entry.path }
     else if (entry.kind === 'chat' && entry.chatId) selected = { id: entry.id, kind: 'chat', token, name: entry.name, chatId: entry.chatId }
     else if (entry.kind === 'browser') selected = { id: entry.id, kind: 'browser', token }
@@ -683,6 +696,9 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const measureWrap = useCallback(() => {
     const probe = wrapProbe.current
     if (!probe) return
+    // The one-line box gives the text what the buttons and the model name leave over.
+    const model = Math.min(modelSlot.current?.getBoundingClientRect().width ?? 0, COMPACT_MODEL_MAX)
+    probe.style.width = `max(1px, calc(100% - ${COMPACT_CHROME + model}px))`
     const lineHeight = parseFloat(getComputedStyle(probe).lineHeight)
     setWrapped(probe.getBoundingClientRect().height > lineHeight + 1)
   }, [])
@@ -696,6 +712,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
     if (!probe || !followUp) return
     const observer = new ResizeObserver(measureWrap)
     observer.observe(probe)
+    if (modelSlot.current) observer.observe(modelSlot.current)
     return () => observer.disconnect()
   }, [key, followUp, approvalId, measureWrap])
 
@@ -828,6 +845,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         kind: item.kind,
         label: item.kind === 'browser' ? 'Browser' : item.kind === 'git' ? GIT_COMMANDS[item.command].label : item.name,
         ...(item.kind === 'file' ? { title: item.path } : {}),
+        ...(item.kind === 'skill' ? { displayName: item.displayName, icon: item.icon, color: item.color } : {}),
         ...(item.kind === 'terminal' ? { title: item.selection ? item.selection.slice(0, 400) : item.cwd } : {}),
         ...(item.kind === 'mcp' && !item.tool ? { title: item.server } : {})
       }))
@@ -934,9 +952,9 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
                   onMouseMove={() => { if (index !== mentionIndex) setMentionIndex(index) }}
                   className={cn('flex h-9.5 w-full min-w-0 items-center gap-3 rounded-lg px-3 text-left', index === mentionIndex ? 'bg-hover text-fg' : 'text-muted', entry.disabled && 'cursor-default opacity-40')}
                 >
-                  <span className="flex w-4 shrink-0 justify-center">{entry.kind === 'model' && entry.brand ? <ModelBrandIcon brand={entry.brand} /> : entry.kind === 'file' ? <FileTypeIcon name={entry.name} /> : <Icon size={15} className="text-subtle" />}</span>
+                  <span className="flex w-4 shrink-0 justify-center">{entry.kind === 'model' && entry.brand ? <ModelBrandIcon brand={entry.brand} /> : entry.kind === 'file' ? <FileTypeIcon name={entry.name} /> : entry.kind === 'skill' ? <SkillIcon icon={entry.icon} color={entry.color} size={15} fallback={<Icon size={15} className={entry.color ? undefined : 'text-subtle'} />} /> : <Icon size={15} className="text-subtle" />}</span>
                   <span className="flex min-w-0 flex-1 items-baseline gap-2.5">
-                    <span className="max-w-[60%] shrink-0 truncate text-[13px] text-fg">{entry.name}</span>
+                    <span className="max-w-[60%] shrink-0 truncate text-[13px] text-fg">{entry.displayName ?? entry.name}</span>
                     <span className="min-w-0 truncate text-[11.5px] text-subtle">{entry.detail}</span>
                   </span>
                 </button>
@@ -1091,7 +1109,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
             {acp && <AcpOptions />}
           </div>
           <div className="composer-actions ml-auto flex min-w-0 max-w-full items-center">
-            {!acp && <span className="composer-model flex min-w-0 items-center"><ModelPicker noUltra={mode === 'multitask'} /></span>}
+            {!acp && <span ref={modelSlot} className="composer-model flex min-w-0 items-center"><ModelPicker noUltra={mode === 'multitask'} /></span>}
             {running && !canSend ? (
               <button
                 type="button"
@@ -1222,10 +1240,10 @@ function ComposerChips({ text, mentions }: { text: string; mentions: SelectedMen
         if (!item) return part
         const Icon = item.kind === 'git' ? GIT_COMMAND_ICON[item.command] : CHIP_ICON[item.kind]
         return (
-          <span key={index} className="text-link" style={item.kind === 'git' ? { color: 'var(--orange)' } : undefined}>
+          <span key={index} className="text-link" style={item.kind === 'git' ? { color: 'var(--orange)' } : item.kind === 'skill' && item.color ? { color: item.color } : undefined}>
             <span className="relative">
               <span className="invisible">{part[0]}</span>
-              <span className="absolute left-0 top-1/2 flex -translate-y-1/2">{item.kind === 'file' ? <FileTypeIcon name={item.name} size={11} /> : <Icon size={13} />}</span>
+              <span className="absolute left-0 top-1/2 flex -translate-y-1/2">{item.kind === 'file' ? <FileTypeIcon name={item.name} size={11} /> : item.kind === 'skill' ? <SkillIcon icon={item.icon} color={item.color} size={13} fallback={<Icon size={13} />} /> : <Icon size={13} />}</span>
             </span>
             {part.slice(1)}
           </span>
@@ -1238,7 +1256,7 @@ function ComposerChips({ text, mentions }: { text: string; mentions: SelectedMen
 
 type MentionKind = 'model' | 'mode' | 'command' | 'git' | 'upload' | 'skill' | 'file' | 'chat' | 'browser' | 'mcp' | 'terminal'
 type SelectedMention =
-  | { id: string; kind: 'skill'; token: string; name: string; path: string }
+  | { id: string; kind: 'skill'; token: string; name: string; displayName?: string; path: string; icon?: string; color?: string }
   | { id: string; kind: 'file'; token: string; name: string; path: string }
   | { id: string; kind: 'chat'; token: string; name: string; chatId: string }
   | { id: string; kind: 'browser'; token: string }
@@ -1255,8 +1273,14 @@ interface MentionEntry {
   brand?: ModelBrand
   git?: GitCommand
   name: string
+  /** A skill's name for people; `name` stays the id it is sent under. */
+  displayName?: string
   detail: string
   path?: string
+  /** A skill's small icon. */
+  icon?: string
+  /** A skill's brand color. */
+  color?: string
   chatId?: string
   server?: string
   tool?: string

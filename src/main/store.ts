@@ -1,7 +1,7 @@
 import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ACP_MODEL_ID, modelKey } from '@shared/catalog'
+import { ACP_MODEL_ID, modelKey, type ProviderId } from '@shared/catalog'
 import { ACP_ACCOUNTS, acpAgentFor, applyCustomAcpAgents, type AccountId, type Chat, type Item, type Project, type SecretState, type Settings } from '@shared/types'
 import { writeJsonAtomic } from './util'
 
@@ -34,6 +34,11 @@ export interface ChatDoc {
 
 interface Secrets {
   openRouterKey?: string
+  providerKeys?: Partial<Record<ProviderId, string>>
+}
+
+function maskKey(key: string): string {
+  return '•'.repeat(key.length)
 }
 
 const ACCOUNT_IDS: AccountId[] = ['claude', 'codex', ...ACP_ACCOUNTS]
@@ -62,7 +67,9 @@ function defaultSettings(): Settings {
     modelPickerStyle: 'default',
     commitMessageModelId: null,
     autoApprovalModelId: null,
-    openRouterBaseUrl: 'https://openrouter.ai/api/v1',
+    disabledProviders: [],
+    customProviders: [],
+    creditLimit: null,
     accounts,
     acpEnabled: true,
     customAcpAgents: [],
@@ -172,11 +179,28 @@ class Store {
     this.saveSecrets()
   }
 
+  providerKey(id: ProviderId): string | null {
+    return this.secrets.providerKeys?.[id]?.trim() || null
+  }
+
+  setProviderKey(id: ProviderId, key: string | null): void {
+    const keys = { ...this.secrets.providerKeys }
+    if (key && key.trim()) keys[id] = key.trim()
+    else delete keys[id]
+    this.secrets.providerKeys = keys
+    this.saveSecrets()
+  }
+
   secretState(): SecretState {
     const key = this.openRouterKey
+    const providerKeys: SecretState['providerKeys'] = {}
+    for (const [id, value] of Object.entries(this.secrets.providerKeys ?? {})) {
+      if (value) providerKeys[id as ProviderId] = maskKey(value)
+    }
     return {
       openRouterKey: !!key,
-      openRouterKeyHint: key ? `${key.slice(0, 8)}…${key.slice(-4)}` : null
+      openRouterKeyHint: key ? maskKey(key) : null,
+      providerKeys
     }
   }
 

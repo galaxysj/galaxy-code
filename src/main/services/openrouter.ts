@@ -2,7 +2,9 @@ import { shell } from 'electron'
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { resolveAutoApprovalModel, TitleModel } from '@shared/models'
+import { BYOK_PROVIDERS, byokProvider, directEffort, directModelId, parseCustomModel, type ByokProvider, type ProviderId } from '@shared/catalog'
+import { resolveAutoApprovalModel, TitleModel, type Effort } from '@shared/models'
+import type { CustomProvider } from '@shared/types'
 import { store } from '../store'
 import { errorMessage, oneLine } from '../util'
 
@@ -18,23 +20,59 @@ export class MissingKeyError extends Error {
   }
 }
 
-function baseUrl(): string {
-  return (store.settings.openRouterBaseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
-}
-
-/** Host root for endpoints that live outside /api/v1, such as Decisions. */
-function hostRoot(): string {
-  try {
-    return new URL(baseUrl()).origin
-  } catch {
-    return 'https://openrouter.ai'
-  }
-}
+export const OPENROUTER_API = 'https://openrouter.ai/api/v1'
 
 function authHeaders(): Record<string, string> {
   const key = store.openRouterKey
   if (!key) throw new MissingKeyError()
   return { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...APP_HEADERS }
+}
+
+function directHeaders(provider: { id: ProviderId }, key: string | null): Record<string, string> {
+  // A local server may take no key at all.
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) }
+  // Anthropic's own routes, such as model listing, read the key from x-api-key.
+  return provider.id === 'anthropic' && key ? { ...headers, 'x-api-key': key, 'anthropic-version': '2023-06-01' } : headers
+}
+
+interface Route {
+  base: string
+  headers: Record<string, string>
+  model: string
+  /** Set when the request goes straight to the model's provider on the user's own key. */
+  provider: Pick<ByokProvider, 'id' | 'efforts'> | null
+  /** The format the endpoint speaks. */
+  api: 'chat' | 'responses'
+}
+
+function customProvider(id: string): CustomProvider | undefined {
+  return store.settings.customProviders.find((provider) => provider.id === id)
+}
+
+function customBase(provider: CustomProvider): string {
+  return provider.baseUrl.replace(/\/+$/, '')
+}
+
+/** Where a model's request goes: its own provider when a key is saved for it, else OpenRouter. */
+function routeFor(model: string): Route {
+  const custom = parseCustomModel(model)
+  if (custom) {
+    const provider = customProvider(custom.providerId)
+    if (!provider || provider.api === 'decisions') throw new Error(`The custom provider for ${custom.model} is no longer available for chats. Pick another model.`)
+    return { base: customBase(provider), headers: directHeaders(provider, store.providerKey(provider.id)), model: custom.model, provider: { id: provider.id }, api: provider.api ?? 'chat' }
+  }
+  const provider = byokProvider(model)
+  const key = provider && !store.settings.disabledProviders.includes(provider.id) && store.providerKey(provider.id)
+  if (provider && key) return { base: provider.baseUrl, headers: directHeaders(provider, key), model: directModelId(provider, model), provider, api: 'chat' }
+  return { base: OPENROUTER_API, headers: authHeaders(), model, provider: null, api: 'chat' }
+}
+
+/** History may come from OpenRouter or another provider; strict APIs reject the fields they do not know. */
+function directMessages(provider: { id: ProviderId }, messages: ChatMessage[]): ChatMessage[] {
+  return messages.map(({ reasoning_details: _details, ...message }) => ({
+    ...message,
+    tool_calls: message.tool_calls?.map((call) => provider.id === 'google' ? call : { id: call.id, type: call.type, function: call.function })
+  }))
 }
 
 async function readError(res: Response): Promise<string> {
@@ -56,6 +94,8 @@ export interface ChatToolCall {
   id: string
   type: 'function'
   function: { name: string; arguments: string }
+  /** Gemini's thought signature, which must come back with the call on the next request. */
+  extra_content?: unknown
 }
 
 export type ChatContentPart =
@@ -155,29 +195,195 @@ function withCacheMarkers(model: string, messages: ChatMessage[]): ChatMessage[]
   return out
 }
 
-export async function streamChat(req: StreamRequest): Promise<StreamResult> {
-  const body: Record<string, unknown> = {
-    model: req.model,
-    messages: withCacheMarkers(req.model, req.messages),
+export interface TokenPrice {
+  /** Dollars per input token. */
+  input: number
+  /** Dollars per output token. */
+  output: number
+}
+
+let priceCache: { at: number; prices: Map<string, TokenPrice> } | null = null
+
+/** Standard per-token prices by OpenRouter model id, from its public model list. Refreshed every six hours. */
+export async function standardPrices(): Promise<Map<string, TokenPrice>> {
+  if (priceCache && Date.now() - priceCache.at < 6 * 3_600_000) return priceCache.prices
+  try {
+    const res = await fetch(`${OPENROUTER_API}/models`, { signal: AbortSignal.timeout(5000) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const list = ((await res.json()) as { data?: { id: string; pricing?: { prompt?: string; completion?: string } }[] }).data ?? []
+    // Routers such as openrouter/auto list a price of -1, meaning it depends on the model they pick.
+    const prices = new Map(list.map((model) => [model.id, { input: Math.max(0, Number(model.pricing?.prompt) || 0), output: Math.max(0, Number(model.pricing?.completion) || 0) }]))
+    priceCache = { at: Date.now(), prices }
+    return prices
+  } catch {
+    return priceCache?.prices ?? new Map()
+  }
+}
+
+let usageCheck: { at: number; used: number } | null = null
+
+/** Stops a turn once OpenRouter usage reaches the limit set in Settings. Usage is rechecked every 30 seconds; a failed check lets the turn run. */
+async function assertCreditLimit(): Promise<void> {
+  const limit = store.settings.creditLimit
+  if (limit === null) return
+  if (!usageCheck || Date.now() - usageCheck.at > 30_000) {
+    try {
+      const res = await fetch(`${OPENROUTER_API}/credits`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) })
+      if (!res.ok) return
+      const balance = ((await res.json()) as { data?: { total_usage?: number } }).data
+      usageCheck = { at: Date.now(), used: balance?.total_usage ?? 0 }
+    } catch {
+      return
+    }
+  }
+  if (usageCheck.used >= limit) throw new Error(`Credit limit of $${limit.toFixed(2)} reached. Raise it in Settings → Usage.`)
+}
+
+/** Feeds each server-sent `data:` line of a streaming response to the handler. */
+async function readEvents(res: Response, handle: (data: string) => void): Promise<void> {
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+    buffer += decoder.decode(chunk, { stream: true })
+    let newline: number
+    while ((newline = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, newline).replace(/\r$/, '')
+      buffer = buffer.slice(newline + 1)
+      if (line.startsWith('data:')) handle(line.slice(5).trim())
+    }
+  }
+  if (buffer.startsWith('data:')) handle(buffer.slice(5).trim())
+}
+
+function messageText(message: ChatMessage): string {
+  if (typeof message.content === 'string') return message.content
+  return (message.content ?? []).map((part) => (part.type === 'text' ? part.text : '')).join('')
+}
+
+/** Chat history in the Responses API's shape: system messages become instructions, tool calls become their own items. */
+function responsesInput(messages: ChatMessage[]): { instructions?: string; input: unknown[] } {
+  const instructions = messages.filter((message) => message.role === 'system').map(messageText).join('\n\n')
+  const input = messages.flatMap((message): unknown[] => {
+    if (message.role === 'system') return []
+    if (message.role === 'tool') return [{ type: 'function_call_output', call_id: message.tool_call_id, output: messageText(message) }]
+    if (message.role === 'assistant') {
+      const text = messageText(message)
+      return [
+        ...(text ? [{ role: 'assistant', content: text }] : []),
+        ...(message.tool_calls ?? []).map((call) => ({ type: 'function_call', call_id: call.id, name: call.function.name, arguments: call.function.arguments }))
+      ]
+    }
+    const parts = typeof message.content === 'string' ? [{ type: 'text' as const, text: message.content }] : message.content ?? []
+    return [{ role: 'user', content: parts.map((part) => (part.type === 'text' ? { type: 'input_text', text: part.text } : { type: 'input_image', image_url: part.image_url.url })) }]
+  })
+  return { ...(instructions ? { instructions } : {}), input }
+}
+
+/** A turn over the OpenAI Responses API, reported the same way as a chat completion. */
+async function streamResponses(route: Route, req: StreamRequest): Promise<StreamResult> {
+  const body = {
+    model: route.model,
+    ...responsesInput(req.messages),
     stream: true,
-    usage: { include: true }
+    store: false,
+    ...(req.tools?.length ? { tools: req.tools.map(({ function: fn }) => ({ type: 'function', ...fn })), tool_choice: 'auto' } : {})
+  }
+  let res: Response | null = null
+  for (let attempt = 0; attempt < 4; attempt++) {
+    res = await fetch(`${route.base}/responses`, { method: 'POST', headers: route.headers, body: JSON.stringify(body), signal: req.signal })
+    if (res.ok) break
+    const retryable = res.status === 429 || res.status === 408 || res.status >= 500
+    if (!retryable || attempt === 3) throw new Error(`${await readError(res)} [${res.status}]`)
+    await new Promise((r) => setTimeout(r, 800 * 2 ** attempt))
+  }
+  if (!res?.ok || !res.body) throw new Error('No response from the model provider')
+
+  const result: StreamResult = { content: '', reasoningDetails: [], toolCalls: [], finishReason: null, usage: null }
+  const calls = new Map<number, ChatToolCall>()
+  await readEvents(res, (data) => {
+    if (!data || data === '[DONE]') return
+    let event: Record<string, any>
+    try {
+      event = JSON.parse(data)
+    } catch {
+      return
+    }
+    switch (event.type) {
+      case 'response.output_text.delta':
+        result.content += event.delta
+        req.onText(event.delta)
+        break
+      case 'response.reasoning_summary_text.delta':
+      case 'response.reasoning_text.delta':
+        req.onReasoning(event.delta)
+        break
+      case 'response.output_item.added':
+        if (event.item?.type === 'function_call') {
+          const call: ChatToolCall = { id: event.item.call_id ?? event.item.id, type: 'function', function: { name: event.item.name ?? '', arguments: event.item.arguments ?? '' } }
+          calls.set(event.output_index ?? calls.size, call)
+          req.onToolCall?.(call)
+        }
+        break
+      case 'response.function_call_arguments.delta': {
+        const call = calls.get(event.output_index)
+        if (call) {
+          call.function.arguments += event.delta
+          req.onToolCall?.(call)
+        }
+        break
+      }
+      case 'response.function_call_arguments.done': {
+        const call = calls.get(event.output_index)
+        if (call && typeof event.arguments === 'string') call.function.arguments = event.arguments
+        break
+      }
+      case 'response.completed':
+      case 'response.incomplete': {
+        const usage = event.response?.usage
+        if (usage) result.usage = { inputTokens: usage.input_tokens ?? 0, outputTokens: usage.output_tokens ?? 0, cost: 0 }
+        if (event.response?.incomplete_details?.reason === 'max_output_tokens') result.finishReason = 'length'
+        break
+      }
+      case 'response.failed':
+        throw new Error(event.response?.error?.message || 'The provider returned an error mid-stream')
+      case 'error':
+        throw new Error(event.message || 'The provider returned an error mid-stream')
+    }
+  })
+  result.toolCalls = [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, call]) => call)
+  return result
+}
+
+export async function streamChat(req: StreamRequest): Promise<StreamResult> {
+  const route = routeFor(req.model)
+  if (route.api === 'responses') return streamResponses(route, req)
+  const direct = route.provider
+  if (!direct) await assertCreditLimit()
+  const body: Record<string, unknown> = {
+    model: route.model,
+    messages: direct ? directMessages(direct, req.messages) : withCacheMarkers(req.model, req.messages),
+    stream: true,
+    ...(direct ? { stream_options: { include_usage: true } } : { usage: { include: true } })
   }
   if (req.tools?.length) {
     body.tools = req.tools
     body.tool_choice = 'auto'
   }
-  if (req.effort) body.reasoning = req.effort === 'none' ? { effort: 'none', exclude: true } : { effort: req.effort }
-  if (req.fast) {
+  if (direct) {
+    const effort = req.effort ? directEffort(direct, req.effort as Effort) : null
+    if (effort) body.reasoning_effort = effort
+  } else if (req.effort) body.reasoning = req.effort === 'none' ? { effort: 'none', exclude: true } : { effort: req.effort }
+  if (req.fast && (!direct || direct.id === 'openai')) {
     body.service_tier = req.ultrafast ? 'ultrafast' : 'priority'
-    body.provider = { sort: 'throughput' }
+    if (!direct) body.provider = { sort: 'throughput' }
   }
 
   let res: Response | null = null
   let lastError = ''
   for (let attempt = 0; attempt < 4; attempt++) {
-    res = await fetch(`${baseUrl()}/chat/completions`, {
+    res = await fetch(`${route.base}/chat/completions`, {
       method: 'POST',
-      headers: authHeaders(),
+      headers: route.headers,
       body: JSON.stringify(body),
       signal: req.signal
     })
@@ -244,7 +450,7 @@ export async function streamChat(req: StreamRequest): Promise<StreamResult> {
     }
     if (!sawDetailText && typeof delta.reasoning === 'string' && delta.reasoning) req.onReasoning(delta.reasoning)
 
-    const toolCalls = delta.tool_calls as { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] | undefined
+    const toolCalls = delta.tool_calls as { index?: number; id?: string; function?: { name?: string; arguments?: string }; extra_content?: unknown }[] | undefined
     if (Array.isArray(toolCalls)) {
       for (const tc of toolCalls) {
         const index = tc.index ?? 0
@@ -256,23 +462,13 @@ export async function streamChat(req: StreamRequest): Promise<StreamResult> {
         if (tc.id) call.id = tc.id
         if (tc.function?.name) call.function.name += tc.function.name
         if (tc.function?.arguments) call.function.arguments += tc.function.arguments
+        if (tc.extra_content) call.extra_content = tc.extra_content
         if (call.function.name) req.onToolCall?.(call)
       }
     }
   }
 
-  const decoder = new TextDecoder()
-  let buffer = ''
-  for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
-    buffer += decoder.decode(chunk, { stream: true })
-    let newline: number
-    while ((newline = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, newline).replace(/\r$/, '')
-      buffer = buffer.slice(newline + 1)
-      if (line.startsWith('data:')) handle(line.slice(5).trim())
-    }
-  }
-  if (buffer.startsWith('data:')) handle(buffer.slice(5).trim())
+  await readEvents(res, handle)
 
   result.reasoningDetails = details
   result.toolCalls = [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, call]) => call)
@@ -281,10 +477,17 @@ export async function streamChat(req: StreamRequest): Promise<StreamResult> {
 
 /** One-shot completion for short utility prompts. */
 export async function complete(model: string, messages: ChatMessage[], signal?: AbortSignal, extra: Record<string, unknown> = {}): Promise<string> {
-  const res = await fetch(`${baseUrl()}/chat/completions`, {
+  const route = routeFor(model)
+  if (route.api === 'responses') {
+    const res = await fetch(`${route.base}/responses`, { method: 'POST', headers: route.headers, body: JSON.stringify({ model: route.model, ...responsesInput(messages), store: false }), signal })
+    if (!res.ok) throw new Error(await readError(res))
+    const json = (await res.json()) as { output?: { content?: { type?: string; text?: string }[] }[] }
+    return (json.output ?? []).flatMap((item) => item.content ?? []).filter((part) => part.type === 'output_text').map((part) => part.text ?? '').join('')
+  }
+  const res = await fetch(`${route.base}/chat/completions`, {
     method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ model, messages, stream: false, ...extra }),
+    headers: route.headers,
+    body: JSON.stringify({ model: route.model, messages: route.provider ? directMessages(route.provider, messages) : messages, stream: false, ...(route.provider ? {} : extra) }),
     signal
   })
   if (!res.ok) throw new Error(await readError(res))
@@ -331,7 +534,7 @@ export async function generateImage(
   if (options.references?.length) {
     body.input_references = options.references.map((url) => ({ type: 'image_url', image_url: { url } }))
   }
-  const res = await fetch(`${baseUrl()}/images`, {
+  const res = await fetch(`${OPENROUTER_API}/images`, {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(body),
@@ -365,17 +568,29 @@ export interface RiskDecision {
   reason: string
 }
 
+/** Where Auto approval goes: the custom Decisions API picked in Settings, else OpenRouter's. */
+function decisionTarget(): { url: string; headers: Record<string, string>; model: string; name: string } {
+  const id = store.settings.autoApprovalModelId
+  const custom = id ? parseCustomModel(id) : null
+  const provider = custom && customProvider(custom.providerId)
+  if (custom && provider?.enabled && provider.api === 'decisions') {
+    return { url: `${customBase(provider)}/decisions`, headers: directHeaders(provider, store.providerKey(provider.id)), model: custom.model, name: custom.model }
+  }
+  const model = resolveAutoApprovalModel(id)
+  return { url: 'https://openrouter.ai/api/alpha/decisions', headers: authHeaders(), model: model.ID, name: model.DisplayName }
+}
+
 /**
  * Asks the Auto Approval model picked in Settings whether an agent action is safe to run
  * unattended. Throws when the API is unreachable, callers fall back to asking the user.
  */
 export async function decideRisk(state: Record<string, unknown>, signal?: AbortSignal): Promise<RiskDecision> {
-  const model = resolveAutoApprovalModel(store.settings.autoApprovalModelId)
-  const res = await fetch(`${hostRoot()}/api/alpha/decisions`, {
+  const target = decisionTarget()
+  const res = await fetch(target.url, {
     method: 'POST',
-    headers: authHeaders(),
+    headers: target.headers,
     body: JSON.stringify({
-      model: model.ID,
+      model: target.model,
       state,
       questions: {
         verdict: {
@@ -435,7 +650,7 @@ Judge scope, relevance, recoverability, data sensitivity, affected people and sy
   const level = typeof score === 'number' ? ['minimal', 'low', 'moderate', 'high'][Math.max(0, Math.min(3, Math.round(score)))] : null
   const reason = allow
     ? `Judged safe${level ? ` (${level} risk)` : ''}`
-    : `${model.DisplayName} requests your approval (${Math.round(pDeny * 100)}% deny${level ? `, ${level} risk` : ''})`
+    : `${target.name} requests your approval (${Math.round(pDeny * 100)}% deny${level ? `, ${level} risk` : ''})`
   return { allow, confidence: verdict.confidence ?? (allow ? 1 - pDeny : pDeny), reason }
 }
 
@@ -443,7 +658,7 @@ Judge scope, relevance, recoverability, data sensitivity, affected people and sy
 
 export async function testKey(): Promise<{ ok: boolean; message: string }> {
   try {
-    const res = await fetch(`${baseUrl()}/key`, { headers: authHeaders(), signal: AbortSignal.timeout(15000) })
+    const res = await fetch(`${OPENROUTER_API}/key`, { headers: authHeaders(), signal: AbortSignal.timeout(15000) })
     if (!res.ok) return { ok: false, message: await readError(res) }
     const json = (await res.json()) as { data?: { label?: string; limit_remaining?: number | null; usage?: number } }
     const remaining = json.data?.limit_remaining
@@ -456,17 +671,33 @@ export async function testKey(): Promise<{ ok: boolean; message: string }> {
   }
 }
 
-/** Account balance: credits bought and spent, the key's own limit when it has one, and whether credits were ever bought. */
+/** Checks a provider key by listing that provider's models. */
+export async function testProviderKey(id: ProviderId): Promise<{ ok: boolean; message: string }> {
+  const provider = BYOK_PROVIDERS.find((entry) => entry.id === id) ?? customProvider(id)
+  const key = store.providerKey(id)
+  if (!provider || (!key && !customProvider(id))) return { ok: false, message: 'No key saved' }
+  try {
+    const res = await fetch(`${provider.baseUrl.replace(/\/+$/, '')}/models`, { headers: directHeaders(provider, key), signal: AbortSignal.timeout(15000) })
+    return res.ok ? { ok: true, message: 'Key is valid' } : { ok: false, message: await readError(res) }
+  } catch (err) {
+    return { ok: false, message: errorMessage(err) }
+  }
+}
+
+/** Credits an account must have bought for OpenRouter's higher daily limit on free models. */
+const PAID_TIER_CREDITS = 10
+
+/** Account balance: credits bought and spent, the key's own limit when it has one, and whether the account is below the paid tier. */
 export async function openRouterCredits(): Promise<{ total: number; used: number; keyLimit: number | null; keyRemaining: number | null; freeTier: boolean }> {
   const [credits, key] = await Promise.all([
-    fetch(`${baseUrl()}/credits`, { headers: authHeaders(), signal: AbortSignal.timeout(15000) }),
-    fetch(`${baseUrl()}/key`, { headers: authHeaders(), signal: AbortSignal.timeout(15000) })
+    fetch(`${OPENROUTER_API}/credits`, { headers: authHeaders(), signal: AbortSignal.timeout(15000) }),
+    fetch(`${OPENROUTER_API}/key`, { headers: authHeaders(), signal: AbortSignal.timeout(15000) })
   ])
   if (!credits.ok) throw new Error(await readError(credits))
   const balance = ((await credits.json()) as { data?: { total_credits?: number; total_usage?: number } }).data ?? {}
-  const info = key.ok ? (((await key.json()) as { data?: { limit?: number | null; limit_remaining?: number | null; is_free_tier?: boolean } }).data ?? {}) : {}
-  // is_free_tier is true until the account buys credits; fall back to the balance when the key lookup fails.
-  const freeTier = info.is_free_tier ?? (balance.total_credits ?? 0) <= 0
+  const info = key.ok ? (((await key.json()) as { data?: { limit?: number | null; limit_remaining?: number | null } }).data ?? {}) : {}
+  // The daily limit rises at $10 of credits bought in total; is_free_tier clears on any purchase, so it cannot tell.
+  const freeTier = (balance.total_credits ?? 0) < PAID_TIER_CREDITS
   return { total: balance.total_credits ?? 0, used: balance.total_usage ?? 0, keyLimit: info.limit ?? null, keyRemaining: info.limit_remaining ?? null, freeTier }
 }
 

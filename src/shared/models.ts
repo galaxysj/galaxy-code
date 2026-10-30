@@ -4,9 +4,9 @@
  *
  *   DisplayName   What the picker shows.
  *   ID            Model id sent to the provider.
- *   Subscription  Which connection serves it. 'Default' is OpenRouter (or the
- *                 BYOK endpoint from Settings); 'Claude' and 'Codex' are AI
- *                 accounts. ACP agents live in acp-registry.ts and report
+ *   Subscription  Which connection serves it. 'Default' is OpenRouter, or the
+ *                 model's own provider when its key is saved in Settings;
+ *                 'Claude' and 'Codex' are AI accounts. ACP agents live in acp-registry.ts and report
  *                 their own models, so they are not listed here.
  *   Efforts       Reasoning efforts the slider offers, lowest to highest.
  *                 Leave empty for models without adjustable reasoning.
@@ -823,6 +823,15 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-6.1 Sol',
     ID: 'gpt-6.1-sol',
+    Brand: 'GPT',
+    Subscription: 'Codex',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    UltraEffort: 'xhigh',
+    FastMode: true
+  },
+  {
+    DisplayName: 'GPT-6.1 Terra',
+    ID: 'gpt-6.1-terra',
     Brand: 'GPT',
     Subscription: 'Codex',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],

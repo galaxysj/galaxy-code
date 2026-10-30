@@ -210,6 +210,8 @@ export type ToolEnv = Omit<ToolContext, 'itemId' | 'onOutput'>
 export interface ToolRun {
   result: ToolResult
   itemId: string
+  /** With `defer`, records the call's end on the timeline; until then the item stays in progress. */
+  finish?: () => void
 }
 
 /**
@@ -222,7 +224,8 @@ export async function runTool(
   env: ToolEnv,
   name: string,
   rawInput: unknown,
-  itemId?: string
+  itemId?: string,
+  defer = false
 ): Promise<ToolRun> {
   const { session } = env
   const tool = tools.find((t) => t.name === name)
@@ -268,9 +271,15 @@ export async function runTool(
     ? session.update<ToolItem>(preview.id, { ...fields, meta: { ...preview.meta, ...presentation.meta } })!
     : session.add<ToolItem>({ id: itemId, ...fields, meta: presentation.meta })
 
+  // A deferred end keeps its patch for finish(), except a denial, which shows at once.
+  const end = (patch: Partial<ToolItem>, now = !defer): (() => void) | undefined => {
+    const apply = (): void => { session.update<ToolItem>(item.id, { ...patch, endedAt: Date.now() }) }
+    if (now) apply()
+    else return apply
+  }
   const fail = (message: string, status: 'error' | 'denied' = 'error'): ToolRun => {
-    session.update<ToolItem>(item.id, { status, error: message, endedAt: Date.now() })
-    return { itemId: item.id, result: { text: message, isError: true } }
+    const finish = end({ status, error: message }, !defer || status === 'denied')
+    return { itemId: item.id, result: { text: message, isError: true }, finish }
   }
 
   try {
@@ -301,14 +310,13 @@ export async function runTool(
       await writeFile(file, result.text)
       result.text = `${result.text.slice(0, RESULT_PREVIEW)}\n…\n\n[Cut after ${RESULT_PREVIEW} of ${result.text.length} characters. The full output is saved to ${file}. This result is incomplete. Unless what you were looking for is already in the part above, your next step must be Read on that file, before you answer, summarize or call any other tool. Do not tell the user the output was cut or ask them to narrow it; read the file.]`
     }
-    session.update<ToolItem>(item.id, {
+    const finish = end({
       status: result.isError ? 'error' : 'done',
       output: result.display ?? result.text,
       error: result.isError ? oneLine(result.text.split('\n').pop() ?? '', 200) : undefined,
-      meta: { ...(current?.meta ?? {}), ...(result.meta ?? {}) },
-      endedAt: Date.now()
+      meta: { ...(current?.meta ?? {}), ...(result.meta ?? {}) }
     })
-    return { itemId: item.id, result }
+    return { itemId: item.id, result, finish }
   } catch (err) {
     if (isAbortError(err) || env.signal.aborted) return fail('Stopped')
     const message = err instanceof ToolInputError ? `Invalid input: ${err.message}` : errorMessage(err)
