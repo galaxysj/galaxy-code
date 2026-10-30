@@ -1,0 +1,26 @@
+Galaxy Code skill-creator
+
+This skill is a modified work distributed under the Apache License, Version 2.0.
+See LICENSE.txt for the full license text.
+
+Sources
+- skill-creator from OpenAI Codex (Apache-2.0).
+- skill-creator from https://github.com/anthropics/skills at commit
+  ca45fc496a34 (Apache-2.0). Copyright 2026 Anthropic, PBC.
+  A few writing principles in SKILL.md are adapted from it.
+
+Files changed from the OpenAI Codex source
+- SKILL.md: adapted for Galaxy Code, limited created skills to SKILL.md,
+  agents/openai.yaml, scripts/ and references/, removed the forward-testing
+  section, and added the adapted principles.
+- references/openai_yaml.md: described how Galaxy Code uses the icon and brand
+  color fields.
+- scripts/init_skill.py: removed the assets option and example, and replaced
+  product names.
+- assets/skill-creator-small.svg: changed the fill color.
+
+Files unchanged from the OpenAI Codex source
+- agents/openai.yaml, assets/skill-creator.png,
+  scripts/generate_openai_yaml.py, scripts/quick_validate.py
+
+Modifications made in 2026 for Galaxy Code.

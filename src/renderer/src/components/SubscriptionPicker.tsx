@@ -21,7 +21,7 @@ export function SubscriptionPicker(): ReactNode {
   const refresh = useStore((s) => s.refreshAccounts)
   const subscriptions = availableSubscriptions(settings, statuses).filter((entry) => canUseChatSubscription(chat, entry))
   const close = useCallback(() => setOpen(false), [])
-  const label = subscription === 'Default' ? 'Local' : subscription ? (SUBSCRIPTION_LABELS[subscription] ?? subscription) : 'Subscription'
+  const label = subscription ? (SUBSCRIPTION_LABELS[subscription] ?? subscription) : 'Subscription'
 
   // A chat keeps the provider it started with.
   if (chat)
@@ -65,7 +65,7 @@ export function SubscriptionPicker(): ReactNode {
                 {!local && entry === subscriptions[1] && <MenuSeparator />}
                 <MenuItem
                   icon={<SubscriptionIcon subscription={entry} />}
-                  label={local ? 'Local' : (SUBSCRIPTION_LABELS[entry] ?? entry)}
+                  label={SUBSCRIPTION_LABELS[entry] ?? entry}
                   selected={entry === subscription}
                   disabled={!hasModels}
                   onClick={() => {

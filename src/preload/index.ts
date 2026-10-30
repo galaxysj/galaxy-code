@@ -27,6 +27,8 @@ const api: GalaxyApi = {
     update: call('settings.update'),
     setOpenRouterKey: call('settings.setOpenRouterKey'),
     testOpenRouterKey: call('settings.testOpenRouterKey'),
+    setProviderKey: call('settings.setProviderKey'),
+    testProviderKey: call('settings.testProviderKey'),
     usage: call('settings.usage'),
     analytics: call('settings.analytics'),
     signInOpenRouter: call('settings.signInOpenRouter')
@@ -101,7 +103,8 @@ const api: GalaxyApi = {
     forward: call('browser.forward'),
     reload: call('browser.reload'),
     stop: call('browser.stop'),
-    state: call('browser.state')
+    state: call('browser.state'),
+    frame: call('browser.frame')
   },
   terminal: {
     create: call('terminal.create'), write: call('terminal.write'), resize: call('terminal.resize'), interrupt: call('terminal.interrupt'), close: call('terminal.close')

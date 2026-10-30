@@ -3,6 +3,7 @@ import TurndownService from 'turndown'
 import { TitleModel } from '@shared/models'
 import { store } from '../store'
 import { errorMessage } from '../util'
+import { OPENROUTER_API } from './openrouter'
 
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
@@ -76,8 +77,7 @@ async function searchViaPage(query: string, signal?: AbortSignal): Promise<Searc
 async function searchViaOpenRouter(query: string, signal?: AbortSignal): Promise<SearchResponse> {
   const key = store.openRouterKey
   if (!key) throw new Error('Web search is unavailable right now')
-  const base = (store.settings.openRouterBaseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
-  const res = await fetch(`${base}/chat/completions`, {
+  const res = await fetch(`${OPENROUTER_API}/chat/completions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'X-Title': 'Galaxy Code' },
     body: JSON.stringify({

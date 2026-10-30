@@ -280,7 +280,7 @@ function exploreSummary(all: ToolItem[], verb = 'Explored'): string {
     pages && plural(pages, 'page')
   ].filter(Boolean)
   // A single item names what it was rather than counting to one.
-  if (items.length === 1 && reads.length === 1) parts[0] = terminals ? 'terminal' : outputs ? 'tool output' : basename(readPath(reads[0]))
+  if (items.length === 1 && reads.length === 1) parts[0] = terminals ? 'terminal' : outputs ? 'tool output' : basename(readPath(reads[0])) || 'file'
   else if (items.length === 1 && web === 1) parts[0] = 'web search'
   const done = verb === 'Explored'
   const actions = [
@@ -294,20 +294,41 @@ function exploreSummary(all: ToolItem[], verb = 'Explored'): string {
   return [parts.length ? `${verb} ${parts.join(', ')}` : '', ...actions].filter(Boolean).join(', ')
 }
 
-function browsingPages(items: ToolItem[]): number {
+function browsingPages(items: ToolItem[]): string[] {
   const urls = new Set<string>()
   for (const item of items) {
-    if (item.status === 'denied' || item.status === 'error') continue
+    // A batch that failed partway still visited the pages before the error.
+    if (item.status === 'denied' || (item.status === 'error' && !item.meta?.urls?.length)) continue
     const input = item.input as { url?: unknown } | null
-    const url = item.output?.match(/^URL:\s*(\S+)/m)?.[1] ?? item.meta?.url ?? (typeof input?.url === 'string' ? input.url : null)
-    if (!url || url === 'about:blank') continue
-    try {
-      const page = new URL(url)
-      page.hash = ''
-      urls.add(page.href)
-    } catch { urls.add(url) }
+    const pages = item.meta?.urls ?? [item.output?.match(/^URL:\s*(\S+)/m)?.[1] ?? item.meta?.url ?? (typeof input?.url === 'string' ? input.url : null)]
+    for (const url of pages) {
+      if (!url || url === 'about:blank') continue
+      try {
+        const page = new URL(url)
+        page.hash = ''
+        urls.add(page.href)
+      } catch { urls.add(url) }
+    }
   }
-  return urls.size || (items.some((item) => item.status !== 'denied' && item.status !== 'error') ? 1 : 0)
+  return [...urls]
+}
+
+/** "Browsed 3 pages", or the page itself when there is only one. */
+function browsingTitle(verb: string, items: ToolItem[]): ReactNode {
+  const pages = browsingPages(items)
+  if (pages.length !== 1) {
+    const count = pages.length || (items.some((item) => item.status !== 'denied' && item.status !== 'error') ? 1 : 0)
+    return `${verb} ${plural(count, 'page')}`
+  }
+  const [url] = pages
+  let label = url
+  try {
+    const page = new URL(url)
+    if (page.hostname) label = page.hostname.replace(/^www\./, '') + (page.pathname.length > 1 ? page.pathname : '') + page.search
+  } catch { /* Keep the raw value. */ }
+  if (!/^https?:/i.test(url)) return <><span className="text-fg">{verb}</span> {label}</>
+  // The row is a button, so the link is a span that keeps its click from toggling the row.
+  return <><span className="text-fg">{verb}</span> <span title={url} onClick={(event) => { event.stopPropagation(); void window.galaxy.files.openExternal(url) }} className="hover:text-fg hover:underline">{label}</span></>
 }
 
 function ExploreLine({ item }: { item: ToolItem }): ReactNode {
@@ -336,7 +357,7 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
       >
         <span className="flex w-4 shrink-0 justify-center">{isLive(item) ? <Spinner size={13} /> : <Icon size={13.5} className="text-subtle" />}</span>
         <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(item.tool === 'bash' && item.status !== 'error' ? `${isLive(item) ? 'Running' : 'Ran'} ${toolActivityTitle(item)}` : toolActivityTitle(item))}</span>
-        {!isTerminalRead(item) && !isToolOutputRead(item) && item.detail && item.detail !== basename(item.detail) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
+        {!isTerminalRead(item) && !isToolOutputRead(item) && item.detail && (item.tool === 'browser' || item.detail !== basename(item.detail)) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
         {item.meta?.matches !== undefined && item.tool !== 'read' && <span className="shrink-0 text-[12.1px] text-subtle">{plural(item.meta.matches, 'match', 'matches')}</span>}
         <StatusMark item={item} />
       </button>
@@ -385,7 +406,7 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
     if (!open && !disclosed) toggleDisclosure()
   }
   const title = browsing
-    ? live ? open ? 'Browsing' : `Browsing ${plural(browsingPages(tools), 'page')}` : `Browsed ${plural(browsingPages(tools), 'page')}`
+    ? live ? open ? 'Browsing' : browsingTitle('Browsing', tools) : browsingTitle('Browsed', tools)
     : thinkingOnly
       ? live ? (current?.kind === 'reasoning' && thinkingTopic(current.text)) || 'Thinking' : thoughtTime === '0s' ? 'Thought briefly' : `Thought for ${thoughtTime}`
       : live ? open ? liveVerb(tools) : rollingSummary(exploreSummary(tools, 'Exploring')) : exploreSummary(tools)

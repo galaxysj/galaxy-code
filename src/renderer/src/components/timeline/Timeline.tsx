@@ -10,7 +10,7 @@ import { Composer } from '../Composer'
 import { Markdown } from '../Markdown'
 import { FileIcon as FileTypeIcon } from '../ProjectFiles'
 import { cleanError } from '../Settings'
-import { Button, CopyButton, IconButton, Modal } from '../ui'
+import { Button, CopyButton, IconButton, Modal, SkillIcon } from '../ui'
 import { ExploreGroup, RollingText, isBrowsing, isCompactable, isExplore, isHiddenAgentMessage, PresentTool, ToolBlock, type TimelineContext } from './Tools'
 
 const CHIP_ICON = { skill: Package, file: FileText, chat: MessageCircle, browser: Globe, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
@@ -26,9 +26,9 @@ function MessageText({ text, mentions }: { text: string; mentions?: MentionChip[
     const command = chip.kind === 'git' ? gitCommandFor(chip.label) : undefined
     const Icon = command ? GIT_COMMAND_ICON[command] : CHIP_ICON[chip.kind]
     return (
-      <span key={index} title={chip.title ?? part} className="whitespace-nowrap text-link" style={chip.kind === 'git' ? { color: 'var(--orange)' } : undefined}>
-        <span className="mr-[0.3em] inline-flex h-[1em] items-center align-[-0.15em]">{chip.kind === 'file' ? <FileTypeIcon name={chip.label} size={11} /> : <Icon size={13} />}</span>
-        {chip.label}
+      <span key={index} title={chip.title ?? part} className="whitespace-nowrap text-link" style={chip.kind === 'git' ? { color: 'var(--orange)' } : chip.color ? { color: chip.color } : undefined}>
+        <span className="mr-[0.3em] inline-flex h-[1em] items-center align-[-0.15em]">{chip.kind === 'file' ? <FileTypeIcon name={chip.label} size={11} /> : chip.kind === 'skill' ? <SkillIcon icon={chip.icon} color={chip.color} size={13} fallback={<Icon size={13} />} /> : <Icon size={13} />}</span>
+        {chip.displayName ?? chip.label}
       </span>
     )
   })
@@ -304,9 +304,7 @@ function buildBlocks(items: Item[], all: Item[], topLevel: boolean, compact = fa
     if (isBrowsing(item)) {
       const last = blocks[blocks.length - 1]
       if (last?.type === 'browse') last.items.push(item)
-      else if (last?.type === 'explore' && last.items.every((entry) => entry.kind === 'reasoning')) {
-        blocks[blocks.length - 1] = { type: 'browse', items: [...last.items, item], key: last.key, scope: last.scope }
-      } else blocks.push({ type: 'browse', items: [item], key: item.id, scope })
+      else blocks.push({ type: 'browse', items: [item], key: item.id, scope })
       continue
     }
     if (item.kind === 'reasoning' || isExplore(item)) {

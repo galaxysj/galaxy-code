@@ -1,7 +1,9 @@
 import hljs from 'highlight.js/lib/common'
 import { memo, useMemo, type ReactNode } from 'react'
-import ReactMarkdown, { type Components } from 'react-markdown'
+import ReactMarkdown, { type Components, type Options } from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
+import rehypeRaw from 'rehype-raw'
+import rehypeSanitize from 'rehype-sanitize'
 import remarkGfm from 'remark-gfm'
 import { cn, languageForPath } from '../lib/utils'
 import { useStore } from '../store'
@@ -59,14 +61,20 @@ function Pre({ children }: { children?: ReactNode }): ReactNode {
   )
 }
 
+const PLUGINS: NonNullable<Options['rehypePlugins']> = [[rehypeHighlight, { detect: false, ignoreMissing: true }]]
+/** rehype-sanitize's default schema is GitHub's allowlist. */
+const HTML_PLUGINS: NonNullable<Options['rehypePlugins']> = [rehypeRaw, rehypeSanitize, ...PLUGINS]
+
 interface MarkdownProps {
   text: string
   /** Base directory for resolving relative file references. */
   root?: string | null
+  /** Renders raw HTML through GitHub's allowlist. Off for chat, where tags in prose are usually code. */
+  html?: boolean
   className?: string
 }
 
-export const Markdown = memo(function Markdown({ text, root, className }: MarkdownProps): ReactNode {
+export const Markdown = memo(function Markdown({ text, root, html, className }: MarkdownProps): ReactNode {
   const openFile = useStore((s) => s.openFile)
 
   const components = useMemo<Components>(
@@ -124,7 +132,7 @@ export const Markdown = memo(function Markdown({ text, root, className }: Markdo
 
   return (
     <div className={cn('md selectable', className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeHighlight, { detect: false, ignoreMissing: true }]]} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={html ? HTML_PLUGINS : PLUGINS} components={components}>
         {text}
       </ReactMarkdown>
     </div>

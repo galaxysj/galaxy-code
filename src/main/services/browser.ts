@@ -15,6 +15,7 @@ export interface BrowserAction {
     | 'navigate'
     | 'snapshot'
     | 'click'
+    | 'drag'
     | 'type'
     | 'press'
     | 'scroll'
@@ -28,6 +29,12 @@ export interface BrowserAction {
   url?: string
   ref?: number
   selector?: string
+  /** A point in the pixels of the tab's latest screenshot. */
+  x?: number
+  y?: number
+  /** drag only: where the drag ends, in the same pixels. */
+  toX?: number
+  toY?: number
   text?: string
   submit?: boolean
   clear?: boolean
@@ -42,10 +49,17 @@ export interface BrowserAction {
 export interface BrowserResult {
   text: string
   tabId?: string
+  tabIndex?: number
+  url?: string
   image?: { mime: string; base64: string }
 }
 
 const HOME_URL = 'about:blank'
+const SCREENSHOT_WIDTH = 1400
+
+function hasPoint(action: BrowserAction): boolean {
+  return action.x !== undefined || action.y !== undefined
+}
 
 /** Tags every visible interactive element with a ref and returns an outline the model can act on. */
 const SNAPSHOT_SCRIPT = `(() => {
@@ -218,6 +232,13 @@ class BrowserService {
     this.applyBounds()
   }
 
+  /** The page as it looks now, to stand in for the native view while something covers it. */
+  async frame(): Promise<string | null> {
+    if (!this.view) return null
+    const image = await this.view.webContents.capturePage()
+    return image.isEmpty() ? null : `data:image/jpeg;base64,${image.toJPEG(90).toString('base64')}`
+  }
+
   state(): BrowserState {
     const wc = this.view?.webContents
     const url = wc?.getURL() ?? ''
@@ -233,6 +254,9 @@ class BrowserService {
   }
 
   isVisible(): boolean { return !!this.bounds }
+
+  /** Image pixels per CSS pixel in this tab's latest screenshot, and the image's size. */
+  private shot: { x: number; y: number; width: number; height: number } | null = null
 
   private async command(method: string, params: Record<string, unknown>): Promise<void> {
     // Dispatch to this page directly without focusing its native view or the app window.
@@ -326,8 +350,30 @@ class BrowserService {
     return parts.join('\n')
   }
 
+  /** Converts a point on the screenshot to the CSS pixels page input uses. */
+  private async pagePoint(x: number | undefined, y: number | undefined): Promise<{ x: number; y: number }> {
+    const px = Number(x)
+    const py = Number(y)
+    if (!Number.isFinite(px) || !Number.isFinite(py)) throw new Error('Provide both `x` and `y`')
+    const page = (await this.wc.executeJavaScript('({ width: innerWidth, height: innerHeight, ratio: devicePixelRatio })', true)) as { width: number; height: number; ratio: number }
+    // Before any screenshot, use the size one would have, so a point means the same either way.
+    const fitted = Math.min(SCREENSHOT_WIDTH, page.width * page.ratio) / page.width
+    const scale = this.shot ?? { x: fitted, y: fitted }
+    const width = Math.round(page.width * scale.x)
+    const height = Math.round(page.height * scale.y)
+    if (px < 0 || py < 0 || px >= width || py >= height) throw new Error(`Point (${px}, ${py}) is outside the ${width}x${height} screenshot frame`)
+    return { x: px / scale.x, y: py / scale.y }
+  }
+
+  private async moveCursor(point: { x: number; y: number }, signal?: AbortSignal): Promise<void> {
+    this.cursorWaitingAtCenter = false
+    const duration = await this.updateCursor({ action: 'move', ...point })
+    if (duration) await sleep(duration, signal)
+  }
+
   private async locate(action: BrowserAction): Promise<{ x: number; y: number; hit: boolean; tag: string }> {
-    if (action.ref === undefined && !action.selector) throw new Error('Provide `ref` (from a snapshot) or `selector`')
+    if (hasPoint(action)) return { ...(await this.pagePoint(action.x, action.y)), hit: true, tag: '' }
+    if (action.ref === undefined && !action.selector) throw new Error('Provide `ref` (from a snapshot), `selector`, or `x` and `y`')
     const point = (await this.wc.executeJavaScript(locateScript(action), true)) as {
       x: number
       y: number
@@ -346,9 +392,7 @@ class BrowserService {
 
   private async clickAt(action: BrowserAction, signal?: AbortSignal): Promise<void> {
     let point = await this.locate(action)
-    this.cursorWaitingAtCenter = false
-    const duration = await this.updateCursor({ action: 'move', x: point.x, y: point.y })
-    if (duration) await sleep(duration, signal)
+    await this.moveCursor({ x: point.x, y: point.y }, signal)
     // Hover handlers or a layout update can move the target during the cursor animation.
     point = await this.locate(action)
     this.cursorPosition = { x: point.x, y: point.y }
@@ -365,6 +409,30 @@ class BrowserService {
           ? `document.querySelector('[data-gx-ref="${Number(action.ref)}"]')`
           : `document.querySelector(${JSON.stringify(action.selector)})`
       await this.wc.executeJavaScript(`(() => { const el = ${find}; if (el) { el.focus?.(); el.click(); } })()`, true)
+    }
+  }
+
+  private async drag(action: BrowserAction, signal?: AbortSignal): Promise<void> {
+    if (action.toX === undefined || action.toY === undefined) throw new Error('`drag` needs `x`, `y`, `toX` and `toY`')
+    const from = await this.pagePoint(action.x, action.y)
+    const to = await this.pagePoint(action.toX, action.toY)
+    await this.moveCursor(from, signal)
+    await this.updateCursor({ action: 'click', ...from })
+    await this.command('Input.dispatchMouseEvent', { type: 'mouseMoved', ...from })
+    await this.command('Input.dispatchMouseEvent', { type: 'mousePressed', ...from, button: 'left', buttons: 1, clickCount: 1 })
+    let last = from
+    try {
+      const duration = await this.updateCursor({ action: 'move', ...to })
+      const moves = 12
+      for (let move = 1; move <= moves; move++) {
+        last = { x: from.x + ((to.x - from.x) * move) / moves, y: from.y + ((to.y - from.y) * move) / moves }
+        await this.command('Input.dispatchMouseEvent', { type: 'mouseMoved', ...last, button: 'left', buttons: 1 })
+        await sleep(Math.max(16, duration / moves), signal)
+      }
+    } finally {
+      // A stopped drag must not leave the page holding the button down.
+      await this.command('Input.dispatchMouseEvent', { type: 'mouseReleased', ...last, button: 'left', buttons: 0, clickCount: 1 })
+      this.cursorPosition = last
     }
   }
 
@@ -386,10 +454,12 @@ class BrowserService {
   private async capture(): Promise<{ mime: string; base64: string }> {
     const view = this.ensureView()
     let image = await view.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })
-    const size = image.getSize()
-    if (size.width > 1400) image = image.resize({ width: 1400, quality: 'good' })
+    if (image.getSize().width > SCREENSHOT_WIDTH) image = image.resize({ width: SCREENSHOT_WIDTH, quality: 'good' })
     const jpeg = image.toJPEG(72)
     if (jpeg.length === 0) throw new Error('The page has not painted yet')
+    const size = image.getSize()
+    const page = (await view.webContents.executeJavaScript('({ width: innerWidth, height: innerHeight })', true)) as { width: number; height: number }
+    this.shot = { x: size.width / page.width, y: size.height / page.height, width: size.width, height: size.height }
     return { mime: 'image/jpeg', base64: jpeg.toString('base64') }
   }
 
@@ -412,9 +482,14 @@ class BrowserService {
         await this.settle(signal, 8000)
         return { text: `Clicked.\n\n${await this.describe(false)}` }
       }
+      case 'drag': {
+        await this.drag(action, signal)
+        await this.settle(signal, 8000)
+        return { text: `Dragged.\n\n${await this.describe(false)}` }
+      }
       case 'type': {
         if (action.text === undefined) throw new Error('`text` is required')
-        if (action.ref !== undefined || action.selector) {
+        if (action.ref !== undefined || action.selector || hasPoint(action)) {
           await this.clickAt(action, signal)
           await sleep(80, signal)
         }
@@ -443,13 +518,15 @@ class BrowserService {
         const amount = Math.max(1, Math.min(20, action.amount ?? 3)) * 240
         const dx = action.direction === 'left' ? -amount : action.direction === 'right' ? amount : 0
         const dy = action.direction === 'up' ? -amount : action.direction === 'down' || !action.direction ? amount : 0
-        await wc.executeJavaScript(`window.scrollBy({ left: ${dx}, top: ${dy}, behavior: 'instant' })`, true)
+        // A point wheels whatever is under it, such as a scrollable panel, rather than the window.
+        if (hasPoint(action)) await this.command('Input.dispatchMouseEvent', { type: 'mouseWheel', ...(await this.pagePoint(action.x, action.y)), deltaX: dx, deltaY: dy })
+        else await wc.executeJavaScript(`window.scrollBy({ left: ${dx}, top: ${dy}, behavior: 'instant' })`, true)
         await sleep(200, signal)
         return { text: await this.describe(false) }
       }
       case 'screenshot': {
         const image = await this.capture()
-        return { text: `Screenshot of ${wc.getURL()}`, image }
+        return { text: `Screenshot of ${wc.getURL()}, ${this.shot?.width}x${this.shot?.height} pixels. Use x and y in these pixels.`, image }
       }
       case 'evaluate': {
         if (!action.script) throw new Error('`script` is required')
@@ -601,6 +678,10 @@ class BrowserTabs {
       this.get(tabId, window).setBounds(rect)
     } else this.tabs.get(tabId)?.setBounds(null)
   }
+  frame(id?: string, window?: BrowserWindow): Promise<string | null> {
+    return this.get(id, window).frame()
+  }
+
   state(id?: string, window?: BrowserWindow): BrowserState {
     if (id) return this.get(id, window).state()
     const owner = this.windowFor(undefined, window)
@@ -648,7 +729,8 @@ class BrowserTabs {
     const background = action.action !== 'navigate' || action.background !== false
     this.registerTab(chatId, id, background)
     const result = await tab.act(action, signal)
-    return { ...result, tabId: id, text: `Tab index: ${this.tabIds(window).indexOf(id) + 1}\n${action.action === 'navigate' ? `Background: ${background}\n` : ''}${result.text}` }
+    const tabIndex = this.tabIds(window).indexOf(id) + 1
+    return { ...result, tabId: id, tabIndex, url: tab.state().url, text: `Tab index: ${tabIndex}\n${action.action === 'navigate' ? `Background: ${background}\n` : ''}${result.text}` }
   }
 }
 

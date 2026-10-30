@@ -1,3 +1,4 @@
+import type { ProviderId } from './catalog'
 import type {
   AccountId,
   AnalyticsRow,
@@ -56,6 +57,8 @@ export interface GalaxyApi {
     update(patch: Partial<Settings>): Promise<Settings>
     setOpenRouterKey(key: string | null): Promise<void>
     testOpenRouterKey(): Promise<{ ok: boolean; message: string }>
+    setProviderKey(id: ProviderId, key: string | null): Promise<void>
+    testProviderKey(id: ProviderId): Promise<{ ok: boolean; message: string }>
     /** OpenRouter credits and Claude / Codex plan limits. */
     usage(): Promise<UsageReport>
     analytics(): Promise<AnalyticsRow[]>
@@ -152,6 +155,8 @@ export interface GalaxyApi {
     reload(tabId?: string): Promise<void>
     stop(tabId?: string): Promise<void>
     state(tabId?: string): Promise<BrowserState>
+    /** A JPEG data URL of the page as it looks now, or null before it has painted. */
+    frame(tabId?: string): Promise<string | null>
   }
 
   terminal: {

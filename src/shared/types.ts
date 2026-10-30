@@ -1,4 +1,5 @@
 import { AcpAgents, type AcpAgentSpec } from './acp-registry'
+import type { ProviderId } from './catalog'
 import type { Effort, ModelBrand, Subscription } from './models'
 
 export type { Effort, Subscription }
@@ -60,6 +61,21 @@ export interface CustomModel {
   subscription: Subscription
 }
 
+export type CustomProviderApi = 'chat' | 'responses' | 'decisions'
+
+/** An OpenAI-compatible API the user added in Settings. Its key lives with the other provider keys. */
+export interface CustomProvider {
+  id: string
+  name: string
+  /** The format it speaks. Decisions APIs only serve Auto approval, so their models never reach the model picker. Unset means chat. */
+  api?: CustomProviderApi
+  /** Up to and including the version path, such as https://api.example.com/v1. */
+  baseUrl: string
+  /** Model ids this API serves, as it names them. */
+  models: string[]
+  enabled: boolean
+}
+
 export interface McpServerConfig {
   id: string
   name: string
@@ -106,6 +122,8 @@ export interface AnalyticsRow {
   input: number
   output: number
   cost: number
+  /** What these tokens would cost at standard API prices, for requests that report no cost. 0 when no price is known. */
+  equivalent: number
   calls: number
 }
 
@@ -177,7 +195,11 @@ export interface Settings {
   commitMessageModelId: string | null
   /** ID from AutoApprovalModel in models.ts. */
   autoApprovalModelId: string | null
-  openRouterBaseUrl: string
+  /** Providers switched off in Settings. Their keys stay saved, and their models fall back to OpenRouter. */
+  disabledProviders: ProviderId[]
+  customProviders: CustomProvider[]
+  /** Dollars of total OpenRouter usage at which agent turns stop. Null for no limit. */
+  creditLimit: number | null
   accounts: Record<AccountId, AccountSettings>
   /** Master switch for the agents reached over the Agent Client Protocol. */
   acpEnabled: boolean
@@ -193,6 +215,8 @@ export interface Settings {
 export interface SecretState {
   openRouterKey: boolean
   openRouterKeyHint: string | null
+  /** A masked hint for each provider that has a key saved. */
+  providerKeys: Partial<Record<ProviderId, string>>
 }
 
 export interface Project {
@@ -324,6 +348,12 @@ export interface MentionChip {
   label: string
   /** Hover text, such as a file's full path. */
   title?: string
+  /** A skill's name for people; `label` stays the id that finds it again. */
+  displayName?: string
+  /** A skill's small icon, kept here so sent messages show it after the skill changes. */
+  icon?: string
+  /** A skill's brand color. */
+  color?: string
 }
 
 export type ToolKind =
@@ -409,6 +439,8 @@ export interface ToolMeta {
   log?: string
   skill?: string
   url?: string
+  /** Every page a Browser call ended a step on. */
+  urls?: string[]
   query?: string
   results?: { title: string; url: string; snippet?: string }[]
   questions?: AskQuestion[]
@@ -576,7 +608,18 @@ export interface SkillInfo {
   name: string
   description: string
   path: string
-  scope: 'user' | 'project'
+  scope: 'builtin' | 'user' | 'project'
+  /** From agents/openai.yaml. */
+  displayName?: string
+  shortDescription?: string
+  /** interface.icon_small as a data URL, for the @ and / menus and mentions. */
+  icon?: string
+  /** interface.icon_large as a data URL, for Settings. */
+  iconLarge?: string
+  /** interface.brand_color, as a hex color. */
+  brandColor?: string
+  /** False keeps the skill out of the model's list until it is mentioned. */
+  implicit?: boolean
 }
 
 export interface GitInfo {

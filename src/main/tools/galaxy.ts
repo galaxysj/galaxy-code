@@ -1,6 +1,7 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { ImageModel } from '@shared/models'
 import type { AskQuestion, PresentedFile, TaskEntry } from '@shared/types'
 import { browser, type BrowserAction } from '../services/browser'
@@ -8,9 +9,9 @@ import { memoryPath, updateMemory, type MemoryAction } from '../services/memory'
 import { generateImage } from '../services/openrouter'
 import { webFetch, webSearch } from '../services/web'
 import { store } from '../store'
-import { displayPath, exists, isImagePath, mimeOf, newId, oneLine, resolvePath, slugify, truncateEnd } from '../util'
+import { displayPath, errorMessage, exists, isAbortError, isImagePath, mimeOf, newId, oneLine, resolvePath, slugify, truncateEnd } from '../util'
 import { makeDiff } from './diff'
-import { num, plural, str, ToolInputError, type ToolDef } from './types'
+import { num, plural, str, ToolInputError, type ToolDef, type ToolImage } from './types'
 
 export const webSearchTool: ToolDef = {
   name: 'WebSearch',
@@ -80,6 +81,58 @@ export const webFetchTool: ToolDef = {
 
 const READ_ONLY_BROWSER = new Set(['snapshot', 'screenshot', 'console', 'wait', 'scroll', 'tabs'])
 
+const hasPoint = (step: Record<string, unknown>): boolean => step.x !== undefined || step.y !== undefined
+
+function browserSteps(input: Record<string, unknown>): Record<string, unknown>[] {
+  return Array.isArray(input.steps) ? input.steps.map((step) => (step ?? {}) as Record<string, unknown>) : []
+}
+
+/** What one Browser step did, in the words of the timeline. */
+function browserStepTitle(step: Record<string, unknown>): string {
+  const action = String(step.action ?? '')
+  const target = hasPoint(step) ? `(${String(step.x)}, ${String(step.y)})` : step.ref !== undefined ? `element ${String(step.ref)}` : step.selector ? String(step.selector) : ''
+  switch (action) {
+    case 'create':
+      return `Opened ${oneLine(String(step.url || 'new browser tab'), 70)}`
+    case 'navigate':
+      return `Opened ${oneLine(String(step.url ?? ''), 70)}`
+    case 'navigate_file':
+      return `Opened ${basename(String(step.path ?? ''))}`
+    case 'snapshot':
+      return 'Read the page'
+    case 'click':
+      return `Clicked ${target}`
+    case 'drag':
+      return `Dragged ${target} to (${String(step.toX)}, ${String(step.toY)})`
+    case 'type':
+      return `Typed ${JSON.stringify(oneLine(String(step.text ?? ''), 40))}${target ? ` into ${target}` : ''}`
+    case 'press':
+      return `Pressed ${String(step.key ?? '')}`
+    case 'scroll':
+      return `Scrolled ${String(step.direction ?? 'down')}${hasPoint(step) ? ` at ${target}` : ''}`
+    case 'screenshot':
+      return 'Took a screenshot'
+    case 'evaluate':
+      return 'Ran a script in the page'
+    case 'back':
+      return 'Went back'
+    case 'forward':
+      return 'Went forward'
+    case 'reload':
+      return 'Reloaded the page'
+    case 'wait':
+      return step.selector ? `Waited for ${String(step.selector)}` : `Waited ${String(step.seconds ?? 1)}s`
+    case 'console':
+      return 'Read the console'
+    case 'tabs':
+      return 'Listed tabs'
+    case 'close':
+      return 'Closed browser tab'
+    default:
+      return `Browser ${action}`
+  }
+}
+
 export const listTabsTool: ToolDef = {
   name: 'ListTabs',
   kind: 'browser',
@@ -90,7 +143,7 @@ export const listTabsTool: ToolDef = {
   async execute(_input, ctx) {
     const tabs = browser.listTabsForChat(ctx.session.team?.chatId ?? ctx.session.id).map(({ title, url, tabIndex }) => ({ tabIndex, title, url }))
     return {
-      text: tabs.length ? JSON.stringify(tabs, null, 2) : 'No open browser tabs. You can create one now: call Browser with {"action":"create","url":"https://example.com","background":false}, using the requested URL. Do not wait for the user to open a tab.',
+      text: tabs.length ? JSON.stringify(tabs, null, 2) : 'No open browser tabs. You can create one now: call Browser with {"title":"Open example.com","steps":[{"action":"create","url":"https://example.com","background":false}]}, using the requested URL. Do not wait for the user to open a tab.',
       display: tabs.length ? tabs.map((tab) => `${tab.tabIndex}. ${oneLine(tab.title, 160)}\n   ${tab.url || 'about:blank'}`).join('\n\n') : 'No open browser tabs.'
     }
   }
@@ -101,106 +154,126 @@ export const browserTool: ToolDef = {
   kind: 'browser',
   description: `Control in-app Chromium tabs in the current chat's window. tabIndex is scoped to that window; use ListTabs to find its tabs. By default tabs open and actions run in the background without opening the sidebar or changing the user's selected tab or keyboard focus. For navigate, set background:false to open the sidebar and select the target tab so the user can watch. Choose based on the user's intent: show pages they ask to open or see; keep research and implementation checks in the background. Use it to check pages you built, reproduce UI bugs, or work through sites that need interaction.
 
-Actions:
+Each call has a short \`title\` and a list of \`steps\`. Steps run in order and the call stops at the first error; the result reports each step's output, and every screenshot comes back. Batch the steps you can already predict into one call, such as navigate then snapshot, or type then press then screenshot. Do not guess what you cannot know yet: refs come from a snapshot and change with the page, so click a ref in a later call, or use a CSS selector you are sure of. Coordinates come from a screenshot, so they belong in a later call too.
+
+Instead of a ref or selector, click, type and scroll accept \`x\` and \`y\`, and drag requires them. Use them for canvases, maps, sliders and anything else a snapshot does not list. They are pixels of the tab's latest screenshot image, with the origin at its top-left, and the screenshot result states the image's size. Galaxy Code converts them for the page's device pixel ratio and any downscaling, so never adjust them yourself. Take a new screenshot after the page or its layout changes.
+
+Actions, each a step with its own fields:
 - create: open a new tab, even when ListTabs is empty. Pass the requested url, or omit it for a blank tab. Never pass tabIndex. Reveals the tab by default; use background:true for background research. An empty tab list is not a blocker: create the tab yourself.
-- navigate: load \`url\` in \`tabIndex\`. Omit tabIndex to open a new tab. \`background\` defaults to true; set false to reveal and select the tab in the sidebar, or true to keep the user's current selection. This also works when navigating an existing tab. Returns its tabIndex and page outline.
-- snapshot: list interactive elements with numeric refs, plus the page text. Take one before clicking or typing, and again after the page changes.
-- click: click the element with \`ref\` (from the latest snapshot) or a CSS \`selector\`.
-- type: type \`text\` into the element with \`ref\` or \`selector\`. \`clear\` empties the field first, \`submit\` presses Enter after.
+- navigate: load \`url\` in \`tabIndex\`. As the first step, omit tabIndex to open a new tab. \`background\` defaults to true; set false to reveal and select the tab in the sidebar, or true to keep the user's current selection. This also works when navigating an existing tab. Returns its tabIndex and page outline.
+- navigate_file: load the local file at \`path\` (absolute, or relative to the working directory) the same way navigate loads a url. Use it to view HTML, PDFs and images.
+- snapshot: list interactive elements with numeric refs, plus the page text. Take one before clicking or typing by ref, and again after the page changes.
+- click: left-click the element with \`ref\` (from the latest snapshot) or a CSS \`selector\`, or the point \`x\`, \`y\`.
+- drag: press at \`x\`, \`y\`, move to \`toX\`, \`toY\`, and release.
+- type: type \`text\` into the element with \`ref\` or \`selector\`, or click \`x\`, \`y\` first to focus it. \`clear\` empties the field first, \`submit\` presses Enter after.
 - press: press \`key\`, e.g. "Enter", "Escape", "Tab", "Meta+A".
-- scroll: scroll in \`direction\` (up, down, left, right) by \`amount\` steps.
-- screenshot: capture the target tab's viewport without selecting or revealing it. Use it to judge layout and visual results.
+- scroll: scroll in \`direction\` (up, down, left, right) by \`amount\` steps. With \`x\` and \`y\`, wheel whatever is under that point, such as a scrollable panel.
+- screenshot: capture the target tab's viewport without selecting or revealing it. Use it to judge layout and visual results, and to find coordinates.
 - evaluate: run JavaScript \`script\` in the page and return its value.
 - back, forward, reload: history navigation.
 - wait: pause for \`seconds\`, or until \`selector\` appears.
 - console: recent console messages from the page.
 - tabs: list browser tabs with title, URL and 1-based tabIndex in sidebar order. ListTabs provides the same list. File preview pages are excluded.
 - close: close the tab at tabIndex.
-Use tabIndex as the only browser tab selector. All actions except tabs, create, and navigate require tabIndex. Indices can change when tabs move or close; use ListTabs to refresh them. Controls work even if the user has another tab selected.
-Examples: {"action":"navigate","url":"https://example.com","background":true} opens a background tab. {"action":"navigate","url":"http://localhost:5000","background":false} opens and shows the page to the user. {"action":"snapshot","tabIndex":1} reads tab 1. {"action":"click","tabIndex":1,"ref":3} clicks element 3 in tab 1.`,
+Use tabIndex as the only browser tab selector. A step without tabIndex stays on the previous step's tab, so only the first step of a call that continues an existing tab needs it, and later steps need it only to switch tabs. Use create to open a second tab in one call. After close, the next step must name its tabIndex. Indices can change when tabs move or close; use ListTabs to refresh them. Controls work even if the user has another tab selected.
+Examples: {"title":"Open example.com and read the page","steps":[{"action":"navigate","url":"https://example.com"},{"action":"snapshot"}]} reads a page in a new background tab. {"title":"Show the local app","steps":[{"action":"navigate","url":"http://localhost:5000","background":false},{"action":"screenshot"}]} opens and shows the page to the user. {"title":"Submit the search","steps":[{"action":"type","tabIndex":1,"selector":"input[name=q]","text":"hello","submit":true},{"action":"screenshot"}]} works in tab 1. {"title":"Open the third link","steps":[{"action":"click","tabIndex":1,"ref":3}]} is a single step. {"title":"Drag the slider to the right","steps":[{"action":"drag","tabIndex":1,"x":120,"y":340,"toX":480,"toY":340}]} uses coordinates from a screenshot.`,
   parameters: {
     type: 'object',
     properties: {
-      action: {
-        type: 'string',
-        enum: ['create', 'navigate', 'snapshot', 'click', 'type', 'press', 'scroll', 'screenshot', 'evaluate', 'back', 'forward', 'reload', 'wait', 'console', 'tabs', 'close']
-      },
-      url: { type: 'string' },
-      background: { type: 'boolean', description: 'create defaults to false (show the new tab); navigate defaults to true (background). false reveals the sidebar and selects the tab. Use false when the user asks to open or show a page; true for background research and checks.' },
-      tabIndex: { type: 'integer', minimum: 1, description: 'The only browser tab selector: 1-based index from ListTabs, create, or navigate. Required for actions on an existing tab. Omit for tabs, create, or navigate to a new tab.' },
-      ref: { type: 'integer', description: 'Element ref from the latest snapshot.' },
-      selector: { type: 'string', description: 'CSS selector, as an alternative to ref.' },
-      text: { type: 'string' },
-      clear: { type: 'boolean' },
-      submit: { type: 'boolean' },
-      key: { type: 'string' },
-      direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
-      amount: { type: 'integer' },
-      script: { type: 'string' },
-      seconds: { type: 'number' }
+      title: { type: 'string', description: 'Short action title displayed in the tool log, starting with a verb, for example "Open example.com and read the page".', maxLength: 120 },
+      steps: {
+        type: 'array',
+        minItems: 1,
+        description: 'Browser actions to run in order. One step is fine; batch the ones you can predict.',
+        items: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['create', 'navigate', 'navigate_file', 'snapshot', 'click', 'drag', 'type', 'press', 'scroll', 'screenshot', 'evaluate', 'back', 'forward', 'reload', 'wait', 'console', 'tabs', 'close']
+            },
+            url: { type: 'string' },
+            path: { type: 'string', description: 'navigate_file only: the local file to open.' },
+            background: { type: 'boolean', description: 'create defaults to false (show the new tab); navigate defaults to true (background). false reveals the sidebar and selects the tab. Use false when the user asks to open or show a page; true for background research and checks.' },
+            tabIndex: { type: 'integer', minimum: 1, description: 'The only browser tab selector: 1-based index from ListTabs, create, or navigate. Omit to stay on the previous step\'s tab. The first step needs it to act on an existing tab, and omits it for tabs, create, or navigate to a new tab.' },
+            ref: { type: 'integer', description: 'Element ref from the latest snapshot.' },
+            selector: { type: 'string', description: 'CSS selector, as an alternative to ref.' },
+            x: { type: 'number', description: 'Horizontal pixel in the latest screenshot image, as an alternative to ref or selector.' },
+            y: { type: 'number', description: 'Vertical pixel in the latest screenshot image, as an alternative to ref or selector.' },
+            toX: { type: 'number', description: 'drag only: horizontal pixel where the drag ends.' },
+            toY: { type: 'number', description: 'drag only: vertical pixel where the drag ends.' },
+            text: { type: 'string' },
+            clear: { type: 'boolean' },
+            submit: { type: 'boolean' },
+            key: { type: 'string' },
+            direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+            amount: { type: 'integer' },
+            script: { type: 'string' },
+            seconds: { type: 'number' }
+          },
+          required: ['action']
+        }
+      }
     },
-    required: ['action']
+    required: ['title', 'steps']
   },
   present(input) {
-    const action = String(input.action ?? '')
-    const target = input.ref !== undefined ? `element ${String(input.ref)}` : input.selector ? String(input.selector) : ''
-    switch (action) {
-      case 'create':
-        return { title: `Opened ${oneLine(String(input.url || 'new browser tab'), 70)}`, meta: { url: String(input.url || 'about:blank') } }
-      case 'navigate':
-        return { title: `Opened ${oneLine(String(input.url ?? ''), 70)}`, meta: { url: String(input.url ?? '') } }
-      case 'snapshot':
-        return { title: 'Read the page' }
-      case 'click':
-        return { title: `Clicked ${target}` }
-      case 'type':
-        return { title: `Typed ${JSON.stringify(oneLine(String(input.text ?? ''), 40))}${target ? ` into ${target}` : ''}` }
-      case 'press':
-        return { title: `Pressed ${String(input.key ?? '')}` }
-      case 'scroll':
-        return { title: `Scrolled ${String(input.direction ?? 'down')}` }
-      case 'screenshot':
-        return { title: 'Took a screenshot' }
-      case 'evaluate':
-        return { title: 'Ran a script in the page', detail: String(input.script ?? '') }
-      case 'back':
-        return { title: 'Went back' }
-      case 'forward':
-        return { title: 'Went forward' }
-      case 'reload':
-        return { title: 'Reloaded the page' }
-      case 'wait':
-        return { title: input.selector ? `Waited for ${String(input.selector)}` : `Waited ${String(input.seconds ?? 1)}s` }
-      case 'console':
-        return { title: 'Read the console' }
-      case 'tabs':
-        return { title: 'Listed tabs' }
-      case 'close':
-        return { title: 'Closed browser tab' }
-      default:
-        return { title: `Browser ${action}` }
-    }
+    const steps = browserSteps(input)
+    const labels = steps.map(browserStepTitle)
+    const title = typeof input.title === 'string' ? oneLine(input.title.trim(), 120) : ''
+    const opened = steps.find((step) => (step.action === 'navigate' || step.action === 'create') && step.url)
+    return { title: title || labels[0] || 'Browser', detail: labels.join(' · ') || undefined, meta: opened ? { url: String(opened.url) } : undefined }
   },
   approval(input) {
-    const action = String(input.action ?? '')
-    if (READ_ONLY_BROWSER.has(action)) return null
+    const steps = browserSteps(input)
+    // A scroll at a point is real input to the page, unlike scrolling the window.
+    if (steps.every((step) => READ_ONLY_BROWSER.has(String(step.action)) && !hasPoint(step))) return null
+    // Only the steps are judged; the title is the model's own description of them.
     return {
-      action: { tool: 'Browser', ...input },
+      action: { tool: 'Browser', steps },
       sessionKey: 'browser',
       sessionLabel: 'Allow browser control in this chat'
     }
   },
   async execute(input, ctx) {
-    const action = { ...input, tabIndex: num(input, 'tabIndex') } as unknown as BrowserAction
-    const result = await browser.act(ctx.session.team?.chatId ?? ctx.session.id, action, ctx.signal)
-    if (action.action === 'close' && result.tabId) ctx.session.emitUi({ type: 'close-panel-tab', tabId: result.tabId })
-    if (!result.image) return { text: result.text }
-    // Keep a copy on disk so the screenshot survives in the timeline.
-    const dir = join(tmpdir(), 'galaxy-code', 'screenshots')
-    await mkdir(dir, { recursive: true })
-    const file = join(dir, `${newId()}.jpg`)
-    await writeFile(file, Buffer.from(result.image.base64, 'base64'))
-    return { text: result.text, images: [result.image], meta: { images: [file] } }
+    const steps = browserSteps(input)
+    if (steps.length === 0) throw new ToolInputError('`steps` must be a non-empty array')
+    const outputs: string[] = []
+    const images: ToolImage[] = []
+    const files: string[] = []
+    const urls: string[] = []
+    const finished = () => ({ text: outputs.join('\n\n'), images: images.length ? images : undefined, meta: { urls, ...(files.length ? { images: files } : {}) } })
+    let tabIndex: number | undefined
+    for (const [index, step] of steps.entries()) {
+      const label = `Step ${index + 1} of ${steps.length}: ${String(step.action ?? '')}`
+      try {
+        ctx.signal.throwIfAborted()
+        if (step.action === 'navigate_file' && !step.path) throw new ToolInputError('`path` is required for navigate_file')
+        const target = step.action === 'navigate_file' ? { ...step, action: 'navigate', url: pathToFileURL(resolvePath(ctx.cwd, String(step.path))).href } : step
+        const action = { ...target, tabIndex: num(step, 'tabIndex') ?? tabIndex } as unknown as BrowserAction
+        const result = await browser.act(ctx.session.team?.chatId ?? ctx.session.id, action, ctx.signal)
+        if (action.action === 'close' && result.tabId) ctx.session.emitUi({ type: 'close-panel-tab', tabId: result.tabId })
+        // A closed tab leaves nothing to continue on; listing tabs does not move off the current one.
+        tabIndex = action.action === 'close' ? undefined : result.tabIndex ?? tabIndex
+        if (result.url) urls.push(result.url)
+        outputs.push(steps.length > 1 ? `${label}\n${result.text}` : result.text)
+        if (result.image) {
+          // Keep a copy on disk so the screenshot survives in the timeline.
+          const dir = join(tmpdir(), 'galaxy-code', 'screenshots')
+          await mkdir(dir, { recursive: true })
+          const file = join(dir, `${newId()}.jpg`)
+          await writeFile(file, Buffer.from(result.image.base64, 'base64'))
+          images.push(result.image)
+          files.push(file)
+        }
+      } catch (err) {
+        if (steps.length === 1 || isAbortError(err) || ctx.signal.aborted) throw err
+        const skipped = steps.length - index - 1
+        outputs.push(`${label} failed${skipped ? `, ${plural(skipped, 'later step')} not run` : ''}: ${errorMessage(err)}`)
+        return { ...finished(), isError: true }
+      }
+    }
+    return finished()
   }
 }
 
@@ -398,12 +471,13 @@ export const memoryTool: ToolDef = {
   name: 'Memory',
   kind: 'memory',
   description:
-    'Update the persistent memory file (~/.galaxy/MEMORY.md), which is loaded into every future chat, across all projects. Save things that will matter again: how the user wants you to work, corrections they gave, project conventions and decisions that are not obvious from the code. Do not save what the code or git history already records, or details that only matter to this chat. Actions: "add" appends an entry, "replace" swaps `old_text` for `content`, "remove" deletes `old_text`, "rewrite" replaces the whole file with `content`.',
+    'Update the persistent memory file (~/.galaxy/MEMORY.md), which is loaded into every future chat, across all projects. Save actively, without being asked, whenever something could help a later chat: how the user wants you to work, corrections they gave, preferences, project conventions and decisions that are not obvious from the code. Do not save what the code or git history already records, or details that only matter to this chat. The file is a list of topics, each a `# Topic` heading followed by Markdown. Actions: "add" appends `content` under `topic`, creating the topic if needed, "replace" swaps `old_text` for `content`, "remove" deletes `old_text`, "rewrite" replaces the whole file with `content`.',
   parameters: {
     type: 'object',
     properties: {
       action: { type: 'string', enum: ['add', 'replace', 'remove', 'rewrite'] },
-      content: { type: 'string', description: 'The memory to store, written so it makes sense on its own later.' },
+      topic: { type: 'string', description: 'add only: the topic heading to file this under, without the #. Reuse an existing topic when one fits.' },
+      content: { type: 'string', description: 'The memory to store as Markdown, written so it makes sense on its own later.' },
       old_text: { type: 'string', description: 'Existing text to replace or remove.' }
     },
     required: ['action']
@@ -415,7 +489,7 @@ export const memoryTool: ToolDef = {
   async execute(input, ctx) {
     const action = str(input, 'action', true)
     let change: MemoryAction
-    if (action === 'add') change = { action, content: str(input, 'content', true) }
+    if (action === 'add') change = { action, content: str(input, 'content', true), topic: typeof input.topic === 'string' ? input.topic : undefined }
     else if (action === 'replace') change = { action, old_text: str(input, 'old_text', true), content: str(input, 'content', true) }
     else if (action === 'remove') change = { action, old_text: str(input, 'old_text', true) }
     else if (action === 'rewrite') change = { action, content: str(input, 'content', true) }

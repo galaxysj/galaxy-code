@@ -10,6 +10,7 @@ const VERBS = [
   ['Grep', 'Grepped', 'Grepping'],
   ['Lint', 'Linted', 'Linting'],
   ['Fetch', 'Fetched', 'Fetching'],
+  ['Browse', 'Browsed', 'Browsing'],
   ['View', 'Viewed', 'Viewing'],
   ['Click', 'Clicked', 'Clicking'],
   ['Type', 'Typed', 'Typing'],
@@ -103,9 +104,9 @@ export function toolActivityTitle(item: ToolItem): string {
   // Background command logs read as the terminal they came from.
   if (isTerminalRead(item)) return isToolInProgress(item) ? 'Reading terminal' : 'Read terminal'
   if (isToolOutputRead(item)) return isToolInProgress(item) ? 'Reading tool output' : 'Read tool output'
-  // These titles are names, questions or user-provided artifact labels.
+  // These titles are names, questions or labels the model wrote, which need not start with one verb.
   if (item.tool === 'agent' || item.tool === 'ask' || item.tool === 'mcp') return item.title
-  if (item.tool === 'present' && (item.input as { title?: unknown } | null)?.title) return item.title
+  if ((item.tool === 'present' || item.tool === 'browser') && (item.input as { title?: unknown } | null)?.title) return item.title
   const first = item.title.match(/^([A-Za-z]+)(?=\s|$)/)?.[1]
   const forms = first ? FORMS.get(first) : undefined
   if (!forms) return item.title

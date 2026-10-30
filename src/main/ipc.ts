@@ -4,7 +4,7 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { IPC_CHAT_EVENT, IPC_INVOKE, IPC_UI_EVENT, type Rect } from '@shared/api'
-import { resolveImageModels, resolveModels } from '@shared/catalog'
+import { resolveImageModels, resolveModels, type ProviderId } from '@shared/catalog'
 import type {
   AccountId,
   Attachment,
@@ -29,7 +29,7 @@ import { copyProjectEntries, createProjectEntry, listProjectFiles, renameProject
 import { gitInfo, gitState, instantCommit, pushBranch } from './services/git'
 import { disposeAccountWorkers } from './services/accountWorkers'
 import { mcp } from './services/mcp'
-import { signInWithOpenRouter, testKey } from './services/openrouter'
+import { signInWithOpenRouter, testKey, testProviderKey } from './services/openrouter'
 import { analyticsRows } from './services/analytics'
 import { cancelInlineEdit, completeCode, inlineEdit, saveFile, terminalCommand, type CompletionRequest, type InlineEditRequest, type TerminalCommandRequest } from './services/editor'
 import { usageReport } from './services/usage'
@@ -212,6 +212,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
       emitSettings()
     },
     'settings.testOpenRouterKey': () => testKey(),
+    'settings.setProviderKey': (id: ProviderId, key: string | null) => {
+      store.setProviderKey(id, key)
+      emitSettings()
+    },
+    'settings.testProviderKey': (id: ProviderId) => testProviderKey(id),
     'settings.usage': () => usageReport(),
     'settings.analytics': () => analyticsRows(),
     'settings.signInOpenRouter': async () => {
@@ -352,6 +357,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'browser.reload': (id?: string) => browser.reload(id, requestWindow() ?? undefined),
     'browser.stop': (id?: string) => browser.stop(id, requestWindow() ?? undefined),
     'browser.state': (id?: string) => browser.state(id, requestWindow() ?? undefined),
+    'browser.frame': (id?: string) => browser.frame(id, requestWindow() ?? undefined),
     'terminal.create': (cwd: string, id = newId('terminal_')) => {
       const win = requestWindow()
       if (win) tabWindows.set(id, win.id)

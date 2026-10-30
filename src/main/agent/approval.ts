@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { app } from 'electron'
 import type { PermissionMode, ToolItem, ToolKind } from '@shared/types'
 import { decideRisk, MissingKeyError } from '../services/openrouter'
+import { builtinSkillsDir } from '../services/skills'
 import { store } from '../store'
 import { makeDiff } from '../tools/diff'
 import { parseEditPatch, patchFiles, previewEditPatch } from '../tools/patch'
@@ -132,6 +133,7 @@ function specialRead(path: string): boolean {
     join(home, '.galaxy'),
     join(tmpdir(), 'galaxy-code'),
     app.getPath('userData'),
+    builtinSkillsDir(),
     join(home, '.claude', 'skills'),
     join(home, '.codex', 'skills')
   ].some((root) => inside(root, path)) || /[/\\]\.claude[/\\]projects[/\\][^/\\]+[/\\]memory([/\\]|$)/.test(path)

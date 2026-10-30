@@ -1,4 +1,4 @@
-import { Laptop, UserRound } from 'lucide-react'
+import { UserRound } from 'lucide-react'
 import { useId, type ReactNode } from 'react'
 import type { ModelBrand } from '@shared/models'
 import { SUBSCRIPTION_ACCOUNT, type AccountId, type Subscription } from '@shared/types'
@@ -32,9 +32,36 @@ const LOGOS: Record<AccountId, Logo> = {
   }
 }
 
-/** The provider logo for a subscription. Local gets a laptop, agents without a logo a generic account icon. */
+/** Galaxy Code's mark in one color: a rounded square with the app icon's stars cut out. */
+function GalaxyLogo({ size }: { size: number }): ReactNode {
+  const maskId = useId()
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className="shrink-0" aria-hidden="true">
+      <mask id={maskId}>
+        <rect width="24" height="24" rx="5.2" fill="#fff" />
+        <g fill="#000">
+          <path d="M6.9 2.4l.55 1.3 1.3.55-1.3.55-.55 1.3-.55-1.3-1.3-.55 1.3-.55Z" />
+          <path d="M15.5 9.8l.62 1.48 1.48.62-1.48.62-.62 1.48-.62-1.48-1.48-.62 1.48-.62Z" />
+          <path d="M9.8 16.4l.45 1.05 1.05.45-1.05.45-.45 1.05-.45-1.05-1.05-.45 1.05-.45Z" />
+          <circle cx="12.4" cy="5" r=".7" />
+          <circle cx="18.8" cy="5.6" r=".6" />
+          <circle cx="5.2" cy="10.4" r=".65" />
+          <circle cx="10.6" cy="11.4" r=".55" />
+          <circle cx="4" cy="17.6" r=".6" />
+          <circle cx="20" cy="10.2" r=".6" />
+          <circle cx="14.6" cy="17.4" r=".6" />
+          <circle cx="19.4" cy="19" r=".75" />
+          <circle cx="7" cy="20.4" r=".5" />
+        </g>
+      </mask>
+      <rect width="24" height="24" rx="5.2" mask={`url(#${maskId})`} />
+    </svg>
+  )
+}
+
+/** The provider logo for a subscription. Galaxy gets the app's own mark, agents without a logo a generic account icon. */
 export function SubscriptionIcon({ subscription, size = 13.5 }: { subscription: Subscription | null | undefined; size?: number }): ReactNode {
-  if (subscription === 'Default') return <Laptop size={size} className="shrink-0" />
+  if (subscription === 'Default') return <GalaxyLogo size={size} />
   const logo = subscription ? LOGOS[SUBSCRIPTION_ACCOUNT[subscription]] : undefined
   if (!logo) return <UserRound size={size} className="shrink-0" />
   return (

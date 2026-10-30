@@ -724,7 +724,6 @@
   pointer-events: none;
 }
 .composer-wrap-probe {
-  width: max(1px, calc(100% - 244px));
   white-space: pre-wrap;
   overflow-wrap: break-word;
   font-size: 14.7px;
@@ -747,6 +746,12 @@
   background: var(--bg-active);
 }
 .composer-compact .composer-input { order: 1; flex: 1; min-width: 0; }
+/* The placeholder is not measured by the wrap probe, so it must never take a second line. */
+.composer-compact .composer-input textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .composer-compact .composer-input textarea,
 .composer-compact .composer-mention-mirror {
   min-height: 28px;
@@ -832,4 +837,69 @@
   :root[data-sidebar-material] .app-shell {
     background: var(--bg-sidebar);
   }
+}
+
+/* The live Markdown editor renders with the chat's Markdown styles. */
+.live-md {
+  min-height: 100%;
+  outline: none;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.live-md th,
+.live-md td { position: relative; min-width: 48px; }
+.live-md .selectedCell { background: var(--bg-hover); }
+.live-strong { font-weight: 600; }
+.live-emphasis { font-style: italic; }
+.live-strike_through { text-decoration: line-through; }
+.live-inlineCode { font-family: var(--font-mono, monospace); font-size: 0.92em; }
+.live-html { display: inline-block; max-width: 100%; vertical-align: top; }
+.live-html-tag { font-family: var(--font-mono, monospace); font-size: 0.85em; }
+.live-md li[data-item-type='task'] { position: relative; list-style: none; padding-left: 22px; margin-left: -18px; }
+.live-md li[data-item-type='task']::before {
+  content: '';
+  position: absolute;
+  top: 0.3em;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.live-md li[data-item-type='task'][data-checked='true']::before {
+  content: '✓';
+  color: var(--bg);
+  background: var(--fg);
+  font-size: 11px;
+  line-height: 13px;
+  text-align: center;
+}
+.live-md pre {
+  margin: 10px 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--color-inset);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
+}
+.live-md pre[data-language]::before {
+  content: attr(data-language);
+  display: block;
+  margin-bottom: 6px;
+  color: var(--color-subtle);
+  font-size: 11px;
+  user-select: none;
+}
+.live-md pre code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
 }

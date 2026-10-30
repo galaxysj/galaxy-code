@@ -16,10 +16,21 @@ export async function readMemory(projectPath: string | null): Promise<string> {
 }
 
 export type MemoryAction =
-  | { action: 'add'; content: string }
+  | { action: 'add'; content: string; topic?: string }
   | { action: 'replace'; old_text: string; content: string }
   | { action: 'remove'; old_text: string }
   | { action: 'rewrite'; content: string }
+
+/** Memory is a list of `# Topic` sections. A note joins its topic's section, or starts one. */
+function addToTopic(before: string, topic: string, entry: string): string {
+  const lines = before.replace(/\s*$/, '').split('\n')
+  const start = lines.findIndex((line) => line.trim().toLowerCase() === `# ${topic}`.toLowerCase())
+  if (start < 0) return `${before.trim() ? `${lines.join('\n')}\n\n` : ''}# ${topic}\n${entry}\n`
+  const next = lines.findIndex((line, at) => at > start && /^#\s/.test(line))
+  const end = next < 0 ? lines.length : next
+  const body = lines.slice(start, end).join('\n').replace(/\s*$/, '')
+  return [...lines.slice(0, start), `${body}\n${entry}`, ...(next < 0 ? [] : ['', ...lines.slice(end)])].join('\n') + '\n'
+}
 
 export async function updateMemory(
   projectPath: string | null,
@@ -33,9 +44,7 @@ export async function updateMemory(
     case 'add': {
       const entry = change.content.trim()
       if (!entry) throw new Error('content is empty')
-      const line = /^[-*#]/.test(entry) ? entry : `- ${entry}`
-      const body = before.trim() ? before.replace(/\s*$/, '\n') : '# Memory\n\n'
-      after = `${body}${line}\n`
+      after = addToTopic(before, change.topic?.trim() || 'General', entry)
       break
     }
     case 'replace': {

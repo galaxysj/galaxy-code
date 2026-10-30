@@ -3,7 +3,6 @@ import {
   Box,
   Gauge,
   Boxes,
-  Cable,
   Check,
   CircleAlert,
   Cpu,
@@ -14,7 +13,8 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Trash2,
-  UserRound
+  UserRound,
+  X
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
@@ -27,6 +27,8 @@ import {
   type AccountId,
   type AnalyticsRow,
   type CustomAcpAgent,
+  type CustomProvider,
+  type CustomProviderApi,
   type McpServerConfig,
   type PermissionMode,
   type PlanUsage,
@@ -38,23 +40,23 @@ import {
   type UsageReport,
   type UsageWindow
 } from '@shared/types'
-import { AUTO_MODEL } from '@shared/catalog'
+import { AUTO_MODEL, BYOK_PROVIDERS, customModelId, parseCustomModel, type ByokProvider } from '@shared/catalog'
 import { AcpAgents } from '@shared/acp-registry'
 import { AutoApprovalModel, CommitMessageModel, CompletionModel, InlineModel, resolveAutoApprovalModel, usableUtilityModels, utilityModelLabel } from '@shared/models'
 import { cn, tildify } from '../lib/utils'
 import { useStore, type SettingsSection } from '../store'
+import { LiveMarkdown } from './LiveMarkdown'
+import { Markdown } from './Markdown'
 import { SUBSCRIPTION_LABELS } from './ModelPicker'
-import { Button, Dropdown, IconButton, Segmented, Spinner, Switch, TextInput, type DropdownOption } from './ui'
+import { Button, Dropdown, IconButton, Modal, Segmented, Spinner, Switch, TextInput, type DropdownOption } from './ui'
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu }[] = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
   { id: 'models', label: 'Models', icon: Boxes },
   { id: 'providers', label: 'Providers', icon: KeyRound },
-  { id: 'accounts', label: 'AI accounts', icon: UserRound },
+  { id: 'subscriptions', label: 'Subscriptions', icon: UserRound },
   { id: 'usage', label: 'Usage', icon: Gauge },
-  { id: 'acp', label: 'ACP agents', icon: Cable },
-  { id: 'mcp', label: 'MCP servers', icon: Plug },
-  { id: 'skills', label: 'Skills & memory', icon: Box }
+  { id: 'customize', label: 'Customize', icon: Plug }
 ]
 
 function Section({ title, description, children, action }: { title: string; description?: ReactNode; children: ReactNode; action?: ReactNode }): ReactNode {
@@ -104,6 +106,9 @@ function GeneralSection(): ReactNode {
   const update = useStore((s) => s.updateSettings)
   const version = useStore((s) => s.version)
   const commitModels = usableUtilityModels(CommitMessageModel, settings.accounts)
+  const decisionModels = settings.customProviders
+    .filter((provider) => provider.enabled && provider.api === 'decisions')
+    .flatMap((provider) => provider.models.map((model) => ({ value: customModelId(provider.id, model), label: `${provider.name} · ${model}` })))
   return (
     <>
       <Section title="Appearance">
@@ -119,7 +124,7 @@ function GeneralSection(): ReactNode {
               ]}
             />
           </RowItem>
-          <RowItem label="Tool density" hint="Medium shows commands and edits as single lines, like &quot;Edited App.tsx&quot;, that open in place. Compact folds every run of tool calls into one summary line.">
+          <RowItem label="Tool density" hint="How much of each tool call to show.">
             <Segmented<ToolDensity>
               value={settings.toolDensity}
               onChange={(toolDensity) => void update({ toolDensity })}
@@ -130,13 +135,13 @@ function GeneralSection(): ReactNode {
               ]}
             />
           </RowItem>
-          <RowItem label="Expand tool calls" hint="Open tool groups while they run. Off shows only their summary line, such as &quot;Explored 3 files&quot;, until you click it.">
+          <RowItem label="Expand tool calls" hint="Open tool groups while they run.">
             <Switch checked={settings.expandToolCalls !== false} onChange={(expandToolCalls) => void update({ expandToolCalls })} label="Expand tool calls" />
           </RowItem>
-          <RowItem label="Fold finished work" hint="Collapse a finished turn's steps under &quot;Worked for&quot; above its final response.">
+          <RowItem label="Fold finished work" hint="Collapse a finished turn's steps.">
             <Switch checked={settings.foldWork} onChange={(foldWork) => void update({ foldWork })} label="Fold finished work" />
           </RowItem>
-          <RowItem label="Tool output" hint="Controls command output and file edit previews. Click a tool to expand its output.">
+          <RowItem label="Tool output" hint="Command output and edit previews.">
             <Select<TerminalOutputMode>
               label="Terminal output"
               value={settings.terminalOutput}
@@ -152,7 +157,7 @@ function GeneralSection(): ReactNode {
       </Section>
       <Section title="Composer">
         <Card>
-          <RowItem label="Model picker style" hint="Default lists models with their effort and options beside them. Slider shows one model with an effort slider.">
+          <RowItem label="Model picker style" hint="List of models, or one model with an effort slider.">
             <Segmented<'default' | 'slider'>
               value={settings.modelPickerStyle ?? 'default'}
               onChange={(modelPickerStyle) => void update({ modelPickerStyle })}
@@ -166,11 +171,11 @@ function GeneralSection(): ReactNode {
       </Section>
       <Section title="Git">
         <Card>
-          <RowItem label="Instant commit" hint="Commit and Commit &amp; Push commit right away with a message written by the model below, instead of asking the agent. Mentioning @Commit still asks the agent.">
+          <RowItem label="Instant commit" hint="Commit right away with a generated message.">
             <Switch checked={settings.instantCommit} onChange={(instantCommit) => void update({ instantCommit })} label="Instant commit" />
           </RowItem>
           {settings.instantCommit && (
-            <RowItem label="Commit message model" hint="OpenRouter models run on your OpenRouter key. Claude and Codex models run on that signed-in account.">
+            <RowItem label="Commit message model" hint="Writes the commit message.">
               <Select
                 label="Commit message model"
                 value={commitModels.some((m) => m.ID === settings.commitMessageModelId) ? (settings.commitMessageModelId as string) : commitModels[0].ID}
@@ -179,12 +184,12 @@ function GeneralSection(): ReactNode {
               />
             </RowItem>
           )}
-          <RowItem label="Instant push" hint="Push pushes the current branch right away instead of asking the agent. Commit &amp; Push follows Instant commit. Mentioning @Push still asks the agent.">
+          <RowItem label="Instant push" hint="Push right away without asking the agent.">
             <Switch checked={settings.instantPush} onChange={(instantPush) => void update({ instantPush })} label="Instant push" />
           </RowItem>
         </Card>
       </Section>
-      <Section title="Permissions" description="How new chats start. You can change the mode for any chat from the message box.">
+      <Section title="Permissions" description="How new chats start.">
         <Card>
           <RowItem label="Default permission mode">
             <Select<PermissionMode>
@@ -201,13 +206,13 @@ function GeneralSection(): ReactNode {
           </RowItem>
           <RowItem
             label="Auto approval model"
-            hint="Auto reviews each action with this model. A deny probability of 50% or more asks for your approval in the message box. It needs an OpenRouter key."
+            hint="Reviews each action in Auto mode."
           >
             <Select
               label="Auto approval model"
-              value={resolveAutoApprovalModel(settings.autoApprovalModelId).ID}
+              value={decisionModels.some((model) => model.value === settings.autoApprovalModelId) ? settings.autoApprovalModelId! : resolveAutoApprovalModel(settings.autoApprovalModelId).ID}
               onChange={(value) => void update({ autoApprovalModelId: value })}
-              options={AutoApprovalModel.map((model) => ({ value: model.ID, label: model.DisplayName }))}
+              options={[...AutoApprovalModel.map((model) => ({ value: model.ID, label: model.DisplayName })), ...decisionModels]}
             />
           </RowItem>
         </Card>
@@ -292,12 +297,12 @@ function ModelsSection(): ReactNode {
         </Card>
       </Section>
 
-      <Section title="Editor" description="Models for editing files in the Files panel, listed in src/shared/models.ts. OpenRouter models run on your OpenRouter key.">
+      <Section title="Editor" description="Models for editing files.">
         <Card>
-          <RowItem label="Tab completion" hint="Suggests the rest of the line as you type; Tab accepts it.">
+          <RowItem label="Tab completion" hint="Tab accepts the suggested text.">
             <Switch checked={settings.tabCompletion !== false} onChange={(tabCompletion) => void update({ tabCompletion })} label="Tab completion" />
           </RowItem>
-          <RowItem label="Completion model" hint="Claude and Codex models run on that signed-in account through a CLI kept running in the background. The first suggestion after a pause starts it, so it is slower.">
+          <RowItem label="Completion model" hint="Writes tab suggestions.">
             <Select
               label="Completion model"
               value={completionModels.some((m) => m.ID === settings.completionModelId) ? (settings.completionModelId as string) : completionModels[0].ID}
@@ -305,7 +310,7 @@ function ModelsSection(): ReactNode {
               options={completionModels.map((model) => ({ value: model.ID, label: utilityModelLabel(model) }))}
             />
           </RowItem>
-          <RowItem label="Inline edit model" hint="Ctrl+I in the editor. The edit box can switch it too.">
+          <RowItem label="Inline edit model" hint="Used by Ctrl+I in the editor.">
             <Select
               label="Inline edit model"
               value={inlineModels.some((m) => m.ID === settings.inlineModelId) ? (settings.inlineModelId as string) : inlineModels[0].ID}
@@ -329,7 +334,7 @@ function ModelsSection(): ReactNode {
           <div className="activity-reveal mb-4 rounded-xl border border-line bg-elev p-4">
             <div className="mb-3">
               <div className="text-[12.5px] font-medium text-fg">Add a custom model</div>
-              <div className="mt-0.5 text-[11.5px] text-muted">Use any model id your subscription or OpenRouter accepts.</div>
+              <div className="mt-0.5 text-[11.5px] text-muted">Any model id your subscription accepts.</div>
             </div>
             <div className="space-y-2.5">
               <label className="flex items-center gap-3">
@@ -355,7 +360,7 @@ function ModelsSection(): ReactNode {
                   value={subscription}
                   onChange={setSubscription}
                   className="max-w-none flex-1"
-                  options={MODEL_SUBSCRIPTIONS.map((sub) => ({ value: sub, label: sub === 'Default' ? 'Default (OpenRouter)' : (SUBSCRIPTION_LABELS[sub] ?? sub) }))}
+                  options={MODEL_SUBSCRIPTIONS.map((sub) => ({ value: sub, label: SUBSCRIPTION_LABELS[sub] ?? sub }))}
                 />
               </label>
             </div>
@@ -379,7 +384,7 @@ function ModelsSection(): ReactNode {
                       <span className="ml-2 font-mono text-[11px] text-subtle">{model.id}</span>
                     </div>
                     {model.custom && <span className="shrink-0 rounded bg-hover px-1.5 py-px text-[10.5px] text-muted">Custom</span>}
-                    {model.custom && (
+                    {model.custom && !parseCustomModel(model.id) && (
                       <IconButton label="Remove model" size="sm" onClick={() => remove(model.id, model.subscription)}>
                         <Trash2 size={12.5} />
                       </IconButton>
@@ -450,47 +455,49 @@ function AnalyticsSection({ rows }: { rows: AnalyticsRow[] | null }): ReactNode 
     const days = range === 'all' ? null : Number(range)
     const since = days ? dayKey(new Date(Date.now() - (days - 1) * 86_400_000)) : ''
     const picked = all.filter((row) => row.day >= since)
-    const byModel = new Map<string, { name: string; subscription: string; input: number; output: number; cost: number; calls: number }>()
+    const byModel = new Map<string, { name: string; subscription: string; input: number; output: number; cost: number; equivalent: number; calls: number }>()
     for (const row of picked) {
-      const entry = byModel.get(row.modelKey) ?? { name: row.name, subscription: row.subscription, input: 0, output: 0, cost: 0, calls: 0 }
+      const entry = byModel.get(row.modelKey) ?? { name: row.name, subscription: row.subscription, input: 0, output: 0, cost: 0, equivalent: 0, calls: 0 }
       entry.input += row.input
       entry.output += row.output
       entry.cost += row.cost
+      entry.equivalent += row.equivalent
       entry.calls += row.calls
       byModel.set(row.modelKey, entry)
     }
-    const models = [...byModel.entries()].map(([key, entry]) => ({ key, ...entry, tokens: entry.input + entry.output })).sort((a, b) => b.cost - a.cost || b.tokens - a.tokens)
+    const models = [...byModel.entries()].map(([key, entry]) => ({ key, ...entry, tokens: entry.input + entry.output })).sort((a, b) => b.cost + b.equivalent - a.cost - a.equivalent || b.tokens - a.tokens)
     const chartDays = days ?? Math.min(90, Math.max(7, picked.length ? Math.ceil((Date.now() - new Date(picked.reduce((min, row) => (row.day < min ? row.day : min), picked[0].day)).getTime()) / 86_400_000) + 1 : 7))
     const daily = Array.from({ length: chartDays }, (_, index) => {
       const day = dayKey(new Date(Date.now() - (chartDays - 1 - index) * 86_400_000))
       const today = picked.filter((row) => row.day === day)
-      return { day, cost: today.reduce((sum, row) => sum + row.cost, 0), tokens: today.reduce((sum, row) => sum + row.input + row.output, 0) }
+      return { day, cost: today.reduce((sum, row) => sum + row.cost + row.equivalent, 0), tokens: today.reduce((sum, row) => sum + row.input + row.output, 0) }
     })
     return {
       models,
       daily,
       cost: models.reduce((sum, m) => sum + m.cost, 0),
+      equivalent: models.reduce((sum, m) => sum + m.equivalent, 0),
       tokens: models.reduce((sum, m) => sum + m.tokens, 0),
       calls: models.reduce((sum, m) => sum + m.calls, 0)
     }
   }, [rows, range])
-  // Subscription plans report no cost, so the chart falls back to tokens when nothing was paid.
-  const byCost = view.cost > 0
+  // The chart counts what was paid plus what subscriptions would have cost; with no prices at all it falls back to tokens.
+  const byCost = view.cost + view.equivalent > 0
   const peak = Math.max(...view.daily.map((d) => (byCost ? d.cost : d.tokens)), 0)
-  const topShare = Math.max(...view.models.map((m) => (byCost ? m.cost : m.tokens)), 0)
+  const topShare = Math.max(...view.models.map((m) => (byCost ? m.cost + m.equivalent : m.tokens)), 0)
 
   return (
     <Section
       title="Analytics"
-      description="Recorded on this computer for every request Galaxy Code sends. Subscription accounts count tokens but not cost."
+      description="Recorded on this computer."
       action={<Segmented<AnalyticsRange> value={range} onChange={setRange} options={[{ value: '7', label: '7 days' }, { value: '30', label: '30 days' }, { value: 'all', label: 'All' }]} />}
     >
       {!rows ? (
         <div className="flex justify-center py-6"><Spinner size={16} className="text-subtle" /></div>
       ) : (
         <Card>
-          <div className="grid grid-cols-3 px-4 pb-3 pt-4">
-            {[['Spent', cost(view.cost)], ['Tokens', compactNumber(view.tokens)], ['Requests', compactNumber(view.calls)]].map(([label, value]) => (
+          <div className="grid grid-cols-4 px-4 pb-3 pt-4">
+            {[['Spent', cost(view.cost)], ['Equivalent', cost(view.equivalent)], ['Tokens', compactNumber(view.tokens)], ['Requests', compactNumber(view.calls)]].map(([label, value]) => (
               <div key={label}>
                 <div className="text-[11.5px] text-muted">{label}</div>
                 <div className="mt-0.5 text-[15px] font-semibold tabular-nums text-fg">{value}</div>
@@ -521,16 +528,16 @@ function AnalyticsSection({ rows }: { rows: AnalyticsRow[] | null }): ReactNode 
             <div className="px-3.5 py-3 text-[12px] text-muted">No usage in this period yet.</div>
           ) : (
             view.models.map((model) => {
-              const value = byCost ? model.cost : model.tokens
+              const value = byCost ? model.cost + model.equivalent : model.tokens
               return (
                 <div key={model.key} className="px-3.5 py-2.5">
                   <div className="flex items-baseline gap-2">
                     <span className="min-w-0 truncate text-[12.5px] text-fg">{model.name}</span>
-                    <span className="shrink-0 text-[11px] text-subtle">{model.subscription === 'Default' ? 'OpenRouter' : (SUBSCRIPTION_LABELS[model.subscription] ?? model.subscription)}</span>
+                    <span className="shrink-0 text-[11px] text-subtle">{SUBSCRIPTION_LABELS[model.subscription] ?? model.subscription}</span>
                     <span className="ml-auto shrink-0 text-[12px] tabular-nums text-muted">
                       {compactNumber(model.input)} in · {compactNumber(model.output)} out
                     </span>
-                    <span className="w-16 shrink-0 text-right text-[12.5px] tabular-nums text-fg">{model.cost > 0 ? cost(model.cost) : '—'}</span>
+                    <span className="w-20 shrink-0 text-right text-[12.5px] tabular-nums text-fg">{model.cost > 0 ? cost(model.cost) : model.equivalent > 0 ? `≈ ${cost(model.equivalent)}` : '—'}</span>
                   </div>
                   <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-hover">
                     <div className="h-full rounded-full bg-[var(--slider)]" style={{ width: `${topShare > 0 ? (value / topShare) * 100 : 0}%` }} />
@@ -539,9 +546,39 @@ function AnalyticsSection({ rows }: { rows: AnalyticsRow[] | null }): ReactNode 
               )
             })
           )}
+          {view.equivalent > 0 && <div className="px-3.5 py-2.5 text-[11.5px] text-subtle">Equivalent is an estimate at today's standard API prices. Cached tokens count at full price, so it can run higher than an actual API bill.</div>}
         </Card>
       )}
     </Section>
+  )
+}
+
+/** Usage is measured against everything bought, so a limit above that could never be reached. */
+function CreditLimit({ max }: { max: number }): ReactNode {
+  const limit = useStore((s) => s.settings.creditLimit)
+  const update = useStore((s) => s.updateSettings)
+  const [value, setValue] = useState(limit === null ? '' : String(limit))
+  const commit = (): void => {
+    const amount = Math.min(parseFloat(value), max)
+    setValue(amount > 0 ? String(amount) : '')
+    void update({ creditLimit: amount > 0 ? amount : null })
+  }
+  return (
+    <RowItem label="Credit limit" hint="Stop agent turns at this total usage.">
+      <div className="w-24 shrink-0">
+        <TextInput
+          inputMode="decimal"
+          value={value}
+          onChange={(event) => setValue(event.target.value.replace(/[^\d.]/g, ''))}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur()
+          }}
+          placeholder="No limit"
+          className="text-right text-[12px] tabular-nums"
+        />
+      </div>
+    </RowItem>
   )
 }
 
@@ -554,13 +591,13 @@ function AutoUsage({ rows, freeTier }: { rows: AnalyticsRow[] | null; freeTier: 
   return (
     <div className="px-3.5 py-3">
       <div className="flex items-baseline justify-between gap-3">
-        <span className="text-[12.5px] text-fg">Auto Usage</span>
-        <span className="text-[12px] tabular-nums text-muted">{count.toLocaleString()} of {limit.toLocaleString()} agent loops today</span>
+        <span className="text-[12.5px] text-fg">Daily Auto Usage</span>
+        <span className="text-[12px] tabular-nums text-muted">{Math.round(used)}% used</span>
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-hover">
         <div className={cn('h-full rounded-full', used >= 90 ? 'bg-danger' : used >= 70 ? 'bg-warn' : 'bg-[var(--slider)]')} style={{ width: `${used}%` }} />
       </div>
-      <div className="mt-1.5 text-[11.5px] text-subtle">{freeTier ? 'Buy credits on OpenRouter to raise the limit to 1,000 a day.' : 'Credits purchased: 1,000 a day.'}</div>
+      <div className="mt-1.5 text-[11.5px] text-subtle">{freeTier ? 'Free tier' : 'Paid tier'}</div>
     </div>
   )
 }
@@ -578,11 +615,12 @@ function UsageSection(): ReactNode {
   }, [])
   useEffect(load, [load])
   const money = (value: number): string => `$${value.toFixed(2)}`
+  const creditLimit = useStore((s) => s.settings.creditLimit)
   const openrouter = report?.openrouter
   return (
     <>
       <div className="-mt-3 mb-5 flex items-center justify-between gap-3">
-        <p className="text-[12px] text-muted">Balances and plan limits for the providers that are switched on.</p>
+        <p className="text-[12px] text-muted">Balances and plan limits.</p>
         <Button size="sm" disabled={loading} onClick={load}>
           {loading ? <Spinner size={12} /> : <RefreshCw size={12.5} />} Refresh
         </Button>
@@ -598,25 +636,30 @@ function UsageSection(): ReactNode {
               <Card><div className="px-3.5 py-3 text-[12px] text-danger">{openrouter.error}</div></Card>
             ) : (
               <Card>
-                <RowItem label="Credit balance"><span className="text-[15px] font-semibold tabular-nums text-fg">{money(openrouter.total - openrouter.used)}</span></RowItem>
-                <div className="px-3.5 py-3">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="text-[12.5px] text-fg">{money(openrouter.used)} used</span>
-                    <span className="text-[12px] tabular-nums text-muted">of {money(openrouter.total)} purchased</span>
-                  </div>
-                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-hover">
-                    {(() => {
-                      const used = openrouter.total > 0 ? Math.min(100, (openrouter.used / openrouter.total) * 100) : 0
-                      return <div className={cn('h-full rounded-full', used >= 90 ? 'bg-danger' : used >= 70 ? 'bg-warn' : 'bg-[var(--slider)]')} style={{ width: `${used}%` }} />
-                    })()}
-                  </div>
-                </div>
+                {openrouter.total > 0 && (
+                  <>
+                    <RowItem label="Credit balance"><span className="text-[15px] font-semibold tabular-nums text-fg">{money(openrouter.total - openrouter.used)}</span></RowItem>
+                    <div className="px-3.5 py-3">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-[12.5px] text-fg">{money(openrouter.used)} used</span>
+                        <span className="text-[12px] tabular-nums text-muted">{creditLimit !== null ? `of ${money(creditLimit)} limit` : `of ${money(openrouter.total)} purchased`}</span>
+                      </div>
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-hover">
+                        {(() => {
+                          const used = Math.min(100, (openrouter.used / (creditLimit ?? openrouter.total)) * 100)
+                          return <div className={cn('h-full rounded-full', used >= 90 ? 'bg-danger' : used >= 70 ? 'bg-warn' : 'bg-[var(--slider)]')} style={{ width: `${used}%` }} />
+                        })()}
+                      </div>
+                    </div>
+                  </>
+                )}
                 <AutoUsage rows={rows} freeTier={openrouter.freeTier} />
-                {openrouter.keyLimit !== null && (
+                {openrouter.total > 0 && openrouter.keyLimit !== null && (
                   <RowItem label="This key's limit" hint={openrouter.keyRemaining !== null ? `${money(openrouter.keyRemaining)} left on this key` : undefined}>
                     <span className="text-[12.5px] tabular-nums text-muted">{money(openrouter.keyLimit)}</span>
                   </RowItem>
                 )}
+                {openrouter.total > 0 && <CreditLimit max={openrouter.total} />}
               </Card>
             )}
           </Section>
@@ -631,14 +674,256 @@ function UsageSection(): ReactNode {
 
 // Providers
 
-function ProvidersSection(): ReactNode {
-  const secrets = useStore((s) => s.secrets)
-  const settings = useStore((s) => s.settings)
+function ProviderKeyRow({ provider }: { provider: ByokProvider }): ReactNode {
+  const hint = useStore((s) => s.secrets.providerKeys[provider.id])
+  const disabled = useStore((s) => s.settings.disabledProviders)
   const update = useStore((s) => s.updateSettings)
   const [key, setKey] = useState('')
   const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null)
+  const [testing, setTesting] = useState(false)
+
+  const test = async (): Promise<void> => {
+    setTesting(true)
+    setStatus(await window.galaxy.settings.testProviderKey(provider.id))
+    setTesting(false)
+  }
+  const save = async (): Promise<void> => {
+    if (!key.trim()) return
+    await window.galaxy.settings.setProviderKey(provider.id, key.trim())
+    setKey('')
+    await test()
+  }
+
+  return (
+    <div>
+      <RowItem label={provider.name} hint={hint ? 'Key saved' : 'No key saved'}>
+        {hint ? (
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button size="sm" disabled={testing} onClick={() => void test()}>
+              {testing ? <Spinner size={12} /> : null} Test
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={async () => {
+                await window.galaxy.settings.setProviderKey(provider.id, null)
+                setStatus(null)
+              }}
+            >
+              Remove
+            </Button>
+            <Switch
+              checked={!disabled.includes(provider.id)}
+              onChange={(on) => void update({ disabledProviders: on ? disabled.filter((id) => id !== provider.id) : [...disabled, provider.id] })}
+              label={`Use ${provider.name} key`}
+            />
+          </div>
+        ) : (
+          <button type="button" className="shrink-0 text-[12px] text-link hover:underline" onClick={() => void window.galaxy.files.openExternal(provider.keysUrl)}>
+            Get a key
+          </button>
+        )}
+      </RowItem>
+      <div className="px-3.5 pb-3">
+        <div className="flex gap-2">
+          <TextInput
+            type="password"
+            value={key}
+            onChange={(event) => setKey(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void save()
+            }}
+            placeholder={hint ?? provider.placeholder}
+            className="font-mono text-[12px]"
+          />
+          <Button variant="primary" disabled={!key.trim()} onClick={() => void save()}>
+            Save
+          </Button>
+        </div>
+        {status && (
+          <div className={cn('mt-2 flex min-w-0 items-center gap-1.5 text-[12px]', status.ok ? 'text-ok' : 'text-danger')}>
+            {status.ok ? <Check size={13} className="shrink-0" /> : <CircleAlert size={13} className="shrink-0" />}
+            <span className="truncate">{status.message}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+const CUSTOM_APIS: DropdownOption<CustomProviderApi>[] = [
+  { value: 'chat', label: 'Chat Completions' },
+  { value: 'responses', label: 'Responses' },
+  { value: 'decisions', label: 'Decisions' }
+]
+
+const parseModels = (text: string): string[] => [...new Set(text.split(',').map((model) => model.trim()).filter(Boolean))]
+
+function CustomProviderRow({ provider, onChange, onRemove }: { provider: CustomProvider; onChange(patch: Partial<CustomProvider>): void; onRemove(): void }): ReactNode {
+  const hint = useStore((s) => s.secrets.providerKeys[provider.id])
+  const [models, setModels] = useState(provider.models.join(', '))
+  const [key, setKey] = useState('')
+  const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null)
+  const [testing, setTesting] = useState(false)
+
+  const test = async (): Promise<void> => {
+    setTesting(true)
+    setStatus(await window.galaxy.settings.testProviderKey(provider.id))
+    setTesting(false)
+  }
+  const saveKey = async (): Promise<void> => {
+    if (!key.trim()) return
+    await window.galaxy.settings.setProviderKey(provider.id, key.trim())
+    setKey('')
+    await test()
+  }
+
+  return (
+    <div>
+      <RowItem label={provider.name} hint={<>{CUSTOM_APIS.find((api) => api.value === (provider.api ?? 'chat'))?.label} · <span className="font-mono">{provider.baseUrl}</span></>}>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button size="sm" disabled={testing} onClick={() => void test()}>
+            {testing ? <Spinner size={12} /> : null} Test
+          </Button>
+          <Button size="sm" variant="danger" onClick={onRemove}>Remove</Button>
+          <Switch checked={provider.enabled} onChange={(enabled) => onChange({ enabled })} label={`Use ${provider.name}`} />
+        </div>
+      </RowItem>
+      <div className="space-y-2 px-3.5 pb-3">
+        <TextInput
+          value={models}
+          onChange={(event) => setModels(event.target.value)}
+          onBlur={() => onChange({ models: parseModels(models) })}
+          placeholder="Model ids, separated by commas"
+          className="font-mono text-[12px]"
+        />
+        <div className="flex gap-2">
+          <TextInput
+            type="password"
+            value={key}
+            onChange={(event) => setKey(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void saveKey()
+            }}
+            placeholder={hint ?? 'API key (optional)'}
+            className="font-mono text-[12px]"
+          />
+          <Button variant="primary" disabled={!key.trim()} onClick={() => void saveKey()}>
+            Save
+          </Button>
+        </div>
+        {status && (
+          <div className={cn('flex min-w-0 items-center gap-1.5 text-[12px]', status.ok ? 'text-ok' : 'text-danger')}>
+            {status.ok ? <Check size={13} className="shrink-0" /> : <CircleAlert size={13} className="shrink-0" />}
+            <span className="truncate">{status.message}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function CustomProviders(): ReactNode {
+  const providers = useStore((s) => s.settings.customProviders)
+  const update = useStore((s) => s.updateSettings)
+  const [adding, setAdding] = useState(false)
+  const [name, setName] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [api, setApi] = useState<CustomProviderApi>('chat')
+  const [models, setModels] = useState('')
+  const [key, setKey] = useState('')
+  const validUrl = /^https?:\/\/\S+$/i.test(baseUrl.trim())
+
+  const add = async (): Promise<void> => {
+    if (!name.trim() || !validUrl) return
+    const id = crypto.randomUUID().slice(0, 8)
+    if (key.trim()) await window.galaxy.settings.setProviderKey(id, key.trim())
+    await update({ customProviders: [...providers, { id, name: name.trim(), api, baseUrl: baseUrl.trim(), models: parseModels(models), enabled: true }] })
+    setName('')
+    setBaseUrl('')
+    setApi('chat')
+    setModels('')
+    setKey('')
+    setAdding(false)
+  }
+  const change = (id: string, patch: Partial<CustomProvider>): void => {
+    void update({ customProviders: providers.map((provider) => provider.id === id ? { ...provider, ...patch } : provider) })
+  }
+  const remove = (id: string): void => {
+    void window.galaxy.settings.setProviderKey(id, null)
+    void update({ customProviders: providers.filter((provider) => provider.id !== id) })
+  }
+
+  return (
+    <Section
+      title="Custom"
+      description="Any OpenAI-format API. Models appear under Galaxy."
+      action={
+        <IconButton label="Add a custom provider" active={adding} onClick={() => setAdding(!adding)}>
+          <Plus size={15} />
+        </IconButton>
+      }
+    >
+      {adding && (
+        <div className="activity-reveal mb-4 rounded-xl border border-line bg-elev p-4">
+          <div className="mb-3">
+            <div className="text-[12.5px] font-medium text-fg">Add a custom provider</div>
+            <div className="mt-0.5 text-[11.5px] text-muted">Any server that follows the OpenAI format.</div>
+          </div>
+          <div className="space-y-2.5">
+            <label className="flex items-center gap-3">
+              <span className="w-24 shrink-0 text-[12px] text-muted">Name</span>
+              <TextInput autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Display name" className="flex-1" />
+            </label>
+            <div className="flex items-center gap-3">
+              <span className="w-24 shrink-0 text-[12px] text-muted">Base URL</span>
+              <TextInput aria-label="Base URL" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" className="min-w-0 flex-1 font-mono text-[12px]" />
+              <Select<CustomProviderApi> label="API format" value={api} onChange={setApi} options={CUSTOM_APIS} className="w-[150px] shrink-0" />
+            </div>
+            <label className="flex items-center gap-3">
+              <span className="w-24 shrink-0 text-[12px] text-muted">Model IDs</span>
+              <TextInput value={models} onChange={(event) => setModels(event.target.value)} placeholder="Separated by commas" className="flex-1 font-mono text-[12px]" />
+            </label>
+            <label className="flex items-center gap-3">
+              <span className="w-24 shrink-0 text-[12px] text-muted">API key</span>
+              <TextInput
+                type="password"
+                value={key}
+                onChange={(event) => setKey(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void add()
+                }}
+                placeholder="Optional"
+                className="flex-1 font-mono text-[12px]"
+              />
+            </label>
+          </div>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button size="sm" onClick={() => setAdding(false)}>Cancel</Button>
+            <Button variant="primary" size="sm" disabled={!name.trim() || !validUrl} onClick={() => void add()}>
+              <Plus size={13} /> Add provider
+            </Button>
+          </div>
+        </div>
+      )}
+      {providers.length > 0 ? (
+        <Card>
+          {providers.map((provider) => (
+            <CustomProviderRow key={provider.id} provider={provider} onChange={(patch) => change(provider.id, patch)} onRemove={() => remove(provider.id)} />
+          ))}
+        </Card>
+      ) : !adding && (
+        <div className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center text-[12.5px] text-subtle">No custom providers yet.</div>
+      )}
+    </Section>
+  )
+}
+
+function ProvidersSection(): ReactNode {
+  const secrets = useStore((s) => s.secrets)
+  const [key, setKey] = useState('')
+  const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null)
   const [busy, setBusy] = useState<'test' | 'signin' | null>(null)
-  const [baseUrl, setBaseUrl] = useState(settings.openRouterBaseUrl)
 
   const save = async (): Promise<void> => {
     if (!key.trim()) return
@@ -653,12 +938,12 @@ function ProvidersSection(): ReactNode {
     <>
       <Section
         title="OpenRouter"
-        description="The default provider. Models marked OpenRouter, chat titles, image generation and Auto approval all run on this key. It is stored encrypted on this computer."
+        description="The default provider. Keys are stored encrypted on this computer."
       >
         <Card>
           <RowItem
             label="API key"
-            hint={secrets.openRouterKey ? <span className="font-mono">{secrets.openRouterKeyHint}</span> : 'No key saved'}
+            hint={secrets.openRouterKey ? 'Key saved' : 'No key saved'}
           >
             {secrets.openRouterKey ? (
               <div className="flex shrink-0 items-center gap-1.5">
@@ -699,7 +984,7 @@ function ProvidersSection(): ReactNode {
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') void save()
                 }}
-                placeholder={secrets.openRouterKey ? 'Paste a new key to replace the saved one' : 'sk-or-v1-…'}
+                placeholder={secrets.openRouterKeyHint ?? 'sk-or-v1-…'}
                 className="font-mono text-[12px]"
               />
               <Button variant="primary" disabled={!key.trim()} onClick={() => void save()}>
@@ -733,25 +1018,13 @@ function ProvidersSection(): ReactNode {
         </Card>
       </Section>
 
-      <Section title="Endpoint" description="Point the default provider at any OpenAI-compatible API. Leave it alone unless you know you need this.">
+      <Section title="Your own API keys" description="A saved key runs that provider's models directly.">
         <Card>
-          <div className="flex items-center gap-2 px-3.5 py-3">
-            <TextInput value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} className="font-mono text-[12px]" placeholder="https://openrouter.ai/api/v1" />
-            <Button disabled={baseUrl.trim() === settings.openRouterBaseUrl} onClick={() => void update({ openRouterBaseUrl: baseUrl.trim() || 'https://openrouter.ai/api/v1' })}>
-              Save
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setBaseUrl('https://openrouter.ai/api/v1')
-                void update({ openRouterBaseUrl: 'https://openrouter.ai/api/v1' })
-              }}
-            >
-              Reset
-            </Button>
-          </div>
+          {BYOK_PROVIDERS.map((provider) => <ProviderKeyRow key={provider.id} provider={provider} />)}
         </Card>
       </Section>
+
+      <CustomProviders />
     </>
   )
 }
@@ -759,8 +1032,8 @@ function ProvidersSection(): ReactNode {
 // Accounts
 
 const ACCOUNT_NOTES: Record<AccountId, string> = {
-  claude: 'Runs through your Claude Code login with the Claude Agent SDK.',
-  codex: 'Runs through your ChatGPT login by driving codex app-server.',
+  claude: 'Your Claude Code login.',
+  codex: 'Your ChatGPT login.',
   ...Object.fromEntries(AcpAgents.map((agent) => [agent.ID, agent.Description]))
 }
 
@@ -902,8 +1175,8 @@ function AccountsSection(): ReactNode {
   const ids = (Object.keys(ACCOUNT_LABELS) as AccountId[]).filter((id) => !ACP_ACCOUNTS.includes(id))
   return (
     <Section
-      title="AI accounts"
-      description="Use subscriptions you already pay for. Each account runs its own CLI on this computer; Galaxy Code adds its browser, questions, deliverables, memory and image tools on top."
+      title="Accounts"
+      description="Use subscriptions you already pay for."
       action={<RefreshAccountsButton />}
     >
       <AccountList ids={ids} />
@@ -919,15 +1192,14 @@ function AcpSection(): ReactNode {
     <>
       <Section
         title="ACP agents"
-        description="Coding agents that Galaxy Code reaches over the Agent Client Protocol. Each agent reports its own models and modes, which the composer shows in place of the model picker."
+        description="Coding agents reached over the Agent Client Protocol."
+        action={<RefreshAccountsButton />}
       >
-        <Card>
-          <RowItem label="Use ACP agents" hint="Turns every agent below on or off at once. Each agent keeps its own switch.">
+        <Card className="mb-2.5">
+          <RowItem label="Use ACP agents" hint="Turns every agent below on or off.">
             <Switch checked={enabled} onChange={(acpEnabled) => void update({ acpEnabled })} label="Use ACP agents" />
           </RowItem>
         </Card>
-      </Section>
-      <Section title="Agents" action={<RefreshAccountsButton />}>
         <AccountList ids={builtin} off={!enabled} />
       </Section>
       <CustomAcpSection off={!enabled} />
@@ -1017,7 +1289,7 @@ function CustomAcpSection({ off }: { off: boolean }): ReactNode {
   return (
     <Section
       title="Custom agents"
-      description="Add any coding agent that speaks the Agent Client Protocol on stdio. Renaming an agent detaches the chats that used it."
+      description="Any agent that speaks ACP on stdio."
       action={
         editing === null ? (
           <Button size="sm" disabled={off} onClick={() => setEditing('new')}>
@@ -1192,7 +1464,7 @@ function McpSection(): ReactNode {
   return (
     <Section
       title="MCP servers"
-      description="Connect tools and data through the Model Context Protocol. Servers are available to every engine; account CLIs also keep any servers from their own config."
+      description="Connect tools and data through the Model Context Protocol."
       action={
         editing === null ? (
           <Button size="sm" onClick={() => setEditing('new')}>
@@ -1273,6 +1545,97 @@ function McpSection(): ReactNode {
 
 // Skills
 
+/** Reads a skill in place; its frontmatter only repeats the name and description in the header. */
+function SkillViewer({ skill, onClose, onEdit }: { skill: SkillInfo; onClose(): void; onEdit?: () => void }): ReactNode {
+  const [text, setText] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    void window.galaxy.files.read(skill.path).then((view) => {
+      if (view.kind === 'text') setText((view.content ?? '').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, ''))
+      else setError('This skill could not be read.')
+    }).catch((err: unknown) => setError(cleanError(err)))
+  }, [skill.path])
+  return (
+    <Modal onClose={onClose} className="flex h-[80vh] w-[720px] max-w-full flex-col">
+      <div role="dialog" aria-label={skill.name} className="flex min-h-0 flex-1 flex-col">
+        <div className="flex shrink-0 items-start gap-3 border-b border-line px-5 py-3.5">
+          {(skill.iconLarge ?? skill.icon) && <img src={skill.iconLarge ?? skill.icon} alt="" className="mt-0.5 h-5 w-5 shrink-0" />}
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[14px] font-semibold text-fg">{skill.displayName ?? skill.name}</div>
+            {skill.description && <div className="mt-0.5 text-[12px] leading-snug text-muted">{skill.description}</div>}
+          </div>
+          {onEdit && (
+            <IconButton label="Open in editor" onClick={onEdit}>
+              <Pencil size={13.5} />
+            </IconButton>
+          )}
+          <IconButton label="Close" onClick={onClose}>
+            <X size={15} />
+          </IconButton>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {error ? <div className="text-[12.5px] text-danger">{error}</div>
+            : text === null ? <div className="flex justify-center py-10"><Spinner size={16} className="text-subtle" /></div>
+            : <Markdown text={text} root={skill.path.replace(/[/\\][^/\\]*$/, '')} html />}
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function MemoryEditor({ path, onClose }: { path: string; onClose(): void }): ReactNode {
+  const [text, setText] = useState<string | null>(null)
+  const [saved, setSaved] = useState('')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const dirty = text !== null && text !== saved
+  useEffect(() => {
+    // A memory the agent has not written yet opens empty.
+    void window.galaxy.files.read(path).then((view) => {
+      const content = view.kind === 'text' ? view.content ?? '' : ''
+      setText(content)
+      setSaved(content)
+    }).catch((err: unknown) => setError(cleanError(err)))
+  }, [path])
+  const save = async (value = text): Promise<void> => {
+    if (value === null) return
+    setSaving(true)
+    setError('')
+    try {
+      await window.galaxy.files.write(path, value)
+      onClose()
+    } catch (err) {
+      setError(cleanError(err))
+      setSaving(false)
+    }
+  }
+  return (
+    // Unsaved edits stay until Cancel or Save, so a stray click or Escape cannot lose them.
+    <Modal onClose={dirty ? () => {} : onClose} className="flex h-[80vh] w-[720px] max-w-full flex-col">
+      <div role="dialog" aria-label="Memory" className="flex min-h-0 flex-1 flex-col">
+        <div className="flex shrink-0 items-center gap-3 border-b border-line px-5 py-3.5">
+          <div className="min-w-0 flex-1 truncate text-[14px] font-semibold text-fg">Memory</div>
+          <IconButton label="Close" disabled={dirty} onClick={onClose}>
+            <X size={15} />
+          </IconButton>
+        </div>
+        {text === null ? (
+          <div className="flex flex-1 justify-center py-10">{error ? null : <Spinner size={16} className="text-subtle" />}</div>
+        ) : (
+          <LiveMarkdown initial={saved} onChange={setText} onSave={(value) => void save(value)} />
+        )}
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-line px-5 py-3">
+          {error && <span className="mr-auto min-w-0 truncate text-[12px] text-danger">{error}</span>}
+          <Button size="sm" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" size="sm" disabled={!dirty || saving} onClick={() => void save()}>
+            {saving ? <Spinner size={12} /> : null} Save
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 function SkillsSection(): ReactNode {
   const homeDir = useStore((s) => s.homeDir)
   const projects = useStore((s) => s.projects)
@@ -1280,6 +1643,8 @@ function SkillsSection(): ReactNode {
   const openFile = useStore((s) => s.openFile)
   const [projectId, setProjectId] = useState<string | null>(activeProjectId)
   const [skills, setSkills] = useState<SkillInfo[] | null>(null)
+  const [viewing, setViewing] = useState<SkillInfo | null>(null)
+  const [editingMemory, setEditingMemory] = useState(false)
   const project = projects.find((p) => p.id === projectId) ?? null
 
   const load = useCallback(() => {
@@ -1287,9 +1652,10 @@ function SkillsSection(): ReactNode {
   }, [projectId])
   useEffect(load, [load])
 
+  const skillCreator = skills?.find((skill) => skill.name === 'skill-creator')
   const memoryFile = `${homeDir}/.galaxy/MEMORY.md`
   const grouped = useMemo(
-    () => ({ project: (skills ?? []).filter((s) => s.scope === 'project'), user: (skills ?? []).filter((s) => s.scope === 'user') }),
+    () => ({ project: (skills ?? []).filter((s) => s.scope === 'project'), user: (skills ?? []).filter((s) => s.scope === 'user'), builtin: (skills ?? []).filter((s) => s.scope === 'builtin') }),
     [skills]
   )
 
@@ -1302,15 +1668,12 @@ function SkillsSection(): ReactNode {
           key={skill.path}
           type="button"
           className="flex w-full items-start gap-3 px-3.5 py-2.5 text-left"
-          onClick={() => {
-            openFile(skill.path)
-            useStore.setState({ settingsOpen: null })
-          }}
+          onClick={() => setViewing(skill)}
         >
-          <Box size={13.5} className="mt-[2px] shrink-0 text-muted" />
+          {skill.iconLarge ?? skill.icon ? <img src={skill.iconLarge ?? skill.icon} alt="" className="mt-[2px] h-4 w-4 shrink-0" /> : <Box size={13.5} className="mt-[2px] shrink-0 text-muted" />}
           <span className="min-w-0 flex-1">
-            <span className="block text-[12.5px] text-fg">{skill.name}</span>
-            {skill.description && <span className="block text-[11.5px] leading-snug text-muted">{skill.description}</span>}
+            <span className="block text-[12.5px] text-fg">{skill.displayName ?? skill.name}</span>
+            {(skill.shortDescription ?? skill.description) && <span className="block text-[11.5px] leading-snug text-muted">{skill.shortDescription ?? skill.description}</span>}
           </span>
         </button>
       ))
@@ -1318,14 +1681,20 @@ function SkillsSection(): ReactNode {
 
   return (
     <>
+      {editingMemory && <MemoryEditor path={memoryFile} onClose={() => setEditingMemory(false)} />}
+      {viewing && (
+        <SkillViewer
+          skill={viewing}
+          onClose={() => setViewing(null)}
+          onEdit={viewing.scope === 'builtin' ? undefined : () => {
+            openFile(viewing.path)
+            useStore.setState({ settingsOpen: null })
+          }}
+        />
+      )}
       <Section
         title="Skills"
-        description={
-          <>
-            A skill is a folder with a <span className="font-mono">SKILL.md</span> that teaches the agent how to do one kind of task. The agent sees each skill's name and
-            description, and reads the file when a task calls for it.
-          </>
-        }
+        description="Instructions the agent reads when a task calls for them."
         action={
           <div className="flex items-center gap-1.5">
             {projects.length > 0 && (
@@ -1337,8 +1706,16 @@ function SkillsSection(): ReactNode {
                 options={[{ value: '', label: 'No project' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
               />
             )}
-            <IconButton label="Rescan" onClick={load}>
-              <RefreshCw size={13} />
+            <IconButton
+              label="Create a skill"
+              disabled={!skillCreator}
+              onClick={() => {
+                if (!skillCreator) return
+                useStore.getState().queueMention({ kind: 'skill', skill: skillCreator, text: 'Help me create a skill' })
+                useStore.setState({ settingsOpen: null })
+              }}
+            >
+              <Plus size={15} />
             </IconButton>
           </div>
         }
@@ -1364,18 +1741,18 @@ function SkillsSection(): ReactNode {
               <Card>{list(grouped.project)}</Card>
             </div>
           )}
+          {grouped.builtin.length > 0 && (
+            <div>
+              <div className="mb-1 px-1 text-[11px] text-subtle">Built-in</div>
+              <Card>{list(grouped.builtin)}</Card>
+            </div>
+          )}
         </div>
       </Section>
-      <Section title="Memory" description="Notes the agent keeps between chats. It updates this file with the Memory tool; you can edit it by hand too.">
+      <Section title="Memory" description="Notes the agent keeps between chats.">
         <Card>
           <RowItem label="Memory" hint={<span className="font-mono">{tildify(memoryFile, homeDir)}</span>}>
-            <Button
-              size="sm"
-              onClick={() => {
-                openFile(memoryFile)
-                useStore.setState({ settingsOpen: null })
-              }}
-            >
+            <Button size="sm" onClick={() => setEditingMemory(true)}>
               Open
             </Button>
           </RowItem>
@@ -1435,11 +1812,19 @@ export function SettingsPage(): ReactNode {
             {section === 'general' && <GeneralSection />}
             {section === 'models' && <ModelsSection />}
             {section === 'providers' && <ProvidersSection />}
-            {section === 'accounts' && <AccountsSection />}
+            {section === 'subscriptions' && (
+              <>
+                <AccountsSection />
+                <AcpSection />
+              </>
+            )}
             {section === 'usage' && <UsageSection />}
-            {section === 'acp' && <AcpSection />}
-            {section === 'mcp' && <McpSection />}
-            {section === 'skills' && <SkillsSection />}
+            {section === 'customize' && (
+              <>
+                <McpSection />
+                <SkillsSection />
+              </>
+            )}
           </div>
         </div>
       </main>

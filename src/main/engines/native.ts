@@ -135,16 +135,51 @@ interface LoopOptions {
   allowCompaction: boolean
 }
 
+/** String fields that name what a streaming call works on, and the verb shown before they arrive. */
+const STREAMED: Record<string, { keys: string[]; verb?: string }> = {
+  Read: { keys: ['path'], verb: 'Read' },
+  Grep: { keys: ['pattern', 'path', 'glob'], verb: 'Grep' },
+  Glob: { keys: ['pattern', 'path'], verb: 'Glob' },
+  List: { keys: ['path'], verb: 'List' },
+  WebSearch: { keys: ['query'], verb: 'Search' },
+  WebFetch: { keys: ['url'], verb: 'Fetch' },
+  Browser: { keys: ['title'], verb: 'Browse' },
+  // A command has no verb of its own; it shows once its description or command starts.
+  Bash: { keys: ['description', 'command'] }
+}
+
 /**
- * Live previews of Edit and Create while their arguments stream in: the timeline shows the
- * diff growing, and runTool takes the same item over once the call is complete.
+ * Live previews while tool arguments stream in: Edit and Create show the diff growing, and
+ * reads, searches and commands show their verb, then their target as it is written.
+ * runTool takes the same item over once the call is complete.
  */
-function editPreviews(session: Session, env: ToolEnv): { update(call: ChatToolCall): void; has(id: string): boolean; settle(): Promise<void> } {
+function toolPreviews(session: Session, env: ToolEnv, tools: ToolDef[]): { update(call: ChatToolCall, force?: boolean): void; has(id: string): boolean; settle(): Promise<void> } {
   const shown = new Set<string>()
   const last = new Map<string, number>()
   let pending: Promise<void> = Promise.resolve()
+  const show = (call: ChatToolCall, fields: Partial<ToolItem> & { title: string }, kind: ToolItem['tool']): void => {
+    if (shown.has(call.id)) session.update<ToolItem>(call.id, fields)
+    else {
+      shown.add(call.id)
+      session.add<ToolItem>({ id: call.id, kind: 'tool', tool: kind, name: call.function.name, input: {}, status: 'pending', parentId: env.parentId, ...fields })
+    }
+  }
   const publish = async (call: ChatToolCall): Promise<void> => {
     const name = call.function.name
+    const streamed = STREAMED[name]
+    if (streamed) {
+      const tool = tools.find((t) => t.name === name)
+      if (!tool) return
+      const input = streamedEditInput(call.function.arguments, streamed.keys)
+      const started = streamed.keys.some((key) => typeof input[key] === 'string' && input[key])
+      if (!started && !streamed.verb) return
+      let presentation: { title: string; detail?: string } = { title: streamed.verb ?? name }
+      if (started) {
+        try { presentation = tool.present(input, env) } catch { /* Keep the bare verb until the input reads. */ }
+      }
+      show(call, { title: presentation.title, detail: presentation.detail, input }, tool.kind)
+      return
+    }
     const input = streamedEditInput(call.function.arguments)
     let diffs: FileDiff[] | undefined
     let title = name
@@ -156,18 +191,14 @@ function editPreviews(session: Session, env: ToolEnv): { update(call: ChatToolCa
     // An Edit shows its patch as plain text while it is written; the diff appears once it runs.
     const patch = name === 'Edit' && typeof input.patch === 'string' ? input.patch : undefined
     if (!diffs && patch === undefined) return
-    const fields = patch !== undefined ? { input: { patch } } : { meta: { ...session.item<ToolItem>(call.id)?.meta, diffs } }
-    if (shown.has(call.id)) session.update<ToolItem>(call.id, { title, ...fields })
-    else {
-      shown.add(call.id)
-      session.add<ToolItem>({ id: call.id, kind: 'tool', tool: name === 'Create' ? 'create' : 'edit', name, title, input: {}, status: 'pending', parentId: env.parentId, ...fields })
-    }
+    show(call, { title, ...(patch !== undefined ? { input: { patch } } : { meta: { ...session.item<ToolItem>(call.id)?.meta, diffs } }) }, name === 'Create' ? 'create' : 'edit')
   }
   return {
-    update(call) {
-      if (call.function.name !== 'Edit' && call.function.name !== 'Create') return
+    update(call, force = false) {
+      const name = call.function.name
+      if (!call.id || (name !== 'Edit' && name !== 'Create' && !STREAMED[name])) return
       const now = Date.now()
-      if (now - (last.get(call.id) ?? 0) < 80) return
+      if (!force && now - (last.get(call.id) ?? 0) < 80) return
       last.set(call.id, now)
       const snapshot = { ...call, function: { ...call.function } }
       pending = pending.then(() => publish(snapshot)).catch(() => {})
@@ -190,7 +221,7 @@ async function loop(options: LoopOptions): Promise<string> {
       options.messages.push({ role: 'user', content: `Message from agent ${message.from}:\n${message.text}` })
     }
 
-    const previews = editPreviews(session, env)
+    const previews = toolPreviews(session, env, tools)
     const result = await streamChat({
       model: turn.model.id,
       messages: [{ role: 'system', content: options.system }, ...options.messages],
@@ -205,6 +236,8 @@ async function loop(options: LoopOptions): Promise<string> {
       onToolCall: (call) => { writer.end(); previews.update(call) }
     })
     writer.end()
+    // The last chunks may have fallen inside the throttle; show each call as it was finally written.
+    if (!signal.aborted) for (const call of result.toolCalls) previews.update(call, true)
     await previews.settle()
 
     if (result.usage) {
@@ -232,7 +265,7 @@ async function loop(options: LoopOptions): Promise<string> {
     }
 
     const outcomes = new Map<string, { text: string; images?: ToolImage[] }>()
-    const execute = async (call: ChatToolCall): Promise<void> => {
+    const execute = async (call: ChatToolCall, defer = false): Promise<(() => void) | undefined> => {
       const args = parseArgs(call.function.arguments)
       if (!args.ok) {
         outcomes.set(call.id, { text: args.error })
@@ -240,8 +273,9 @@ async function loop(options: LoopOptions): Promise<string> {
         if (previews.has(call.id)) session.update<ToolItem>(call.id, { status: 'error', error: args.error, endedAt: Date.now() })
         return
       }
-      const run = await runTool(tools, env, call.function.name, args.value, previews.has(call.id) ? call.id : undefined)
+      const run = await runTool(tools, env, call.function.name, args.value, previews.has(call.id) ? call.id : undefined, defer)
       outcomes.set(call.id, { text: run.result.text, images: run.result.images })
+      return run.finish
     }
 
     // Consecutive parallel-safe calls run together; anything with side effects runs alone, in order.
@@ -250,7 +284,9 @@ async function loop(options: LoopOptions): Promise<string> {
       if (batch.length === 0) return
       const current = batch
       batch = []
-      await Promise.all(current.map(execute))
+      // Parallel calls finish together, so the whole batch reads as in progress until the last one is done.
+      const finishes = await Promise.all(current.map((call) => execute(call, current.length > 1)))
+      for (const finish of finishes) finish?.()
     }
     for (const call of result.toolCalls) {
       const parallel = tools.find((t) => t.name === call.function.name)?.parallel === true
