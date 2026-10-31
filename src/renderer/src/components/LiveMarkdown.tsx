@@ -15,7 +15,8 @@ import { $prose } from '@milkdown/kit/utils'
 import { codeHighlight } from '../lib/codeHighlight'
 import { concealedDoc, revealMarks } from '../lib/revealMarks'
 import { Markdown } from './Markdown'
-import { openLink } from '../lib/openLink'
+import { linkedFile, openLink } from '../lib/openLink'
+import { useStore } from '../store'
 
 const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/
 
@@ -102,6 +103,11 @@ export function LiveMarkdown({ initial, onChange, onSave }: { initial: string; o
               if (!link) return false
               event.preventDefault()
               if (/^https?:/i.test(link.href)) void openLink(link.href, event)
+              else {
+                // This editor knows no folder, so a relative link has nothing to resolve against.
+                const file = linkedFile(link.getAttribute('href') ?? '')
+                if (file && /^[/~]/.test(file.path)) useStore.getState().openFile(file.path, file.line)
+              }
               return true
             }
           }

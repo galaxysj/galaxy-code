@@ -1,14 +1,14 @@
 import hljs from 'highlight.js/lib/common'
 import { memo, useMemo, type ReactNode } from 'react'
-import ReactMarkdown, { type Components, type Options } from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform, type Components, type Options } from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
-import rehypeSanitize from 'rehype-sanitize'
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import remarkGfm from 'remark-gfm'
 import { cn, languageForPath } from '../lib/utils'
 import { useStore } from '../store'
 import { CopyButton } from './ui'
-import { openLink } from '../lib/openLink'
+import { linkedFile, openLink } from '../lib/openLink'
 
 function textOf(node: ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') return String(node)
@@ -63,8 +63,11 @@ function Pre({ children }: { children?: ReactNode }): ReactNode {
 }
 
 const PLUGINS: NonNullable<Options['rehypePlugins']> = [[rehypeHighlight, { detect: false, ignoreMissing: true }]]
-/** rehype-sanitize's default schema is GitHub's allowlist. */
-const HTML_PLUGINS: NonNullable<Options['rehypePlugins']> = [rehypeRaw, rehypeSanitize, ...PLUGINS]
+/** rehype-sanitize's default schema is GitHub's allowlist, plus links to local files. */
+const SCHEMA = { ...defaultSchema, protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), 'file'] } }
+const HTML_PLUGINS: NonNullable<Options['rehypePlugins']> = [rehypeRaw, [rehypeSanitize, SCHEMA], ...PLUGINS]
+/** The default drops file: addresses, and clicks on them are handled here, not by the browser. */
+const keepFileLinks = (url: string): string => (/^file:/i.test(url) ? url : defaultUrlTransform(url))
 
 interface MarkdownProps {
   text: string
@@ -90,8 +93,8 @@ export const Markdown = memo(function Markdown({ text, root, html, className }: 
               if (!href) return
               if (/^(https?|mailto):/i.test(href)) void openLink(href, event)
               else {
-                const ref = fileReference(decodeURIComponent(href.replace(/^file:\/\//, '')))
-                if (ref) openFile(ref.path.startsWith('/') || !root ? ref.path : `${root}/${ref.path.replace(/^\.\//, '')}`, ref.line)
+                const file = linkedFile(href, root)
+                if (file) openFile(file.path, file.line)
               }
             }}
           >
@@ -133,7 +136,7 @@ export const Markdown = memo(function Markdown({ text, root, html, className }: 
 
   return (
     <div className={cn('md selectable', className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={html ? HTML_PLUGINS : PLUGINS} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={html ? HTML_PLUGINS : PLUGINS} urlTransform={keepFileLinks} components={components}>
         {text}
       </ReactMarkdown>
     </div>
