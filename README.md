@@ -27,7 +27,7 @@ Available tools and model options depend on the selected agent.
 ### Requirements
 
 - Node.js **22.12 or later** and npm
-- An OpenRouter API key or an installed agent CLI for your chosen provider
+- An LLM API key or an installed agent CLI for your chosen provider
 
 From the repository directory:
 
@@ -49,7 +49,7 @@ The `dev`, `start`, `build`, and distribution commands automatically prepare exe
 
 | Connection | Setup |
 | --- | --- |
-| OpenRouter(Default) | Add an API key in Providers. This is the default provider and runs the built-in agent without a separate coding agent CLI. |
+| Galaxy | Add an API keys in Providers. This is the default provider and runs the built-in agent without a separate coding agent CLI. |
 | Claude Code | Install the `claude` CLI, then sign in through the app or use an existing login. |
 | Codex | Install the `codex` CLI, then sign in through the app or use an existing login. |
 | OpenCode | Install the `opencode` CLI, then sign in if you need more models. |
@@ -104,5 +104,7 @@ Built with Electron, React, TypeScript, and electron-vite, with Monaco Editor an
 
 ## License
 
-[MIT](LICENSE) © 2026 galaxysj.
+[MIT](LICENSE) © 2026 galaxysj.  
+
+The built-in Skill Creator skill in `resources/skills/skill-creator` is modified from the skill-creator skill in OpenAI Codex and adapts some writing principles from [anthropics/skills](https://github.com/anthropics/skills). It is distributed under the Apache License 2.0, not under this project's license. See its [LICENSE.txt](resources/skills/skill-creator/LICENSE.txt) and [NOTICE.txt](resources/skills/skill-creator/NOTICE.txt).
 
