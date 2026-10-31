@@ -20,6 +20,9 @@ export interface GateRequest {
   /** Key under which the user can allow similar actions for the rest of the chat. */
   sessionKey?: string
   sessionLabel?: string
+  /** Shown to the user in place of the approval model's reason. */
+  reason?: string
+  fullAccess?: boolean
 }
 
 export type GateResult = { allowed: true } | { allowed: false; message: string }
@@ -180,7 +183,7 @@ export async function gate(session: Session, mode: PermissionMode, request: Gate
   if (session.isSessionAllowed(request.sessionKey)) return { allowed: true }
 
   let source: 'ask' | 'auto' = 'ask'
-  let reason: string | undefined
+  let reason = request.reason
 
   if (mode === 'auto') {
     source = 'auto'
@@ -219,7 +222,8 @@ export async function gate(session: Session, mode: PermissionMode, request: Gate
     source,
     reason,
     sessionKey: request.sessionKey,
-    sessionLabel: request.sessionLabel
+    sessionLabel: request.sessionLabel,
+    ...(request.fullAccess ? { fullAccess: true } : {})
   })
   return decision.allowed ? { allowed: true } : denial(decision.note)
 }

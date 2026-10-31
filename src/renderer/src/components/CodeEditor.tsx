@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { InlineModel, usableUtilityModels, utilityModelLabel } from '@shared/models'
 import { applyMonacoTheme, monaco } from '../lib/monaco'
 import { useStore } from '../store'
+import { EditSuggestionView, recentEditsText, trackEdits } from './editSuggestions'
 import { Dropdown, Spinner } from './ui'
 
 type Editor = monaco.editor.IStandaloneCodeEditor
@@ -31,11 +32,13 @@ interface EditorHooks {
   path: string
   onCompleting(completing: boolean): void
   onAccepted(start: number, text: string, next: string | null): void
+  /** The completion came back with nothing, so a predicted edit may fill the gap. */
+  onEmpty(): void
 }
 
 const hooks = new Map<string, EditorHooks>()
 let completionsOn = true
-const COMPLETION_DELAY = 300
+const COMPLETION_DELAY = 200
 
 function sleep(ms: number, token: monaco.CancellationToken): Promise<boolean> {
   return new Promise((resolve) => {
@@ -45,6 +48,50 @@ function sleep(ms: number, token: monaco.CancellationToken): Promise<boolean> {
       resolve(false)
     })
   })
+}
+
+const WORD = /[A-Za-z_$][\w$]{2,}/g
+const WINDOW_LINES = 40
+const NEIGHBOR_LIMIT = 3
+const NEIGHBOR_CHARS = 1500
+
+function words(text: string): Set<string> {
+  return new Set(text.match(WORD) ?? [])
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0
+  let shared = 0
+  for (const word of a) if (b.has(word)) shared++
+  return shared / (a.size + b.size - shared)
+}
+
+/**
+ * Snippets from the other open files that read most like the code around the cursor, found the way Copilot picks
+ * neighboring tabs: slide a window over each file of the same language and keep the best matches by shared words.
+ */
+function neighborContext(current: monaco.editor.ITextModel, position: monaco.Position): string {
+  const near = words(current.getValueInRange(new monaco.Range(Math.max(1, position.lineNumber - 25), 1, Math.min(current.getLineCount(), position.lineNumber + 15), 1)))
+  const found: { path: string; text: string; score: number }[] = []
+  for (const other of monaco.editor.getModels()) {
+    if (other === current || other.uri.scheme !== 'file' || other.getLanguageId() !== current.getLanguageId() || other.getValueLength() > 400_000) continue
+    const lines = other.getLineCount()
+    let best: { start: number; score: number } | null = null
+    for (let start = 1; start <= Math.max(1, lines - WINDOW_LINES / 2); start += WINDOW_LINES / 2) {
+      const score = jaccard(near, words(other.getValueInRange(new monaco.Range(start, 1, Math.min(lines, start + WINDOW_LINES - 1), 1))))
+      if (!best || score > best.score) best = { start, score }
+    }
+    if (best && best.score >= 0.1) {
+      const endLine = Math.min(lines, best.start + WINDOW_LINES - 1)
+      const text = other.getValueInRange(new monaco.Range(best.start, 1, endLine, other.getLineMaxColumn(endLine))).slice(0, NEIGHBOR_CHARS)
+      found.push({ path: other.uri.fsPath, text, score: best.score })
+    }
+  }
+  return found
+    .sort((a, b) => b.score - a.score)
+    .slice(0, NEIGHBOR_LIMIT)
+    .map((snippet) => `File: ${snippet.path.split('/').pop()}\n${snippet.text}`)
+    .join('\n\n---\n\n')
 }
 
 let registered = false
@@ -64,8 +111,12 @@ function registerCompletions(): void {
       const offset = model.getOffsetAt(position)
       hook.onCompleting(true)
       try {
-        const result = await window.galaxy.editor.complete({ path: hook.path, prefix: text.slice(0, offset), suffix: text.slice(offset) })
-        if (token.isCancellationRequested || !result.text.trim() || model.getValue() !== text) return { items: [] }
+        const result = await window.galaxy.editor.complete({ path: hook.path, prefix: text.slice(0, offset), suffix: text.slice(offset), related: neighborContext(model, position), edits: recentEditsText() })
+        if (token.isCancellationRequested || model.getValue() !== text) return { items: [] }
+        if (!result.text.trim()) {
+          hook.onEmpty()
+          return { items: [] }
+        }
         // Ghost text must start at the cursor, so an addition further on carries the text in between.
         const at = offset + result.offset
         const insert = text.slice(offset, at) + result.text
@@ -161,21 +212,41 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onTextChange, o
       jumpKey.set(false)
       jumpMark.clear()
     }
+    // A predicted change to several lines, drawn in the file and applied with Tab.
+    const suggestions = new EditSuggestionView(editor, model, path)
+    const editSuggestionsOn = (): boolean => useStore.getState().settings.tabCompletion !== false && !editor.getOption(monaco.editor.EditorOption.readOnly)
+    const askForEdit = (force = false): void =>
+      suggestions.schedule(editSuggestionsOn, () => { const position = editor.getPosition(); return position ? neighborContext(model, position) : '' }, 0, force)
+    const tracker = trackEdits(model, () => askForEdit())
     hooks.set(uri.toString(), {
       editor,
       path,
+      onEmpty: () => askForEdit(true),
       onCompleting: (completing) => latest.current.onCompletingChange?.(completing),
       onAccepted(start, text, next) {
         clearJump()
-        if (!next) return
-        const found = model.getValue().indexOf(next, start + text.length)
-        if (found === -1) return
-        jump = found + next.length
+        const value = model.getValue()
+        const after = start + text.length
+        const found = next ? value.indexOf(next, after) : -1
+        if (found !== -1) jump = found + next!.length
+        else {
+          // The model named no spot, or one the file does not have: go to the end of the next line with code on it.
+          const lineEnd = value.indexOf('\n', after)
+          if (lineEnd === -1) return
+          const target = /\S/.exec(value.slice(lineEnd + 1))
+          if (!target) return
+          const nextStart = lineEnd + 1 + target.index
+          const nextEnd = value.indexOf('\n', nextStart)
+          jump = nextEnd === -1 ? value.length : nextEnd
+        }
         const at = model.getPositionAt(jump)
         jumpKey.set(true)
         jumpMark.set([{ range: new monaco.Range(at.lineNumber, at.column, at.lineNumber, at.column), options: { afterContentClassName: 'galaxy-jump-mark', stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } }])
       }
     })
+    // The next change often follows from the one just accepted, so ask for it at once.
+    editor.addCommand(monaco.KeyCode.Tab, () => { if (suggestions.accept()) suggestions.schedule(editSuggestionsOn, () => '', 150, true) }, 'galaxyEditSuggestion && !inlineSuggestionVisible && !suggestWidgetVisible')
+    editor.addCommand(monaco.KeyCode.Escape, () => suggestions.clear(), 'galaxyEditSuggestion && !inlineSuggestionVisible && !suggestWidgetVisible')
     editor.addCommand(monaco.KeyCode.Tab, () => {
       if (jump === null) return
       const at = model.getPositionAt(Math.min(jump, model.getValueLength()))
@@ -183,7 +254,7 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onTextChange, o
       editor.setPosition(at)
       editor.revealPositionInCenterIfOutsideViewport(at)
       editor.trigger('galaxy', 'editor.action.inlineSuggest.trigger', {})
-    }, 'galaxyJump && !inlineSuggestionVisible && !suggestWidgetVisible')
+    }, 'galaxyJump && !galaxyEditSuggestion && !inlineSuggestionVisible && !suggestWidgetVisible')
     const keys = editor.onKeyDown((event) => {
       if (event.keyCode !== monaco.KeyCode.Tab && event.keyCode !== monaco.KeyCode.Shift) clearJump()
     })
@@ -216,6 +287,8 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onTextChange, o
 
     return () => {
       keys.dispose()
+      tracker.dispose()
+      suggestions.dispose()
       mouse.dispose()
       changes.dispose()
       hooks.delete(uri.toString())
@@ -419,7 +492,7 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onTextChange, o
       if (inline.current.stopped === requestId) return
       restoreFor(current)
       setProposal(null)
-      setEdit((state) => (state ? { ...state, busy: false, error: String(error instanceof Error ? error.message : error) } : state))
+      setEdit((state) => (state ? { ...state, busy: false, error: String(error instanceof Error ? error.message : error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') } : state))
       placeBox(edit.end)
     } finally {
       stop()

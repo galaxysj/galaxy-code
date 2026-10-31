@@ -1,7 +1,7 @@
 import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
-import type { GitInfo, WorktreeInfo } from '@shared/types'
+import type { GitInfo, WorktreeInfo, WorktreeMergeResult, WorktreeMergeStrategy, WorktreeStatus } from '@shared/types'
 import { CommitMessageModel, usableUtilityModels } from '@shared/models'
 import { store } from '../store'
 import { exists, newId, run, slugify } from '../util'
@@ -100,4 +100,86 @@ export async function removeWorktree(projectPath: string, worktree: WorktreeInfo
   // The branch is kept when it carries commits the base does not have.
   const unmerged = await git(projectPath, ['log', '--oneline', `HEAD..${worktree.branch}`])
   if (unmerged.ok && unmerged.out === '') await git(projectPath, ['branch', '-D', worktree.branch])
+}
+
+export async function worktreeStatus(projectPath: string, worktree: WorktreeInfo): Promise<WorktreeStatus> {
+  const [changes, project, counts] = await Promise.all([
+    git(worktree.path, ['status', '--porcelain']),
+    git(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    worktree.baseBranch ? git(projectPath, ['rev-list', '--left-right', '--count', `${worktree.baseBranch}...${worktree.branch}`]) : null
+  ])
+  const [behind, ahead] = counts?.ok ? counts.out.split(/\s+/).map(Number) : [0, 0]
+  return {
+    branch: worktree.branch,
+    baseBranch: worktree.baseBranch,
+    ahead,
+    behind,
+    dirty: changes.ok && changes.out !== '',
+    projectBranch: project.ok && project.out !== 'HEAD' ? project.out : null
+  }
+}
+
+/** Uncommitted work goes along with a merge. The commit message model writes the message when it can. */
+async function commitWorktree(worktree: WorktreeInfo): Promise<void> {
+  if ((await git(worktree.path, ['status', '--porcelain'])).out === '') return
+  try {
+    await instantCommit(worktree.path, false)
+  } catch {
+    const added = await git(worktree.path, ['add', '-A'])
+    if (!added.ok) throw new Error(`git add failed:\n${added.err || added.out}`)
+    const committed = await git(worktree.path, ['commit', '-m', `Changes from ${worktree.branch}`], 120000)
+    if (!committed.ok) throw new Error(`git commit failed:\n${committed.err || committed.out}`)
+  }
+}
+
+const conflictedFiles = async (cwd: string): Promise<string[]> => (await git(cwd, ['diff', '--name-only', '--diff-filter=U'])).out.split('\n').filter(Boolean)
+
+/**
+ * Merges a worktree's branch into its base in the project folder, committing what is uncommitted first. A merge that
+ * conflicts is undone and reports the files, so the project folder is never left half merged. Squash leaves the branch
+ * on the new base commit, so a later merge from this chat does not bring the same work twice.
+ */
+export async function mergeWorktree(projectPath: string, worktree: WorktreeInfo, strategy: WorktreeMergeStrategy): Promise<WorktreeMergeResult> {
+  const base = worktree.baseBranch
+  if (!base) throw new Error('This worktree started from a detached HEAD, so it has no branch to merge into.')
+  const project = await git(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  if (project.out !== base) throw new Error(`The project folder is on ${project.out}. Switch it to ${base} to merge.`)
+  await commitWorktree(worktree)
+  const commits = await git(projectPath, ['log', '--format=%s', '--reverse', `${base}..${worktree.branch}`])
+  if (!commits.ok) throw new Error(commits.err || 'Could not read the branch.')
+  if (commits.out === '') throw new Error(`${worktree.branch} has nothing to merge into ${base}.`)
+
+  const merged = await git(projectPath, strategy === 'squash' ? ['merge', '--squash', worktree.branch] : ['merge', '--no-ff', '--no-edit', worktree.branch], 120000)
+  if (!merged.ok) {
+    const conflicts = await conflictedFiles(projectPath)
+    if (!conflicts.length) throw new Error(merged.err || merged.out || 'git merge failed.')
+    await git(projectPath, strategy === 'squash' ? ['reset', '--merge'] : ['merge', '--abort'])
+    return { merged: false, hash: null, conflicts }
+  }
+  if (strategy === 'squash') {
+    const subjects = commits.out.split('\n')
+    const body = subjects.length > 1 ? ['-m', subjects.map((subject) => `- ${subject}`).join('\n')] : []
+    const committed = await git(projectPath, ['commit', '-m', subjects.length > 1 ? `Merge ${worktree.branch}` : subjects[0], ...body], 120000)
+    if (!committed.ok) {
+      await git(projectPath, ['reset', '--merge'])
+      throw new Error(`git commit failed:\n${committed.err || committed.out}`)
+    }
+    await git(worktree.path, ['reset', '--hard', base])
+  }
+  return { merged: true, hash: (await git(projectPath, ['rev-parse', '--short', 'HEAD'])).out, conflicts: [] }
+}
+
+/** Brings the base's new commits into the worktree's branch. A conflict is undone and reports the files. */
+export async function updateWorktree(worktree: WorktreeInfo): Promise<WorktreeMergeResult> {
+  const base = worktree.baseBranch
+  if (!base) throw new Error('This worktree started from a detached HEAD, so it has no base branch.')
+  await commitWorktree(worktree)
+  const merged = await git(worktree.path, ['merge', '--no-edit', base], 120000)
+  if (!merged.ok) {
+    const conflicts = await conflictedFiles(worktree.path)
+    if (!conflicts.length) throw new Error(merged.err || merged.out || 'git merge failed.')
+    await git(worktree.path, ['merge', '--abort'])
+    return { merged: false, hash: null, conflicts }
+  }
+  return { merged: true, hash: (await git(worktree.path, ['rev-parse', '--short', 'HEAD'])).out, conflicts: [] }
 }

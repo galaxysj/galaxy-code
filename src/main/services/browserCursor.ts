@@ -6,6 +6,7 @@ export interface CursorUpdate {
 
 // Runs in an isolated world inside the native browser view, above page content.
 // A renderer overlay would sit behind WebContentsView and would not be visible.
+// Computer use runs the same script in a transparent window of its own above the desktop.
 export function agentCursorScript(update: CursorUpdate): string {
   return `(() => {
     const update = ${JSON.stringify(update)};
@@ -83,8 +84,20 @@ export function agentCursorScript(update: CursorUpdate): string {
           cursor.style.opacity = '1';
           cursor.style.transform = transform(position);
           const distance = Math.hypot(x - from.x, y - from.y);
-          const duration = !animate || reduced() || distance < 2 ? 0 : Math.min(360, 160 + distance * 0.22);
-          if (duration) motion = cursor.animate([{ transform: transform(from) }, { transform: transform(position) }], { duration, easing: 'cubic-bezier(.22,1,.36,1)' });
+          const duration = !animate || reduced() || distance < 2 ? 0 : Math.min(420, (160 + distance * 0.22) * (0.9 + Math.random() * 0.3));
+          if (duration) {
+            // Each move bows a different way and by a different amount, like a hand would.
+            const bow = Math.min(120, distance * (0.06 + Math.random() * 0.14)) * (Math.random() < 0.5 ? -1 : 1);
+            const control = { x: (from.x + x) / 2 - ((y - from.y) / distance) * bow, y: (from.y + y) / 2 + ((x - from.x) / distance) * bow };
+            const frames = Array.from({ length: 17 }, (_, index) => {
+              const t = index / 16;
+              return { transform: transform({
+                x: (1 - t) * (1 - t) * from.x + 2 * (1 - t) * t * control.x + t * t * x,
+                y: (1 - t) * (1 - t) * from.y + 2 * (1 - t) * t * control.y + t * t * y
+              }) };
+            });
+            motion = cursor.animate(frames, { duration, easing: 'cubic-bezier(.22,1,.36,1)' });
+          }
           return duration;
         },
         click(x, y) {

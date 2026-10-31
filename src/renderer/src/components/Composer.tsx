@@ -11,11 +11,13 @@ import {
   FolderGit2,
   FolderOpen,
   FolderPlus,
+  CircleAlert,
   FileText,
   GitBranch,
   GitCommitHorizontal,
   Globe,
   Laptop,
+  Monitor,
   Paperclip,
   Plug,
   Plus,
@@ -37,10 +39,12 @@ import { FileIcon as FileTypeIcon } from './ProjectFiles'
 import { AcpOptions } from './AcpOptions'
 import { ModelPicker } from './ModelPicker'
 import { ModelBrandIcon } from './SubscriptionIcon'
+import { usesGalaxyTools } from '@shared/catalog'
 import type { ModelBrand } from '@shared/models'
 import { ApprovalPrompt } from './ApprovalPrompt'
 import { SubscriptionPicker } from './SubscriptionPicker'
 import { Button, MenuItem, MenuSeparator, Popover, Segmented, SkillIcon, Spinner, TextInput } from './ui'
+import { openLink } from '../lib/openLink'
 
 const PERMISSION_MODES: { value: PermissionMode; label: string; description: string }[] = [
   { value: 'auto', label: 'Auto', description: 'A safety model approves routine work and asks you about risky actions.' },
@@ -334,7 +338,7 @@ function ContextRing({ used, size, subscription }: { used: number; size: number;
   const ratio = Math.min(1, used / limit)
   const radius = 6
   const circumference = 2 * Math.PI * radius
-  const auto = subscription === 'Default'
+  const auto = usesGalaxyTools(subscription)
   const summary = `Context: ${used.toLocaleString()} of ${size.toLocaleString()} tokens (${Math.round((used / size) * 100)}%)`
   const hint = auto ? `Compacts automatically at ${limit.toLocaleString()} (90%). Type /compact to do it now.` : ''
   return (
@@ -399,6 +403,7 @@ function selectedFrom(mentions: PromptMentions | undefined): SelectedMention[] {
   return mentions.chips.flatMap((chip): SelectedMention[] => {
     const id = `${chip.kind}:${chip.token}`
     if (chip.kind === 'browser') return [{ id, kind: 'browser', token: chip.token }]
+    if (chip.kind === 'computer') return [{ id, kind: 'computer', token: chip.token }]
     if (chip.kind === 'git') {
       const command = gitCommandFor(chip.label)
       return command ? [{ id, kind: 'git', token: chip.token, command }] : []
@@ -448,8 +453,12 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const models = useStore((s) => s.models)
   const pickModel = useStore((s) => s.pickModel)
   const chatId = useChatId()
-  // Ask and Plan are enforced by Galaxy Code's own tools, so only native models offer them.
-  const modesAvailable = model?.subscription === 'Default'
+  // Ask and Plan are enforced by Galaxy Code's own tools, so only models that run on them offer them.
+  const modesAvailable = usesGalaxyTools(model?.subscription)
+  // The error that stopped the last run stays above the box, with no Continue or Commit chips beside it, until it is dismissed or a message is sent.
+  const [dismissedError, setDismissedError] = useState<string | null>(null)
+  const errorKey = chat?.error ? `${chat.id}:${chat.updatedAt}:${chat.error}` : null
+  const errorShown = !edit && !!errorKey && errorKey !== dismissedError && chat?.status !== 'running'
   const storedMode = useStore((s) => s.composerMode[key])
   const setComposerMode = useStore((s) => s.setComposerMode)
   const mode = modesAvailable ? storedMode : undefined
@@ -539,7 +548,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const onRespond = useCallback((id: string) => setResponded((previous) => new Set([...previous, id])), [])
   const running = chat?.status === 'running' || chat?.status === 'awaiting'
   const projectId = chat?.projectId ?? draft.projectId
-  const hasOwnMessage = !chat?.side || (items ?? []).slice(chat.sideContextItemCount ?? 0).some((item) => item.kind === 'user' && !item.parentId)
+  const hasOwnMessage = !chat?.side || (items ?? []).some((item) => item.kind === 'user' && !item.parentId)
   const followUp = !!chat && !edit && hasOwnMessage
   const compact = followUp && !text.includes('\n') && !wrapped && attachments.length === 0 && !acp && !mode
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !!model
@@ -592,6 +601,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
           { id: 'upload', kind: 'upload' as const, name: 'Add files or photos', detail: 'Upload attachments from your computer.' },
           ...skills.map((skill) => ({ id: `skill:${skill.path}`, kind: 'skill' as const, name: skill.name, detail: skill.description || skill.scope, path: skill.path, displayName: skill.displayName, icon: skill.icon, color: skill.brandColor })),
           { id: 'browser', kind: 'browser' as const, name: 'Browser', detail: 'Use the in-app browser for this task.' },
+          { id: 'computer', kind: 'computer' as const, name: 'Computer', detail: useStore.getState().settings.computerUse ? 'Work in other apps in the background.' : 'Turn this on in Settings > Computer Use.' },
           ...(Object.keys(GIT_COMMANDS) as GitCommand[]).map((command) => ({ id: `git:${command}`, kind: 'git' as const, name: GIT_COMMANDS[command].label, detail: GIT_COMMANDS[command].detail, git: command })),
           ...mcp.filter((server) => server.state === 'ready').map((server) => ({ id: `mcp:${server.id}`, kind: 'mcp' as const, name: mcpServers.find((config) => config.id === server.id)?.name ?? server.id, detail: `${server.tools.length} tools`, server: server.id })),
           ...terminalTabs.map((tab) => ({ id: `terminal:${tab.id}`, kind: 'terminal' as const, name: tab.customTitle || tab.title, detail: tab.cwd, tabId: tab.id, cwd: tab.cwd })),
@@ -684,6 +694,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
     else if (entry.kind === 'file' && entry.path) selected = { id: entry.id, kind: 'file', token, name: entry.name, path: entry.path }
     else if (entry.kind === 'chat' && entry.chatId) selected = { id: entry.id, kind: 'chat', token, name: entry.name, chatId: entry.chatId }
     else if (entry.kind === 'browser') selected = { id: entry.id, kind: 'browser', token }
+    else if (entry.kind === 'computer') selected = { id: entry.id, kind: 'computer', token }
     else if (entry.kind === 'mcp' && entry.server) selected = { id: entry.id, kind: 'mcp', token, server: entry.server, name: entry.name }
     else if (entry.kind === 'terminal' && entry.tabId) selected = { id: entry.id, kind: 'terminal', token, name: entry.name, tabId: entry.tabId, cwd: entry.cwd ?? '' }
     if (!selected) return
@@ -829,6 +840,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
       files: selected.flatMap((item) => item.kind === 'file' ? [{ name: item.name, path: item.path }] : []),
       chats: mentionedChats,
       browser: selected.some((item) => item.kind === 'browser'),
+      computer: selected.some((item) => item.kind === 'computer'),
       tools: selected.flatMap((item) => {
         if (item.kind !== 'mcp') return []
         if (item.tool) return [{ server: item.server, name: item.tool }]
@@ -843,7 +855,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
       chips: selected.map((item) => ({
         token: item.token,
         kind: item.kind,
-        label: item.kind === 'browser' ? 'Browser' : item.kind === 'git' ? GIT_COMMANDS[item.command].label : item.name,
+        label: item.kind === 'browser' ? 'Browser' : item.kind === 'computer' ? 'Computer' : item.kind === 'git' ? GIT_COMMANDS[item.command].label : item.name,
         ...(item.kind === 'file' ? { title: item.path } : {}),
         ...(item.kind === 'skill' ? { displayName: item.displayName, icon: item.icon, color: item.color } : {}),
         ...(item.kind === 'terminal' ? { title: item.selection ? item.selection.slice(0, 400) : item.cwd } : {}),
@@ -892,7 +904,9 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
 
       {!edit && chat && <CurrentTask chat={chat} items={items} />}
 
-      {followUp && chat && !chat.side && <ChatChips chat={chat} items={items} />}
+      {errorShown && chat?.error && <ChatError message={chat.error} onDismiss={() => setDismissedError(errorKey)} />}
+
+      {followUp && chat && !chat.side && !errorShown && <ChatChips chat={chat} items={items} />}
 
       {!edit && chat && chat.queued.length > 0 && (
         <div className="mb-1.5 space-y-1">
@@ -1147,6 +1161,23 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
 
 const EMPTY: Attachment[] = []
 
+/** Why the last run stopped, above the message box. */
+function ChatError({ message, onDismiss }: { message: string; onDismiss: () => void }): ReactNode {
+  return (
+    <div role="alert" className="mb-2 flex items-start gap-2.5 rounded-xl bg-elev px-3 py-2.5 text-[12.5px] leading-snug text-muted shadow-composer">
+      <CircleAlert size={15} className="mt-px shrink-0 text-fg" />
+      <div className="max-h-32 min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words">
+        {message.split(/(https?:\/\/\S+)/g).map((part, index) =>
+          /^https?:\/\//.test(part) ? <a key={index} href={part} onClick={(event) => { event.preventDefault(); void openLink(part, event) }} className="text-link underline">{part}</a> : part
+        )}
+      </div>
+      <button type="button" title="Dismiss" onClick={onDismiss} className="mt-0.5 shrink-0 text-muted transition-colors hover:text-fg">
+        <X size={13} />
+      </button>
+    </div>
+  )
+}
+
 /** Round chips above the box mid-chat: Continue after a stopped turn, and Commit while the folder has uncommitted changes. */
 function ChatChips({ chat, items }: { chat: Chat; items: Item[] | undefined }): ReactNode {
   const cwd = useStore((s) => chat.worktree?.path ?? s.projects.find((entry) => entry.id === chat.projectId)?.path)
@@ -1222,9 +1253,9 @@ function CurrentTask({ chat, items }: { chat: Chat; items: Item[] | undefined })
   )
 }
 
-const MENU_HEADINGS: Record<MentionKind, string> = { model: 'Models', mode: 'Modes', command: 'Commands', upload: 'Attachments', skill: 'Skills', git: 'Tools', browser: 'Tools', mcp: 'MCP servers', terminal: 'Terminals', chat: 'Recent chats', file: 'Files' }
+const MENU_HEADINGS: Record<MentionKind, string> = { model: 'Models', mode: 'Modes', command: 'Commands', upload: 'Attachments', skill: 'Skills', git: 'Tools', browser: 'Tools', computer: 'Tools', mcp: 'MCP servers', terminal: 'Terminals', chat: 'Recent chats', file: 'Files' }
 
-const CHIP_ICON: Record<MentionKind, typeof Globe> = { model: Sparkles, mode: FileText, command: MessagesSquare, upload: Paperclip, skill: Package, file: FileText, chat: MessageCircle, browser: Globe, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
+const CHIP_ICON: Record<MentionKind, typeof Globe> = { model: Sparkles, mode: FileText, command: MessagesSquare, upload: Paperclip, skill: Package, file: FileText, chat: MessageCircle, browser: Globe, computer: Monitor, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
 
 /**
  * Draws picked mentions as chips under the transparent textarea text. Each chip keeps
@@ -1254,12 +1285,13 @@ function ComposerChips({ text, mentions }: { text: string; mentions: SelectedMen
   )
 }
 
-type MentionKind = 'model' | 'mode' | 'command' | 'git' | 'upload' | 'skill' | 'file' | 'chat' | 'browser' | 'mcp' | 'terminal'
+type MentionKind = 'model' | 'mode' | 'command' | 'git' | 'upload' | 'skill' | 'file' | 'chat' | 'browser' | 'computer' | 'mcp' | 'terminal'
 type SelectedMention =
   | { id: string; kind: 'skill'; token: string; name: string; displayName?: string; path: string; icon?: string; color?: string }
   | { id: string; kind: 'file'; token: string; name: string; path: string }
   | { id: string; kind: 'chat'; token: string; name: string; chatId: string }
   | { id: string; kind: 'browser'; token: string }
+  | { id: string; kind: 'computer'; token: string }
   | { id: string; kind: 'git'; token: string; command: GitCommand }
   | { id: string; kind: 'mcp'; token: string; server: string; name: string; tool?: string }
   | { id: string; kind: 'terminal'; token: string; name: string; tabId: string; cwd: string; selection?: string }

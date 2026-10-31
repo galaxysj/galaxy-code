@@ -23,6 +23,11 @@ export class AgentTeam {
     return JSON.stringify([{ id: 'main', name: 'Main', state: 'running' }, ...[...this.workers.values()].map(({ id, name, parent, state }) => ({ id, name, parent, state }))])
   }
 
+  /** Every subagent this team has started, with where it stands. */
+  status(): { id: string; name: string; parent: string; state: Worker['state'] }[] {
+    return [...this.workers.values()].map(({ id, name, parent, state }) => ({ id, name, parent, state }))
+  }
+
   name(id: string): string { return id === 'main' ? 'Main' : this.workers.get(id)?.name ?? id }
   get chatId(): string { return this.root.id }
 
@@ -78,6 +83,8 @@ export class AgentTeam {
     this.workers.set(id, worker)
     this.inboxes.set(id, [])
     const emit = (event: ChatEvent): void => {
+      // A closed team was reverted or is done; what its workers still write must not come back into the timeline.
+      if (this.closed) return
       if (event.type === 'item') {
         const item = { ...event.item, parentId: event.item.parentId ?? id }
         if (this.root.item(item.id)) this.root.update<Item>(item.id, item)
@@ -93,7 +100,11 @@ export class AgentTeam {
     session.ask = async () => null
     session.team = this
     session.agentId = id
-    const prompt = `You are a full-access Galaxy Code subagent. Your ID is ${id}; your parent is ${caller.agentId}. Use all available tools except user-question tools. Work autonomously. Use galaxy.Agent (or Agent) for further delegation and Message to coordinate with main or other agents. Never use read-only Explore/Review agents. Message action=list lists IDs, send delivers a message, read checks your inbox, and wait collects subagent reports. Check your inbox between work steps.\n\n${request.prompt}`
+    session.subagentType = request.type === 'explore' ? 'explore' : 'general'
+    const explore = request.type === 'explore'
+    const prompt = explore
+      ? `You are a read-only Galaxy Code Explore subagent. Your ID is ${id}; your parent is ${caller.agentId}. You can read, search and list files, search and fetch the web, and use Message. You cannot run commands, change files or start other agents, so do not try. Work autonomously and finish with a report of what you found: file paths and line numbers, how the pieces fit, and anything you could not find. Message action=list lists IDs, send delivers a message, and read checks your inbox.\n\n${request.prompt}`
+      : `You are a full-access Galaxy Code subagent. Your ID is ${id}; your parent is ${caller.agentId}. Use all available tools except user-question tools. Work autonomously. Use galaxy.Agent (or Agent) for further delegation and Message to coordinate with main or other agents. Use Agent with type explore for read-only lookups. Message action=list lists IDs, send delivers a message, read checks your inbox, and wait collects subagent reports. Check your inbox between work steps.\n\n${request.prompt}`
     // Composer modes such as Multitask apply to main only.
     const turn: Turn = { ...this.turn, text: prompt, attachments: [], permissionMode: 'full', ultra: false, mode: undefined, signal: this.controller.signal }
     worker.job = (async () => {
@@ -103,7 +114,7 @@ export class AgentTeam {
         const reports = session.doc.items.filter((item) => item.kind === 'assistant' && !item.parentId)
         worker.report = reports.map((item) => item.kind === 'assistant' ? item.text : '').filter(Boolean).join('\n\n') || '(Finished without a report.)'
         worker.state = this.controller.signal.aborted ? 'error' : 'done'
-        this.root.update<ToolItem>(id, { status: worker.state, output: worker.report, endedAt: Date.now(), meta: { ...this.root.item<ToolItem>(id)?.meta, agentType: 'general' } })
+        this.root.update<ToolItem>(id, { status: worker.state, output: worker.report, endedAt: Date.now(), meta: { ...this.root.item<ToolItem>(id)?.meta, agentType: session.subagentType } })
       } catch (error) {
         worker.report = errorMessage(error)
         worker.state = 'error'

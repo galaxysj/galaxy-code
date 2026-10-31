@@ -1,6 +1,6 @@
 import type { AccountUtilityModelSpec } from '@shared/models'
 import { claudeUtility, codexUtility } from './accountWorkers'
-import { complete, streamChat } from './openrouter'
+import { complete, streamChat, withAutoFallback } from './openrouter'
 
 export interface UtilityRun {
   cwd: string
@@ -17,11 +17,11 @@ export async function runUtilityModel(model: AccountUtilityModelSpec, system: st
   if (model.Subscription === 'Claude') return claudeUtility(model.ID, request)
   if (model.Subscription === 'Codex') return codexUtility(model.ID, request)
   const messages = [{ role: 'system' as const, content: system }, { role: 'user' as const, content: prompt }]
-  if (!run.onText) return complete(model.ID, messages, run.signal, run.openRouterExtra)
+  if (!run.onText) return withAutoFallback(model.ID, (id) => complete(id, messages, run.signal, run.openRouterExtra))
   let text = ''
   const onText = run.onText
-  const result = await streamChat({
-    model: model.ID,
+  const result = await withAutoFallback(model.ID, (id) => streamChat({
+    model: id,
     messages,
     signal: run.signal,
     // Thinking would hold back the first streamed line for a long time.
@@ -31,6 +31,6 @@ export async function runUtilityModel(model: AccountUtilityModelSpec, system: st
       onText(text)
     },
     onReasoning() {}
-  })
+  }))
   return result.content || text
 }

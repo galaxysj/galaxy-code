@@ -10,6 +10,7 @@ import { errorMessage, isAbortError, oneLine } from '../util'
 /** Longer tool results are saved to a temporary file, and the agent gets only their beginning. */
 const MAX_RESULT = 30_000
 const RESULT_PREVIEW = 2_000
+import { computerTool } from './computer'
 import { editTool, globTool, grepTool, listTool, readTool } from './fs'
 import {
   askTool,
@@ -31,6 +32,7 @@ import { str, ToolInputError, type ToolContext, type ToolDef, type ToolResult } 
 
 export const SUBAGENT_TYPES = {
   general: 'Full tool access. For self-contained pieces of work: implementing a module, fixing an isolated bug, running and repairing tests.',
+  explore: 'Read-only: it can read, search and list files, search and fetch the web, and message other agents, and nothing else. For finding things out, such as where something is defined, how a feature works or what a library does; it reports what it found. It cannot run commands or change anything. Available in every mode, including Ask and Plan.'
 } as const
 
 export const agentTool: ToolDef = {
@@ -48,6 +50,7 @@ ${Object.entries(SUBAGENT_TYPES)
     properties: {
       description: { type: 'string', description: 'Three to six words naming the job.' },
       prompt: { type: 'string', description: 'Complete, self-contained instructions for the subagent.' },
+      type: { type: 'string', enum: Object.keys(SUBAGENT_TYPES), description: 'Which kind of subagent. Defaults to general.' }
     },
     required: ['description', 'prompt']
   },
@@ -55,7 +58,7 @@ ${Object.entries(SUBAGENT_TYPES)
     return {
       title: oneLine(String(input.description ?? 'Subagent'), 80),
       detail: String(input.prompt ?? ''),
-      meta: { agentType: String(input.type ?? 'general') }
+      meta: { agentType: input.type === 'explore' ? 'explore' : 'general' }
     }
   },
   async execute(input, ctx) {
@@ -63,7 +66,7 @@ ${Object.entries(SUBAGENT_TYPES)
     const report = await ctx.spawnSubagent({
       description: str(input, 'description') ?? 'Subagent',
       prompt: str(input, 'prompt', true),
-      type: 'general',
+      type: input.type === 'explore' ? 'explore' : 'general',
       itemId: ctx.itemId,
       signal: ctx.signal
     })
@@ -104,6 +107,7 @@ export const ALL_TOOLS: ToolDef[] = [
   eventTool,
   editTool,
   browserTool,
+  computerTool,
   agentTool,
   listTabsTool,
   messageTool,
@@ -116,7 +120,7 @@ export const ALL_TOOLS: ToolDef[] = [
 ]
 
 /** Tools Galaxy Code lends to account CLIs. */
-export const BRIDGE_TOOLS: ToolDef[] = [agentTool, messageTool, editTool, lintTool, waitTool, eventTool, browserTool, listTabsTool, askTool, taskTool, presentTool, openTool, memoryTool, imageGenerationTool]
+export const BRIDGE_TOOLS: ToolDef[] = [agentTool, messageTool, editTool, lintTool, waitTool, eventTool, browserTool, computerTool, listTabsTool, askTool, taskTool, presentTool, openTool, memoryTool, imageGenerationTool]
 
 /** Where Plan mode keeps its plans: in the user's home, never inside the project. */
 export const PLANS_DIR = join(homedir(), '.galaxy', 'plans')
@@ -147,11 +151,31 @@ function planOnly(tool: ToolDef): ToolDef {
 
 /** Ask answers from what it can read. Plan reads and writes only its plan files. */
 export function toolsForMode(mode: Exclude<AgentMode, 'multitask'>): ToolDef[] {
-  if (mode === 'ask') return [...EXPLORE_TOOLS, askTool]
-  return [...EXPLORE_TOOLS, planOnly(editTool), askTool]
+  if (mode === 'ask') return [...EXPLORE_TOOLS, askTool, exploreOnly(agentTool), messageTool]
+  return [...EXPLORE_TOOLS, planOnly(editTool), askTool, exploreOnly(agentTool), messageTool]
 }
 
-export function toolsForSubagent(_type: string): ToolDef[] {
+/** The Agent tool as Ask and Plan offer it: it only starts Explore subagents, which cannot change anything. */
+function exploreOnly(tool: ToolDef): ToolDef {
+  return {
+    ...tool,
+    description: `Start a read-only Explore subagent that searches and reads on its own and reports back. It begins with no knowledge of this conversation, so the prompt must stand alone: say what to find, what is already known, and what to return. Start several in one turn to look at different things in parallel, then collect their reports with Message action=wait before you answer.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        description: { type: 'string', description: 'Three to six words naming the job.' },
+        prompt: { type: 'string', description: 'Complete, self-contained instructions for the subagent.' }
+      },
+      required: ['description', 'prompt']
+    },
+    present: (input, ctx) => ({ ...tool.present(input, ctx), meta: { agentType: 'explore' } }),
+    execute: (input, ctx) => tool.execute({ ...input, type: 'explore' }, ctx)
+  }
+}
+
+export function toolsForSubagent(type: string): ToolDef[] {
+  // Explore reads and messages; it has no way to run a command, change a file or start another agent.
+  if (type === 'explore') return [readTool, grepTool, globTool, listTool, webSearchTool, webFetchTool, messageTool]
   return ALL_TOOLS.filter((tool) => tool.kind !== 'ask')
 }
 

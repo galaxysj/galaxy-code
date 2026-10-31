@@ -162,6 +162,20 @@ export interface AccountStatus {
   detail: string | null
 }
 
+/** Where links in messages and documents open. */
+export type BrowserLinkTarget = 'built-in' | 'default'
+export type BrowserSearchEngine = 'duckduckgo' | 'google' | 'bing' | 'brave'
+/** What Clear removes from the built-in browser. */
+export type BrowserDataKind = 'cache' | 'site-data'
+
+/** The macOS permissions computer use needs. */
+export interface ComputerPermissions {
+  accessibility: boolean
+  screen: boolean
+}
+export type ComputerPermission = keyof ComputerPermissions
+export type ComputerMode = 'background' | 'full'
+
 export interface Settings {
   theme: ThemeMode
   terminalOutput: TerminalOutputMode
@@ -206,6 +220,17 @@ export interface Settings {
   /** ACP agents the user added in Settings, on top of acp-registry.ts. */
   customAcpAgents: CustomAcpAgent[]
   mcpServers: McpServerConfig[]
+  browserOpenLinks: BrowserLinkTarget
+  /** Answers address bar text that is not a URL. */
+  browserSearchEngine: BrowserSearchEngine
+  /** Refuse window.open pop-ups. Links that open in a new tab still work. */
+  browserBlockPopups: boolean
+  /** Off makes the Browser and ListTabs tools fail for every agent. */
+  browserAgentControl: boolean
+  /** Off makes the Computer tool fail for every agent. */
+  computerUse: boolean
+  /** How agents start on the computer. 'full' asks for full access on the first Computer call of a turn. */
+  computerMode: ComputerMode
   sidebarWidth: number
   panelWidth: number
   collapsedProjects: string[]
@@ -233,6 +258,29 @@ export interface WorktreeInfo {
   baseBranch: string | null
 }
 
+/** Where a chat's worktree branch stands against the branch it started from. */
+export interface WorktreeStatus {
+  branch: string
+  baseBranch: string | null
+  /** Commits on the branch that the base does not have. */
+  ahead: number
+  /** Commits on the base that the branch does not have. */
+  behind: number
+  /** The worktree has uncommitted changes. */
+  dirty: boolean
+  /** The branch the project folder is on, where a merge lands. */
+  projectBranch: string | null
+}
+
+export type WorktreeMergeStrategy = 'merge' | 'squash'
+
+/** conflicts lists the files when the merge stopped on them; nothing was changed then. */
+export interface WorktreeMergeResult {
+  merged: boolean
+  hash: string | null
+  conflicts: string[]
+}
+
 export interface ChatUsage {
   inputTokens: number
   outputTokens: number
@@ -242,6 +290,12 @@ export interface ChatUsage {
 }
 
 export interface Chat {
+  /** Why the last run stopped, shown above the message box until the next message. */
+  error?: string
+  /** When the current run began. Stays across an approval wait; the working timer counts from here. */
+  runStartedAt?: number
+  /** True while the history is being summarized, so the status line can say so. */
+  compacting?: boolean
   /** While the chat listens for Event triggers: what it will resume after. */
   resumeAfter?: string | null
   /** Immutable subscription chosen when this chat was created. */
@@ -276,8 +330,6 @@ export interface Chat {
   side?: boolean
   /** Side chats: the chat they were opened from, whose conversation they can see. */
   parentChatId?: string
-  /** Number of inherited timeline items before this side chat's own messages. */
-  sideContextItemCount?: number
 }
 
 export interface UsageWindow {
@@ -331,6 +383,7 @@ export interface PromptMentions {
   files: { name: string; path: string }[]
   chats: { title: string; excerpt: string }[]
   browser: boolean
+  computer?: boolean
   tools: { server: string; name: string }[]
   /** Terminal tabs, or text selected in one, as they were when the message was sent. */
   terminals?: { name: string; tabId: string; cwd: string; text: string; selection: boolean }[]
@@ -344,7 +397,7 @@ export type GitCommand = 'commit' | 'commit-push' | 'push'
 
 export interface MentionChip {
   token: string
-  kind: 'skill' | 'file' | 'chat' | 'browser' | 'mcp' | 'terminal' | 'git'
+  kind: 'skill' | 'file' | 'chat' | 'browser' | 'computer' | 'mcp' | 'terminal' | 'git'
   label: string
   /** Hover text, such as a file's full path. */
   title?: string
@@ -370,6 +423,7 @@ export type ToolKind =
   | 'edit'
   | 'create'
   | 'browser'
+  | 'computer'
   | 'mcp'
   | 'agent'
   | 'ask'
@@ -423,6 +477,8 @@ export interface ApprovalRequest {
   /** 'ask': mode requires approval. 'auto': the approval model declined. */
   source: 'ask' | 'auto'
   reason?: string
+  /** The agent is asking for the whole computer, so the prompt says so plainly. */
+  fullAccess?: boolean
   /** Lets the user approve the same kind of action for the rest of the chat. */
   sessionKey?: string
   sessionLabel?: string

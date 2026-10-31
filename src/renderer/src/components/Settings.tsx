@@ -6,7 +6,9 @@ import {
   Check,
   CircleAlert,
   Cpu,
+  Globe,
   KeyRound,
+  Monitor,
   Pencil,
   Plug,
   Plus,
@@ -16,7 +18,7 @@ import {
   UserRound,
   X
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   ACCOUNT_LABELS,
   ACP_ACCOUNTS,
@@ -26,6 +28,12 @@ import {
   accountSubscription,
   type AccountId,
   type AnalyticsRow,
+  type BrowserDataKind,
+  type BrowserLinkTarget,
+  type BrowserSearchEngine,
+  type ComputerMode,
+  type ComputerPermission,
+  type ComputerPermissions,
   type CustomAcpAgent,
   type CustomProvider,
   type CustomProviderApi,
@@ -50,14 +58,20 @@ import { Markdown } from './Markdown'
 import { SUBSCRIPTION_LABELS } from './ModelPicker'
 import { Button, Dropdown, IconButton, Modal, Segmented, Spinner, Switch, TextInput, type DropdownOption } from './ui'
 
-const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu }[] = [
+const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu; dividerBefore?: boolean; beta?: boolean }[] = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
   { id: 'models', label: 'Models', icon: Boxes },
   { id: 'providers', label: 'Providers', icon: KeyRound },
   { id: 'subscriptions', label: 'Subscriptions', icon: UserRound },
   { id: 'usage', label: 'Usage', icon: Gauge },
-  { id: 'customize', label: 'Customize', icon: Plug }
+  { id: 'customize', label: 'Customize', icon: Plug },
+  { id: 'browser', label: 'Browser', icon: Globe, dividerBefore: true },
+  { id: 'computer', label: 'Computer Use', icon: Monitor, beta: true }
 ]
+
+function BetaBadge(): ReactNode {
+  return <span className="shrink-0 rounded-full border border-line-strong px-1.5 py-px text-[10px] font-medium leading-[14px] text-muted">Beta</span>
+}
 
 function Section({ title, description, children, action }: { title: string; description?: ReactNode; children: ReactNode; action?: ReactNode }): ReactNode {
   return (
@@ -1762,6 +1776,159 @@ function SkillsSection(): ReactNode {
   )
 }
 
+// Browser
+
+function BrowserSection(): ReactNode {
+  const settings = useStore((s) => s.settings)
+  const update = useStore((s) => s.updateSettings)
+  const notify = useStore((s) => s.notify)
+  const [clearing, setClearing] = useState<BrowserDataKind | null>(null)
+  const [confirming, setConfirming] = useState(false)
+
+  const clear = async (kind: BrowserDataKind): Promise<void> => {
+    setConfirming(false)
+    setClearing(kind)
+    try {
+      await window.galaxy.browser.clearData(kind)
+      notify(kind === 'cache' ? 'Browser cache cleared' : 'Cookies and site data cleared')
+    } catch (err) {
+      notify(cleanError(err), 'error')
+    } finally {
+      setClearing(null)
+    }
+  }
+
+  return (
+    <>
+      <Section title="Browsing">
+        <Card>
+          <RowItem label="Open links in" hint="Links in messages and documents. Hold Option for the other one.">
+            <Segmented<BrowserLinkTarget>
+              value={settings.browserOpenLinks}
+              onChange={(browserOpenLinks) => void update({ browserOpenLinks })}
+              options={[
+                { value: 'built-in', label: 'Built-in' },
+                { value: 'default', label: 'Default browser' }
+              ]}
+            />
+          </RowItem>
+          <RowItem label="Search engine" hint="Answers address bar text that is not a URL.">
+            <Select<BrowserSearchEngine>
+              label="Search engine"
+              value={settings.browserSearchEngine}
+              onChange={(browserSearchEngine) => void update({ browserSearchEngine })}
+              options={[
+                { value: 'duckduckgo', label: 'DuckDuckGo' },
+                { value: 'google', label: 'Google' },
+                { value: 'bing', label: 'Bing' },
+                { value: 'brave', label: 'Brave Search' }
+              ]}
+            />
+          </RowItem>
+          <RowItem label="Block pop-ups" hint="Links that open in a new tab still work. Some sign-in pages need pop-ups.">
+            <Switch checked={settings.browserBlockPopups} onChange={(browserBlockPopups) => void update({ browserBlockPopups })} label="Block pop-ups" />
+          </RowItem>
+        </Card>
+      </Section>
+      <Section title="Agents" description="What agents can do in the browser.">
+        <Card>
+          <RowItem label="Browser control" hint="Let agents open pages, click and type.">
+            <Switch checked={settings.browserAgentControl} onChange={(browserAgentControl) => void update({ browserAgentControl })} label="Browser control" />
+          </RowItem>
+        </Card>
+      </Section>
+      <Section title="Site data" description="Stored only in the built-in browser. Your default browser is not affected.">
+        <Card>
+          <RowItem label="Cache" hint="Saved copies of pages and images.">
+            <Button size="sm" disabled={clearing !== null} onClick={() => void clear('cache')}>
+              {clearing === 'cache' ? <Spinner size={12} /> : 'Clear'}
+            </Button>
+          </RowItem>
+          <RowItem label="Cookies and site data" hint="Signs you out of sites in the built-in browser.">
+            <Button size="sm" variant="danger" disabled={clearing !== null} onClick={() => setConfirming(true)}>
+              {clearing === 'site-data' ? <Spinner size={12} /> : 'Clear'}
+            </Button>
+          </RowItem>
+        </Card>
+      </Section>
+      {confirming && (
+        <Modal onClose={() => setConfirming(false)} className="w-[400px] max-w-full p-5">
+          <div role="dialog" aria-label="Clear cookies and site data">
+            <div className="text-[14px] font-semibold text-fg">Clear cookies and site data?</div>
+            <div className="mt-1.5 text-[12.5px] leading-relaxed text-muted">This signs you out of every site in the built-in browser and removes what those sites stored.</div>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button size="sm" onClick={() => setConfirming(false)}>Cancel</Button>
+              <Button variant="danger" size="sm" autoFocus onClick={() => void clear('site-data')}>Clear</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
+  )
+}
+
+// Computer Use
+
+function ComputerSection(): ReactNode {
+  const settings = useStore((s) => s.settings)
+  const update = useStore((s) => s.updateSettings)
+  const notify = useStore((s) => s.notify)
+  const [permissions, setPermissions] = useState<ComputerPermissions | null>(null)
+
+  // Permissions change in System Settings, so look again when the user comes back.
+  useEffect(() => {
+    const refresh = (): void => void window.galaxy.computer.permissions().then(setPermissions).catch(() => {})
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [])
+
+  const permissionRow = (kind: ComputerPermission, label: string, hint: string): ReactNode => (
+    <RowItem label={label} hint={hint}>
+      {permissions?.[kind] ? (
+        <span className="flex shrink-0 items-center gap-1 text-[12px] text-muted">
+          <Check size={13} />
+          Granted
+        </span>
+      ) : (
+        <Button size="sm" onClick={() => void window.galaxy.computer.requestPermission(kind).catch((err) => notify(cleanError(err), 'error'))}>
+          Open Settings
+        </Button>
+      )}
+    </RowItem>
+  )
+
+  return (
+    <>
+      <Section title="Agents" description="An app comes to the front when an agent starts working in it, then the work goes on in the background with a cursor of its own. To draw or drag they ask you first, then have the whole screen until the turn ends. Press Esc to take it back.">
+        <Card>
+          <RowItem label="Computer control" hint="Each chat asks first, unless it runs with Full Access. Stop the chat to stop the agent.">
+            <Switch checked={settings.computerUse} onChange={(computerUse) => void update({ computerUse })} label="Computer control" />
+          </RowItem>
+          {settings.computerUse && (
+            <RowItem label="Default control mode" hint="Full screen asks for full access when an agent starts on the computer.">
+              <Segmented<ComputerMode>
+                value={settings.computerMode}
+                onChange={(computerMode) => void update({ computerMode })}
+                options={[
+                  { value: 'background', label: 'Background' },
+                  { value: 'full', label: 'Full screen' }
+                ]}
+              />
+            </RowItem>
+          )}
+        </Card>
+      </Section>
+      <Section title="macOS permissions" description="You may need to restart Galaxy Code after granting these.">
+        <Card>
+          {permissionRow('accessibility', 'Accessibility', 'Sends clicks and keys to apps.')}
+          {permissionRow('screen', 'Screen Recording', 'Captures app windows.')}
+        </Card>
+      </Section>
+    </>
+  )
+}
+
 export function SettingsPage(): ReactNode {
   const section = useStore((s) => s.settingsOpen)
   const platform = useStore((s) => s.platform)
@@ -1790,25 +1957,31 @@ export function SettingsPage(): ReactNode {
         {SECTIONS.map((entry) => {
           const Icon = entry.icon
           return (
-            <button
-              key={entry.id}
-              type="button"
-              onClick={() => useStore.setState({ settingsOpen: entry.id })}
-              className={cn(
-                'flex h-[30px] items-center gap-2 rounded-md px-2 text-left text-[12.5px] transition-colors',
-                section === entry.id ? 'bg-active text-fg' : 'text-muted hover:bg-hover hover:text-fg'
-              )}
-            >
-              <Icon size={14} />
-              {entry.label}
-            </button>
+            <Fragment key={entry.id}>
+              {entry.dividerBefore && <div className="mx-2 my-1.5 h-px shrink-0 bg-line" />}
+              <button
+                type="button"
+                onClick={() => useStore.setState({ settingsOpen: entry.id })}
+                className={cn(
+                  'flex h-[30px] items-center gap-2 rounded-md px-2 text-left text-[12.5px] transition-colors',
+                  section === entry.id ? 'bg-active text-fg' : 'text-muted hover:bg-hover hover:text-fg'
+                )}
+              >
+                <Icon size={14} />
+                {entry.label}
+                {entry.beta && <BetaBadge />}
+              </button>
+            </Fragment>
           )
         })}
       </nav>
       <main className="my-1.5 mr-1.5 min-w-0 flex-1 overflow-hidden rounded-xl bg-bg shadow-[0_0_0_1px_var(--border)]">
         <div className="h-full overflow-y-auto">
           <div className="mx-auto w-full max-w-[720px] px-8 pb-12 pt-10">
-            <h2 className="mb-6 text-[19px] font-semibold text-fg">{SECTIONS.find((entry) => entry.id === section)?.label}</h2>
+            <h2 className="mb-6 flex items-center gap-2 text-[19px] font-semibold text-fg">
+              {SECTIONS.find((entry) => entry.id === section)?.label}
+              {SECTIONS.find((entry) => entry.id === section)?.beta && <BetaBadge />}
+            </h2>
             {section === 'general' && <GeneralSection />}
             {section === 'models' && <ModelsSection />}
             {section === 'providers' && <ProvidersSection />}
@@ -1825,6 +1998,8 @@ export function SettingsPage(): ReactNode {
                 <SkillsSection />
               </>
             )}
+            {section === 'browser' && <BrowserSection />}
+            {section === 'computer' && <ComputerSection />}
           </div>
         </div>
       </main>

@@ -74,6 +74,12 @@ function defaultSettings(): Settings {
     acpEnabled: true,
     customAcpAgents: [],
     mcpServers: [],
+    browserOpenLinks: 'built-in',
+    browserSearchEngine: 'duckduckgo',
+    browserBlockPopups: false,
+    browserAgentControl: true,
+    computerUse: false,
+    computerMode: 'background',
     sidebarWidth: 272,
     panelWidth: 560,
     collapsedProjects: []

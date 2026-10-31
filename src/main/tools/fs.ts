@@ -314,6 +314,8 @@ Update File hunks use a space for unchanged context, - for removed lines and + f
     const item = ctx.session.item<ToolItem>(ctx.itemId)
     ctx.session.update<ToolItem>(ctx.itemId, { meta: { ...item?.meta, diffs: proposed } })
     const diffs = await applyEditPatch(patch, ctx.cwd, ctx.signal)
+    // A patch whose result matches the files as they are writes nothing. The agent should know that, and it is not an edit to show.
+    if (!diffs.length) return { text: 'No changes: the patch leaves every file as it already was. Read the file before trying again.', meta: { diffs } }
     return {
       text: `Applied patch to ${plural(diffs.length, 'file')}.${diffs.length ? '\n' + diffs.map((diff) => `${diff.created ? 'A' : diff.deleted ? 'D' : 'M'} ${diff.path}`).join('\n') : ''}`,
       meta: { diffs }

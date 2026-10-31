@@ -93,13 +93,22 @@ function transcript(messages: ChatMessage[]): string {
 /** Summarizes a chat's stored history now, as /compact asks. Returns false when there is nothing to fold. */
 export async function compactChat(session: Session, modelId: string, signal: AbortSignal): Promise<boolean> {
   const history = (session.doc.engine.history ?? []) as ChatMessage[]
-  if (history.length < 2) return false
+  if (history.length === 0) return false
   const compacted = await compact(session, modelId, history, signal)
   session.doc.engine.history = compacted
   return true
 }
 
 async function compact(session: Session, modelId: string, messages: ChatMessage[], signal: AbortSignal): Promise<ChatMessage[]> {
+  session.patchChat({ compacting: true })
+  try {
+    return await summarize(session, modelId, messages, signal)
+  } finally {
+    session.patchChat({ compacting: false })
+  }
+}
+
+async function summarize(session: Session, modelId: string, messages: ChatMessage[], signal: AbortSignal): Promise<ChatMessage[]> {
   const summary = await complete(
     modelId,
     [
@@ -259,7 +268,7 @@ async function loop(options: LoopOptions): Promise<string> {
         continue
       }
       if (result.finishReason === 'length') {
-        session.notice('info', 'The response hit the model output limit and was cut off.', env.parentId)
+        session.notice('error', 'The response hit the model output limit and was cut off.', env.parentId)
       }
       break
     }
@@ -325,7 +334,7 @@ async function loop(options: LoopOptions): Promise<string> {
     }
 
     if (step === options.maxSteps - 1) {
-      session.notice('info', `Stopped after ${options.maxSteps} steps. Send a message to continue.`, env.parentId)
+      session.notice('error', `Stopped after ${options.maxSteps} steps. Send a message to continue.`, env.parentId)
     }
   }
   return finalText
@@ -361,7 +370,7 @@ export async function runNative(session: Session, turn: Turn): Promise<void> {
       system: buildSystemPrompt(ctx, turn.mentions),
       messages: history,
       // Multitask keeps every tool; its system prompt limits main to delegating.
-      tools: turn.mode === 'ask' || turn.mode === 'plan' ? toolsForMode(turn.mode) : [...(session.agentId === 'main' ? ALL_TOOLS : toolsForSubagent('general')), ...mcpTools()],
+      tools: turn.mode === 'ask' || turn.mode === 'plan' ? toolsForMode(turn.mode) : session.agentId !== 'main' && session.subagentType === 'explore' ? toolsForSubagent('explore') : [...(session.agentId === 'main' ? ALL_TOOLS : toolsForSubagent('general')), ...mcpTools()],
       env,
       writer,
       effort: turn.effort,

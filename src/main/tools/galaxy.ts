@@ -83,6 +83,12 @@ const READ_ONLY_BROWSER = new Set(['snapshot', 'screenshot', 'console', 'wait', 
 
 const hasPoint = (step: Record<string, unknown>): boolean => step.x !== undefined || step.y !== undefined
 
+/** A scroll at a point is real input to the page, unlike scrolling the window. */
+const readsOnly = (step: Record<string, unknown>): boolean => READ_ONLY_BROWSER.has(String(step.action)) && !hasPoint(step)
+
+/** Reading goes on after a failed step. A scroll moves the page, so it stops with the rest. */
+const runsAfterError = (step: Record<string, unknown>): boolean => readsOnly(step) && step.action !== 'scroll'
+
 function browserSteps(input: Record<string, unknown>): Record<string, unknown>[] {
   return Array.isArray(input.steps) ? input.steps.map((step) => (step ?? {}) as Record<string, unknown>) : []
 }
@@ -112,6 +118,8 @@ function browserStepTitle(step: Record<string, unknown>): string {
       return `Scrolled ${String(step.direction ?? 'down')}${hasPoint(step) ? ` at ${target}` : ''}`
     case 'screenshot':
       return 'Took a screenshot'
+    case 'dialog':
+      return step.accept === false ? 'Set the next dialog to be dismissed' : 'Set the next dialog to be accepted'
     case 'evaluate':
       return 'Ran a script in the page'
     case 'back':
@@ -133,6 +141,10 @@ function browserStepTitle(step: Record<string, unknown>): string {
   }
 }
 
+function requireBrowserControl(): void {
+  if (!store.settings.browserAgentControl) throw new Error('The user turned off agent browser control in Settings. Tell them, and do not try to work around it.')
+}
+
 export const listTabsTool: ToolDef = {
   name: 'ListTabs',
   kind: 'browser',
@@ -141,6 +153,7 @@ export const listTabsTool: ToolDef = {
   parameters: { type: 'object', properties: {}, additionalProperties: false },
   present() { return { title: 'Listed tabs' } },
   async execute(_input, ctx) {
+    requireBrowserControl()
     const tabs = browser.listTabsForChat(ctx.session.team?.chatId ?? ctx.session.id).map(({ title, url, tabIndex }) => ({ tabIndex, title, url }))
     return {
       text: tabs.length ? JSON.stringify(tabs, null, 2) : 'No open browser tabs. You can create one now: call Browser with {"title":"Open example.com","steps":[{"action":"create","url":"https://example.com","background":false}]}, using the requested URL. Do not wait for the user to open a tab.',
@@ -154,7 +167,7 @@ export const browserTool: ToolDef = {
   kind: 'browser',
   description: `Control in-app Chromium tabs in the current chat's window. tabIndex is scoped to that window; use ListTabs to find its tabs. By default tabs open and actions run in the background without opening the sidebar or changing the user's selected tab or keyboard focus. For navigate, set background:false to open the sidebar and select the target tab so the user can watch. Choose based on the user's intent: show pages they ask to open or see; keep research and implementation checks in the background. Use it to check pages you built, reproduce UI bugs, or work through sites that need interaction.
 
-Each call has a short \`title\` and a list of \`steps\`. Steps run in order and the call stops at the first error; the result reports each step's output, and every screenshot comes back. Batch the steps you can already predict into one call, such as navigate then snapshot, or type then press then screenshot. Do not guess what you cannot know yet: refs come from a snapshot and change with the page, so click a ref in a later call, or use a CSS selector you are sure of. Coordinates come from a screenshot, so they belong in a later call too.
+Each call has a short \`title\` and a list of \`steps\`. Steps run in order. After an error, later steps that act on the page are skipped, including scroll, but snapshot, screenshot, console, tabs and wait still run; the result reports each step's output and what failed or was skipped, and every screenshot comes back. Batch the steps you can already predict into one call, such as navigate then snapshot, or type then press then screenshot. Do not guess what you cannot know yet: refs come from a snapshot and change with the page, so click a ref in a later call, or use a CSS selector you are sure of. Coordinates come from a screenshot, so they belong in a later call too.
 
 Instead of a ref or selector, click, type and scroll accept \`x\` and \`y\`, and drag requires them. Use them for canvases, maps, sliders and anything else a snapshot does not list. They are pixels of the tab's latest screenshot image, with the origin at its top-left, and the screenshot result states the image's size. Galaxy Code converts them for the page's device pixel ratio and any downscaling, so never adjust them yourself. Take a new screenshot after the page or its layout changes.
 
@@ -175,7 +188,7 @@ Actions, each a step with its own fields:
 - console: recent console messages from the page.
 - tabs: list browser tabs with title, URL and 1-based tabIndex in sidebar order. ListTabs provides the same list. File preview pages are excluded.
 - close: close the tab at tabIndex.
-Use tabIndex as the only browser tab selector. A step without tabIndex stays on the previous step's tab, so only the first step of a call that continues an existing tab needs it, and later steps need it only to switch tabs. Use create to open a second tab in one call. After close, the next step must name its tabIndex. Indices can change when tabs move or close; use ListTabs to refresh them. Controls work even if the user has another tab selected.
+Use tabIndex as the only browser tab selector. A step without tabIndex stays on the previous step's tab; with none before it, it uses the user's current tab, or the newest tab when no browser tab is showing. Navigate without tabIndex opens a new tab instead, and close always needs tabIndex. Pass tabIndex to work on any other tab. Use create to open a second tab in one call. Indices can change when tabs move or close; use ListTabs to refresh them. Controls work even if the user has another tab selected.
 Examples: {"title":"Open example.com and read the page","steps":[{"action":"navigate","url":"https://example.com"},{"action":"snapshot"}]} reads a page in a new background tab. {"title":"Show the local app","steps":[{"action":"navigate","url":"http://localhost:5000","background":false},{"action":"screenshot"}]} opens and shows the page to the user. {"title":"Submit the search","steps":[{"action":"type","tabIndex":1,"selector":"input[name=q]","text":"hello","submit":true},{"action":"screenshot"}]} works in tab 1. {"title":"Open the third link","steps":[{"action":"click","tabIndex":1,"ref":3}]} is a single step. {"title":"Drag the slider to the right","steps":[{"action":"drag","tabIndex":1,"x":120,"y":340,"toX":480,"toY":340}]} uses coordinates from a screenshot.`,
   parameters: {
     type: 'object',
@@ -190,12 +203,12 @@ Examples: {"title":"Open example.com and read the page","steps":[{"action":"navi
           properties: {
             action: {
               type: 'string',
-              enum: ['create', 'navigate', 'navigate_file', 'snapshot', 'click', 'drag', 'type', 'press', 'scroll', 'screenshot', 'evaluate', 'back', 'forward', 'reload', 'wait', 'console', 'tabs', 'close']
+              enum: ['create', 'navigate', 'navigate_file', 'snapshot', 'click', 'drag', 'type', 'press', 'scroll', 'screenshot', 'evaluate', 'back', 'forward', 'reload', 'wait', 'console', 'dialog', 'tabs', 'close']
             },
             url: { type: 'string' },
             path: { type: 'string', description: 'navigate_file only: the local file to open.' },
             background: { type: 'boolean', description: 'create defaults to false (show the new tab); navigate defaults to true (background). false reveals the sidebar and selects the tab. Use false when the user asks to open or show a page; true for background research and checks.' },
-            tabIndex: { type: 'integer', minimum: 1, description: 'The only browser tab selector: 1-based index from ListTabs, create, or navigate. Omit to stay on the previous step\'s tab. The first step needs it to act on an existing tab, and omits it for tabs, create, or navigate to a new tab.' },
+            tabIndex: { type: 'integer', minimum: 1, description: 'The only browser tab selector: 1-based index from ListTabs, create, or navigate. Omit to stay on the previous step\'s tab, or to use the user\'s current tab when there is none. Required for close. Omit for tabs, create, or navigate to a new tab.' },
             ref: { type: 'integer', description: 'Element ref from the latest snapshot.' },
             selector: { type: 'string', description: 'CSS selector, as an alternative to ref.' },
             x: { type: 'number', description: 'Horizontal pixel in the latest screenshot image, as an alternative to ref or selector.' },
@@ -209,7 +222,8 @@ Examples: {"title":"Open example.com and read the page","steps":[{"action":"navi
             direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
             amount: { type: 'integer' },
             script: { type: 'string' },
-            seconds: { type: 'number' }
+            seconds: { type: 'number' },
+            accept: { type: 'boolean', description: 'dialog only: accept (default) or dismiss the next alert, confirm or prompt. Put the step before the action that opens it; text answers a prompt. Without it, confirms and prompts are dismissed while you work.' }
           },
           required: ['action']
         }
@@ -225,9 +239,10 @@ Examples: {"title":"Open example.com and read the page","steps":[{"action":"navi
     return { title: title || labels[0] || 'Browser', detail: labels.join(' · ') || undefined, meta: opened ? { url: String(opened.url) } : undefined }
   },
   approval(input) {
+    // The call is about to fail, so there is nothing to approve.
+    if (!store.settings.browserAgentControl) return null
     const steps = browserSteps(input)
-    // A scroll at a point is real input to the page, unlike scrolling the window.
-    if (steps.every((step) => READ_ONLY_BROWSER.has(String(step.action)) && !hasPoint(step))) return null
+    if (steps.every(readsOnly)) return null
     // Only the steps are judged; the title is the model's own description of them.
     return {
       action: { tool: 'Browser', steps },
@@ -236,21 +251,31 @@ Examples: {"title":"Open example.com and read the page","steps":[{"action":"navi
     }
   },
   async execute(input, ctx) {
+    requireBrowserControl()
     const steps = browserSteps(input)
     if (steps.length === 0) throw new ToolInputError('`steps` must be a non-empty array')
     const outputs: string[] = []
     const images: ToolImage[] = []
     const files: string[] = []
     const urls: string[] = []
+    const failures: string[] = []
+    const notRun: number[] = []
     const finished = () => ({ text: outputs.join('\n\n'), images: images.length ? images : undefined, meta: { urls, ...(files.length ? { images: files } : {}) } })
     let tabIndex: number | undefined
     for (const [index, step] of steps.entries()) {
       const label = `Step ${index + 1} of ${steps.length}: ${String(step.action ?? '')}`
       try {
         ctx.signal.throwIfAborted()
+        // Set before the step runs, so the reads after a failed step still look at its tab.
+        tabIndex = num(step, 'tabIndex') ?? tabIndex
+        // Later steps assumed the failed one worked, so only what cannot change the page goes on.
+        if (failures.length && !runsAfterError(step)) {
+          notRun.push(index + 1)
+          continue
+        }
         if (step.action === 'navigate_file' && !step.path) throw new ToolInputError('`path` is required for navigate_file')
         const target = step.action === 'navigate_file' ? { ...step, action: 'navigate', url: pathToFileURL(resolvePath(ctx.cwd, String(step.path))).href } : step
-        const action = { ...target, tabIndex: num(step, 'tabIndex') ?? tabIndex } as unknown as BrowserAction
+        const action = { ...target, tabIndex } as unknown as BrowserAction
         const result = await browser.act(ctx.session.team?.chatId ?? ctx.session.id, action, ctx.signal)
         if (action.action === 'close' && result.tabId) ctx.session.emitUi({ type: 'close-panel-tab', tabId: result.tabId })
         // A closed tab leaves nothing to continue on; listing tabs does not move off the current one.
@@ -268,12 +293,13 @@ Examples: {"title":"Open example.com and read the page","steps":[{"action":"navi
         }
       } catch (err) {
         if (steps.length === 1 || isAbortError(err) || ctx.signal.aborted) throw err
-        const skipped = steps.length - index - 1
-        outputs.push(`${label} failed${skipped ? `, ${plural(skipped, 'later step')} not run` : ''}: ${errorMessage(err)}`)
-        return { ...finished(), isError: true }
+        failures.push(`${label} failed: ${errorMessage(err)}`)
       }
     }
-    return finished()
+    if (failures.length === 0) return finished()
+    // Last, because the timeline shows the last line of a failed call.
+    outputs.push(`${failures.join(' ')}${notRun.length ? ` ${plural(notRun.length, 'later step')} not run: ${notRun.join(', ')}.` : ''}`)
+    return { ...finished(), isError: true }
   }
 }
 

@@ -489,6 +489,8 @@ export async function runCodex(session: Session, turn: Turn): Promise<void> {
       approvalPolicy: policy.approvalPolicy,
       sandboxPolicy: policy.sandboxPolicy,
       ...(turn.effort ? { effort: turn.effort } : {}),
+      // Without this Codex omits reasoning summaries, so no thinking ever streams.
+      summary: 'auto',
       serviceTier: turn.fast && turn.model.fastMode ? 'priority' : null
     })
     turnId = started.turn.id

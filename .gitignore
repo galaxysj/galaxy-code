@@ -8,3 +8,4 @@ build/icon.iconset
 *.tsbuildinfo
 *.pdf
 docs
+resources/bin

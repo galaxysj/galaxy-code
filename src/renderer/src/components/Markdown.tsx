@@ -8,6 +8,7 @@ import remarkGfm from 'remark-gfm'
 import { cn, languageForPath } from '../lib/utils'
 import { useStore } from '../store'
 import { CopyButton } from './ui'
+import { openLink } from '../lib/openLink'
 
 function textOf(node: ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') return String(node)
@@ -87,7 +88,7 @@ export const Markdown = memo(function Markdown({ text, root, html, className }: 
             onClick={(event) => {
               event.preventDefault()
               if (!href) return
-              if (/^(https?|mailto):/i.test(href)) void window.galaxy.files.openExternal(href)
+              if (/^(https?|mailto):/i.test(href)) void openLink(href, event)
               else {
                 const ref = fileReference(decodeURIComponent(href.replace(/^file:\/\//, '')))
                 if (ref) openFile(ref.path.startsWith('/') || !root ? ref.path : `${root}/${ref.path.replace(/^\.\//, '')}`, ref.line)

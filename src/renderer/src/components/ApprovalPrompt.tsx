@@ -1,4 +1,4 @@
-import { ChevronDown, ShieldAlert } from 'lucide-react'
+import { ChevronDown, Monitor, ShieldAlert } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ToolItem } from '@shared/types'
 import { basename, cn } from '../lib/utils'
@@ -44,6 +44,8 @@ export function ApprovalPrompt({ chatId, item, remaining, onRespond }: {
       if (event.defaultPrevented || document.querySelector('[data-popover]')) return
       if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
         event.preventDefault()
+        // Giving away the whole computer takes a deliberate click.
+        if (approval.fullAccess) return
         void respond('allow')
       } else if (event.key === 'Escape' && !(event.target as HTMLElement | null)?.closest('input, textarea')) {
         event.preventDefault()
@@ -52,7 +54,27 @@ export function ApprovalPrompt({ chatId, item, remaining, onRespond }: {
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [respond])
+  }, [respond, approval.fullAccess])
+
+  if (approval.fullAccess) {
+    return (
+      <section role="region" aria-label="Full access request" className="composer-swap min-w-0 rounded-2xl border border-danger/40 bg-elev px-4 py-3.5 shadow-composer">
+        <div className="flex items-start gap-2.5">
+          <Monitor size={17} className="mt-0.5 shrink-0 text-danger" />
+          <div className="min-w-0 flex-1">
+            <div className="text-[13.5px] font-semibold text-fg">Allow full access to the computer?</div>
+            <p className="mt-1 text-[12.5px] leading-snug text-muted">The agent will see your screen and use your mouse and keyboard in any app until this turn ends. You cannot use your computer meanwhile. Press Esc at any time to take it back.</p>
+            {approval.reason && <p className="mt-2 break-words text-[13px] text-fg">{approval.reason}</p>}
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-end gap-1.5">
+          <Button size="sm" className="mr-auto" onClick={() => void respond('deny')}>Decline</Button>
+          {approval.sessionKey && approval.sessionLabel && <Button size="sm" title={approval.sessionLabel} onClick={() => void respond('allow-session')}>Allow in this chat</Button>}
+          <Button variant="danger" size="sm" onClick={() => void respond('allow')}>Allow full access</Button>
+        </div>
+      </section>
+    )
+  }
 
   return (
     <section role="region" aria-label="Permission request" className="composer-swap min-w-0 rounded-2xl bg-elev px-4 py-3.5 shadow-composer">

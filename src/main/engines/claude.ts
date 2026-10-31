@@ -8,7 +8,8 @@ import { TurnWriter, type Session, type Turn } from '../agent/session'
 import { bridge, BRIDGE_SERVER_NAME } from '../services/bridge'
 import { skillNameForPath } from '../services/skills'
 import { store } from '../store'
-import { BRIDGE_TOOLS, type ToolEnv } from '../tools'
+import { BRIDGE_TOOLS, messageTool, type ToolEnv } from '../tools'
+import { bashTool } from '../tools/shell'
 import { makeDiff } from '../tools/diff'
 import { displayPath, errorMessage, isImagePath, oneLine, resolvePath, truncateEnd, which } from '../util'
 
@@ -58,8 +59,11 @@ function presentTool(name: string, input: Input, cwd: string, skills: SkillInfo[
       if (skill) return { kind: 'read', title: `Read ${skill} skill`, meta: { skill } }
       return { kind: 'read', title: `Read ${basename(abs)}`, detail: displayPath(cwd, abs) }
     }
-    case 'Skill':
-      return { kind: 'read', title: `Read ${s('skill') || s('command') || 'a'} skill`, meta: { skill: s('skill') || s('command') } }
+    case 'Skill': {
+      const id = s('skill') || s('command')
+      const name = skills.find((skill) => skill.name === id)?.displayName ?? id
+      return { kind: 'read', title: `Read ${name || 'a'} skill`, meta: { skill: id } }
+    }
     case 'Grep':
       return {
         kind: 'grep',
@@ -225,8 +229,12 @@ export async function runClaude(session: Session, turn: Turn): Promise<void> {
   const ctx = await gatherContext(session, { permissionMode: turn.permissionMode, modelName: turn.model.name, ultra: turn.ultra })
   const cwd = ctx.cwd
 
-  // Claude Code has its own question and task tools, so those are not bridged.
-  const bridged = BRIDGE_TOOLS.filter((t) => t.name !== 'Ask' && t.name !== 'Task')
+  // Claude Code has its own question and task tools, so those are not bridged. Shell commands are: Claude Code's own
+  // Bash lives in the CLI, which exits when the turn ends and takes background processes with it, while Galaxy Code's
+  // shells belong to the app and keep running.
+  // An Explore subagent only reads and messages.
+  const explore = session.agentId !== 'main' && session.subagentType === 'explore'
+  const bridged = explore ? [messageTool] : [...BRIDGE_TOOLS, bashTool].filter((t) => t.name !== 'Ask' && t.name !== 'Task')
   const env: ToolEnv = { session, cwd, signal: turn.signal, permissionMode: turn.permissionMode, skills: ctx.skills }
   const handle = await bridge.register(bridged, env)
 
@@ -336,7 +344,7 @@ export async function runClaude(session: Session, turn: Turn): Promise<void> {
     includePartialMessages: true,
     permissionMode: session.agentId === 'main' ? 'default' : 'bypassPermissions',
     allowDangerouslySkipPermissions: session.agentId !== 'main',
-    disallowedTools: ['Agent', 'Task', 'Edit', 'MultiEdit', ...(session.agentId !== 'main' ? ['AskUserQuestion'] : [])],
+    disallowedTools: ['Agent', 'Task', 'Edit', 'MultiEdit', 'Bash', 'BashOutput', 'KillShell', 'KillBash', ...(explore ? ['Write', 'NotebookEdit', 'Skill', 'TodoWrite'] : []), ...(session.agentId !== 'main' ? ['AskUserQuestion'] : [])],
     canUseTool,
     settingSources: ['user', 'project', 'local'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: buildBridgeInstructions(ctx, bridged.map((t) => t.name), turn.mentions) },
@@ -418,7 +426,12 @@ export async function runClaude(session: Session, turn: Turn): Promise<void> {
         const key = message.parent_tool_use_id ?? ''
         const writer = writerFor(message.parent_tool_use_id)
         const wasStreamed = streamed.delete(key)
-        if (message.error) failure = `Claude Code reported an error: ${String(message.error).replace(/_/g, ' ')}`
+        if (message.error) {
+          // The reply is the error's own text, such as a usage-credits notice; it belongs above the message box, not in the chat.
+          const text = (message.message.content as { type: string; text?: string }[]).filter((block) => block.type === 'text').map((block) => block.text ?? '').join('').trim()
+          failure = text || `Claude Code reported an error: ${String(message.error).replace(/_/g, ' ')}`
+          break
+        }
         const usage = message.message.usage as { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined
         if (usage && !message.parent_tool_use_id) {
           lastContext = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)

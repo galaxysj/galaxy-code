@@ -212,6 +212,12 @@ function Welcome(): ReactNode {
 const EMPTY_ITEMS: never[] = []
 const MIN_PANEL_WIDTH = 360
 
+/** Closes the error dialog and hands the error to the agent in the current chat. */
+function fixWithAgent(message: string, close: () => void): void {
+  close()
+  void useStore.getState().send(`I hit this error. Please investigate and fix it:\n\n${message}`, [])
+}
+
 export function App(): ReactNode {
   const ready = useStore((s) => s.ready)
   const init = useStore((s) => s.init)
@@ -222,6 +228,7 @@ export function App(): ReactNode {
   const attachmentPreview = useStore((s) => s.attachmentPreview)
   const toast = useStore((s) => s.toast)
   const gitError = useStore((s) => s.gitError)
+  const appError = useStore((s) => s.appError)
   const updateSettings = useStore((s) => s.updateSettings)
   const savedSidebar = useStore((s) => s.settings.sidebarWidth)
   const savedPanel = useStore((s) => s.settings.panelWidth)
@@ -292,7 +299,7 @@ export function App(): ReactNode {
         <Resizer width={sidebarWidth} min={210} max={420} direction={1} onChange={setSidebarWidth} onStart={() => setResizing('sidebar')} onEnd={() => setResizing(null)} onCommit={(width) => void updateSettings({ sidebarWidth: Math.round(width) })} />
       </aside>
       <div className="workspace-surface flex min-w-0 flex-1 overflow-hidden">
-        <main className={cn('chat-surface flex min-w-[380px] flex-1 flex-col overflow-hidden', (sidebarOpen || panelOpen) && 'my-1.5 mr-1.5 rounded-xl shadow-[0_0_0_1px_var(--border)]')}>
+        <main className={cn('chat-surface flex min-w-[380px] flex-1 flex-col overflow-hidden', (sidebarOpen || panelOpen) && 'm-1.5 rounded-xl shadow-[0_0_0_1px_var(--border)]')}>
           <ChatHeader chat={chat} sidebarOpen={sidebarOpen} />
           {chat ? (
             <>
@@ -311,7 +318,8 @@ export function App(): ReactNode {
         </aside>
       </div>
       <SettingsPage />
-      {gitError && <ErrorDialog title="Instant commit failed" message={gitError} onClose={() => useStore.setState({ gitError: null })} />}
+      {gitError && <ErrorDialog title="Instant commit failed" message={gitError} onClose={() => useStore.setState({ gitError: null })} onFix={() => fixWithAgent(gitError, () => useStore.setState({ gitError: null }))} />}
+      {appError && <ErrorDialog title="Error" message={appError} onClose={() => useStore.setState({ appError: null })} onFix={() => fixWithAgent(appError, () => useStore.setState({ appError: null }))} />}
       {antigravityConsent && <AntigravityConsent requestId={antigravityConsent} />}
       {attachmentPreview && <AttachmentPreview key={attachmentPreview.id} file={attachmentPreview} />}
       {toast && (

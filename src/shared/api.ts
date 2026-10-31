@@ -7,9 +7,12 @@ import type {
   AcpConfigOption,
   Attachment,
   Bootstrap,
+  BrowserDataKind,
   BrowserState,
   Chat,
   ChatEvent,
+  ComputerPermission,
+  ComputerPermissions,
   CreateProjectInput,
   FileView,
   FileDiff,
@@ -21,12 +24,17 @@ import type {
   SendInput,
   Settings,
   SkillInfo,
-  UiEvent
+  UiEvent,
+  WorktreeMergeResult,
+  WorktreeMergeStrategy,
+  WorktreeStatus
 } from './types'
 
 export interface ReviewOptions {
-  mode: 'uncommitted' | 'unstaged' | 'staged' | 'commit'
+  mode: 'uncommitted' | 'unstaged' | 'staged' | 'commit' | 'branch'
   commit?: string
+  /** branch mode: the branch to compare with. */
+  base?: string
 }
 
 export interface ReviewCommit {
@@ -104,7 +112,7 @@ export interface GalaxyApi {
     revert(chatId: string, itemId: string, messageOnly?: boolean): Promise<string | null>
     /** Undoes the last revert. */
     redo(chatId: string): Promise<void>
-    /** /compact: summarizes the chat's history now. Galaxy models only. */
+    /** /compact: summarizes the chat's history now. Galaxy models and Codex only. */
     compact(chatId: string): Promise<void>
   }
 
@@ -129,7 +137,8 @@ export interface GalaxyApi {
   }
 
   editor: {
-    complete(request: { path: string; prefix: string; suffix: string }): Promise<{ text: string; offset: number; next: string | null }>
+    complete(request: { path: string; prefix: string; suffix: string; related?: string; edits?: string }): Promise<{ text: string; offset: number; next: string | null }>
+    suggestEdit(request: { path: string; text: string; offset: number; related?: string; edits?: string }): Promise<{ startLine: number; endLine: number; text: string } | null>
     inlineEdit(request: { path: string; before: string; selection: string; after: string; instruction: string; modelId: string; requestId: string }): Promise<string>
     cancelInlineEdit(requestId: string): Promise<void>
     terminalCommand(request: { instruction: string; cwd: string; output: string; modelId: string; requestId: string }): Promise<string>
@@ -157,6 +166,13 @@ export interface GalaxyApi {
     state(tabId?: string): Promise<BrowserState>
     /** A JPEG data URL of the page as it looks now, or null before it has painted. */
     frame(tabId?: string): Promise<string | null>
+    clearData(kind: BrowserDataKind): Promise<void>
+  }
+
+  computer: {
+    permissions(): Promise<ComputerPermissions>
+    /** Registers the app with macOS and opens the matching Privacy & Security list. */
+    requestPermission(kind: ComputerPermission): Promise<void>
   }
 
   terminal: {
@@ -165,6 +181,13 @@ export interface GalaxyApi {
     resize(tabId: string, cols: number, rows: number): Promise<void>
     interrupt(tabId: string): Promise<void>
     close(tabId: string): Promise<void>
+  }
+  worktree: {
+    /** null for a chat with no worktree. */
+    status(chatId: string): Promise<WorktreeStatus | null>
+    merge(chatId: string, strategy: WorktreeMergeStrategy): Promise<WorktreeMergeResult>
+    /** Brings the base branch's new commits into the worktree. */
+    update(chatId: string): Promise<WorktreeMergeResult>
   }
   review: {
     status(cwd: string): Promise<{ isRepo: boolean }>

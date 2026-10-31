@@ -1,4 +1,4 @@
-import { accountEnabled, canUseChatSubscription, effectiveEffort, findModel, normalizeEffort, resolveModels } from '@shared/catalog'
+import { accountEnabled, canUseChatSubscription, usesGalaxyTools, effectiveEffort, findModel, normalizeEffort, resolveModels } from '@shared/catalog'
 import {
   ACCOUNT_LABELS,
   ACP_ACCOUNTS,
@@ -14,15 +14,21 @@ import {
   type ResolvedModel,
   type SendInput,
   type UiEvent,
-  type UserItem
+  type UserItem,
+  type WorktreeInfo,
+  type WorktreeMergeResult,
+  type WorktreeMergeStrategy,
+  type WorktreeStatus
 } from '@shared/types'
 import { disposeAcp, runAcp } from '../engines/acp'
 import { runClaude } from '../engines/claude'
-import { disposeCodex, runCodex } from '../engines/codex'
+import { disposeCodex } from '../engines/codex'
 import { compactChat, runNative } from '../engines/native'
+import { CHATGPT_PREFIX } from '../services/chatgpt'
 import { changedFiles, removeCheckpoints, restoreFiles, snapshot } from '../services/checkpoints'
-import { createWorktree, gitInfo, removeWorktree } from '../services/git'
+import { createWorktree, gitInfo, mergeWorktree, removeWorktree, updateWorktree, worktreeStatus } from '../services/git'
 import { browser } from '../services/browser'
+import { computer } from '../services/computer'
 import { terminals } from '../services/terminal'
 import { stopRevertedBackgroundProcesses } from '../tools/shell'
 import { generateTitle, MissingKeyError } from '../services/openrouter'
@@ -31,6 +37,11 @@ import { errorMessage, isAbortError, newId, oneLine, truncateMiddle } from '../u
 import { Session, type Turn } from './session'
 import type { PendingEvent } from '../tools/events'
 import { AgentTeam } from './team'
+
+/** The id the native engine sends: Codex models go to the ChatGPT backend. */
+function engineModelId(model: { id: string; subscription: string }): string {
+  return model.subscription === 'Codex' ? `${CHATGPT_PREFIX}${model.id}` : model.id
+}
 
 class ChatManager {
   private sessions = new Map<string, Session>()
@@ -103,33 +114,22 @@ class ChatManager {
       ...(input.side ? { side: true, workspace: 'local' as const, ...(parent ? { parentChatId: parent.id, worktree: parent.worktree } : {}) } : {})
     }
     store.saveChat(chat)
-    if (parent) this.cloneInto(chat, parent)
+    if (parent) this.inheritContext(chat, parent)
     this.emitChat({ type: 'chat', chat: { ...chat } })
     return chat
   }
 
   /**
-   * Starts a side chat as a temporary copy of its main chat: the same timeline and, where the
-   * engine allows, the agent's own session, so it continues with the full context.
+   * Gives a side chat its main chat's context and nothing else: the timeline starts empty, and the
+   * agent continues from a copy of its session where the engine allows.
    */
-  private cloneInto(chat: Chat, parent: Chat): void {
+  private inheritContext(chat: Chat, parent: Chat): void {
     const source = this.session(parent.id)
     source.flushDeltas()
-    const items = structuredClone(source.doc.items).map((item): Item => {
-      if (item.kind === 'user') return { ...item, revertible: false }
-      if ((item.kind === 'assistant' || item.kind === 'reasoning') && item.streaming) return { ...item, streaming: false }
-      if (item.kind === 'tool' && (item.status === 'running' || item.status === 'pending' || item.status === 'awaiting')) {
-        return { ...item, status: 'error', error: 'Still running in the main chat', approval: undefined }
-      }
-      return item
-    })
     const doc = store.doc(chat.id)
-    doc.items.push(...items, { kind: 'notice', level: 'info', text: `Side chat copied from "${parent.title}". What happens here does not change the main chat.`, id: newId('i_'), ts: Date.now() })
-    chat.sideContextItemCount = doc.items.length
-    store.saveChat(chat)
     const engine = source.doc.engine
     const sameModel = parent.modelKey === chat.modelKey
-    // The agent picks up from the copy. Engines whose session cannot be copied get the transcript on the first turn.
+    // Engines whose session cannot be copied get the transcript on the first turn.
     if (sameModel && engine.history?.length) doc.engine.history = structuredClone(engine.history)
     if (sameModel && engine.claudeSessionId) Object.assign(doc.engine, { claudeSessionId: engine.claudeSessionId, forkClaude: true })
     doc.engine.parentSeen = doc.engine.history || doc.engine.claudeSessionId ? source.doc.items.length : 0
@@ -290,6 +290,7 @@ class ChatManager {
     const revertedItemIds = new Set(items.slice(index).map((item) => item.id))
     await terminals.stopReverted(chatId, revertedItemIds)
     stopRevertedBackgroundProcesses(chatId, revertedItemIds)
+    this.dropRevertedAgents(session, revertedItemIds)
     if (files.length) await restoreFiles(chatId, await session.cwd(), target, files)
 
     const { undone: _undone, ...engine } = session.doc.engine
@@ -305,17 +306,53 @@ class ChatManager {
     return null
   }
 
+  /** A chat's worktree with its project, for the actions on its branch. */
+  private worktreeOf(chatId: string): { session: Session; project: string; worktree: WorktreeInfo } {
+    const session = this.session(chatId)
+    const worktree = session.chat.worktree
+    const project = store.project(session.chat.projectId)
+    if (!worktree || !project) throw new Error('This chat has no worktree.')
+    return { session, project: project.path, worktree }
+  }
+
+  async worktreeStatus(chatId: string): Promise<WorktreeStatus | null> {
+    const chat = store.chats.get(chatId)
+    return chat?.worktree ? worktreeStatus(this.worktreeOf(chatId).project, chat.worktree) : null
+  }
+
+  async mergeWorktree(chatId: string, strategy: WorktreeMergeStrategy): Promise<WorktreeMergeResult> {
+    const { session, project, worktree } = this.worktreeOf(chatId)
+    if (session.running) throw new Error('Wait for the chat to finish before merging.')
+    const result = await mergeWorktree(project, worktree, strategy)
+    if (result.merged) session.notice('info', `Merged ${worktree.branch} into ${worktree.baseBranch} (${result.hash})`)
+    return result
+  }
+
+  async updateWorktree(chatId: string): Promise<WorktreeMergeResult> {
+    const { session, worktree } = this.worktreeOf(chatId)
+    if (session.running) throw new Error('Wait for the chat to finish before updating the branch.')
+    const result = await updateWorktree(worktree)
+    if (result.merged) session.notice('info', `Updated ${worktree.branch} from ${worktree.baseBranch}`)
+    return result
+  }
+
   /** /compact: folds the chat's history into a summary now, for Galaxy models. */
   async compact(chatId: string): Promise<void> {
     const session = this.session(chatId)
     if (session.running) throw new Error('Wait for the chat to finish before compacting.')
     const model = findModel(this.models(), session.chat.modelKey)
-    if (model?.subscription !== 'Default') throw new Error('/compact works with Galaxy models only.')
+    if (!model || !usesGalaxyTools(model.subscription)) throw new Error('/compact works with Galaxy models and Codex only.')
     const controller = new AbortController()
     session.controller = controller
     session.patchChat({ status: 'running' })
     try {
-      if (!(await compactChat(session, model.id, controller.signal))) {
+      // A chat that began on another engine, or before the history was kept, has a timeline but no stored history; summarize that.
+      const engine = session.doc.engine
+      if (!engine.history?.length) {
+        const lines = transcriptLines(session.doc.items)
+        if (lines) engine.history = [{ role: 'user', content: `<earlier_conversation>\n${lines}\n</earlier_conversation>` }]
+      }
+      if (!(await compactChat(session, engineModelId(model), controller.signal))) {
         session.notice('info', 'There is nothing to compact yet.')
         return
       }
@@ -390,7 +427,8 @@ class ChatManager {
       throw new Error(`${ACCOUNT_LABELS[account]} is turned off. Enable it in ${where}.`)
     }
     if (account === 'claude') return runClaude(session, turn)
-    if (account === 'codex') return runCodex(session, turn)
+    // Codex models run on the ChatGPT subscription with Galaxy Code's own tools.
+    if (account === 'codex') return runNative(session, { ...turn, model: { ...turn.model, id: engineModelId(turn.model) } })
     return runAcp(account, session, turn)
   }
 
@@ -405,6 +443,7 @@ class ChatManager {
       let stop = (): void => {}
       const entry = {
         label: event.label,
+        itemId: event.itemId,
         cancel: () => {
           if (done) return
           done = true
@@ -417,7 +456,7 @@ class ChatManager {
       stop = event.start((detail) => {
         if (done) return
         entry.cancel()
-        this.resume(session, `The event you set fired: ${event.label}.\n\n${detail}\n\nContinue the task.`, event.label, mode)
+        this.resume(session, `The event you set fired: ${event.label}.\n\n${detail}\n\nContinue the task.`, event.label, mode, event.itemId)
       })
       if (done) stop()
     }
@@ -431,9 +470,35 @@ class ChatManager {
   }
 
   /** Resumes the agent now, or after the turn in flight. */
-  private resume(session: Session, text: string, label: string, mode?: AgentMode): void {
-    if (session.running) session.pendingResumes.push({ text, label, mode })
+  private resume(session: Session, text: string, label: string, mode?: AgentMode, itemId?: string): void {
+    if (session.running) session.pendingResumes.push({ text, label, mode, itemId })
     else void this.runTurn(session, text, [], undefined, { event: label, mode })
+  }
+
+  /**
+   * Subagents a stopped turn left running with no event set for them have nobody to report to. Their reports wait
+   * for the user's next message instead of being lost.
+   */
+  private holdReports(session: Session, team: AgentTeam): void {
+    for (const worker of team.status().filter((entry) => entry.state === 'running')) {
+      void team.wait(worker.id).then((report) => {
+        if (!session.background.has(team)) return
+        session.pendingResumes.push({ text: `Subagent ${worker.id} (${worker.name}) finished. Its report:\n\n${report}`, label: `${worker.name} finishes`, itemId: worker.id })
+        session.notice('info', `${worker.name} finished while the agent was stopped. Its report goes to the agent with your next message.`)
+      })
+    }
+  }
+
+  /** A revert discards what the removed turns set in motion: their events, whether waiting or already fired, and their subagents. */
+  private dropRevertedAgents(session: Session, itemIds: Set<string>): void {
+    for (const entry of [...session.listening]) if (entry.itemId && itemIds.has(entry.itemId)) entry.cancel()
+    session.pendingResumes = session.pendingResumes.filter((entry) => !entry.itemId || !itemIds.has(entry.itemId))
+    for (const team of [...session.background]) {
+      if (!team.status().some((worker) => itemIds.has(worker.id))) continue
+      session.background.delete(team)
+      team.abort()
+      team.close()
+    }
   }
 
   /** Cancels every event, and aborts subagents still running from earlier turns. */
@@ -447,7 +512,7 @@ class ChatManager {
   private async runTurn(session: Session, text: string, attachments: SendInput['attachments'], mentions: PromptMentions = { skills: [], files: [], chats: [], browser: false, tools: [] }, extra: { mode?: AgentMode; plan?: string; event?: string } = {}): Promise<void> {
     const chat = session.chat
     // Ask and Plan are only enforced by Galaxy Code's own tools.
-    const mode = extra.mode && findModel(this.models(), chat.modelKey)?.subscription === 'Default' ? extra.mode : undefined
+    const mode = extra.mode && usesGalaxyTools(findModel(this.models(), chat.modelKey)?.subscription) ? extra.mode : undefined
     const controller = new AbortController()
     session.controller = controller
     const startedAt = Date.now()
@@ -455,6 +520,8 @@ class ChatManager {
 
     session.lastUserText = text
     session.events = []
+    // Events that fired while an earlier turn was stopped were never delivered. A message from the user brings them along.
+    const missed = extra.event ? [] : session.pendingResumes.splice(0)
     // A turn an event resumed still runs in its mode, but its message shows no mode label.
     const userItem = session.add<UserItem>({ kind: 'user', text, ...(extra.event ? { event: extra.event } : {}), attachments, prompt: mentions, ...(mentions.chips?.length ? { mentions: mentions.chips } : {}), ...(mode && !extra.event ? { mode } : {}), ...(extra.plan ? { plan: extra.plan } : {}) })
     // Earlier conversation for an agent whose session was reset by a revert.
@@ -462,7 +529,7 @@ class ChatManager {
     const parent = this.parentContext(session)
     // The main chat's attachments go along as real attachments, so images can be seen too.
     const shared = parent.attachments.filter((file) => !attachments.some((own) => own.path === file.path))
-    session.patchChat({ status: 'running', updatedAt: startedAt, unread: false })
+    session.patchChat({ status: 'running', updatedAt: startedAt, unread: false, error: undefined })
     if (isFirst) void this.nameChat(session, text || attachments[0]?.name || '')
 
     let failed = false
@@ -481,7 +548,7 @@ class ChatManager {
       const ultra = chat.ultra && model.ultraEffort !== null && mode !== 'multitask'
       delete session.doc.engine.replay
       const turn: Turn = {
-        text: [parent.text, replay, text].filter(Boolean).join('\n\n'),
+        text: [parent.text, replay, missed.length ? `<events_while_stopped>\nThese events fired while you were stopped:\n\n${missed.map((entry) => entry.text).join('\n\n')}\n</events_while_stopped>` : '', text].filter(Boolean).join('\n\n'),
         attachments: [...shared, ...attachments],
         mentions,
         model,
@@ -501,7 +568,7 @@ class ChatManager {
       if (!controller.signal.aborted && !isAbortError(err)) {
         failed = true
         const message = err instanceof MissingKeyError ? err.message : errorMessage(err)
-        session.notice('error', message)
+        session.patchChat({ error: message })
       }
     } finally {
       // Events stay set when the turn is stopped, since the subagents they wait for keep running.
@@ -511,8 +578,10 @@ class ChatManager {
       const background = !!team && team.hasRunning() && (controller.signal.aborted || events.some((event) => event.keepsTeam))
       if (!background) await team?.wait()
       browser.finishRun(session.id)
+      computer.finishRun(session.id)
       if (background) {
         session.background.add(team!)
+        if (controller.signal.aborted && events.length === 0) this.holdReports(session, team!)
         void team!.wait().then(() => { session.background.delete(team!); team!.close() })
       }
       else team?.close()
@@ -534,6 +603,7 @@ class ChatManager {
       store.flushDocs()
 
       if (events.length) this.listen(session, events, mode)
+      if (interrupted && session.pendingResumes.length && !session.chat.queued.length) session.notice('info', 'A subagent finished while the agent was stopped. Its report goes to the agent with your next message.')
       const next = session.chat.queued[0]
       const resume = interrupted ? undefined : session.pendingResumes.shift()
       if (next && (next.steer || (!interrupted && !failed))) {

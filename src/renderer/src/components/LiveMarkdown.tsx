@@ -15,6 +15,7 @@ import { $prose } from '@milkdown/kit/utils'
 import { codeHighlight } from '../lib/codeHighlight'
 import { concealedDoc, revealMarks } from '../lib/revealMarks'
 import { Markdown } from './Markdown'
+import { openLink } from '../lib/openLink'
 
 const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/
 
@@ -100,7 +101,7 @@ export function LiveMarkdown({ initial, onChange, onSave }: { initial: string; o
               const link = (event.target as HTMLElement).closest('a')
               if (!link) return false
               event.preventDefault()
-              if (/^https?:/i.test(link.href)) void window.galaxy.files.openExternal(link.href)
+              if (/^https?:/i.test(link.href)) void openLink(link.href, event)
               return true
             }
           }

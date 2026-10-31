@@ -81,16 +81,25 @@ export function isTerminalRead(item: ToolItem): boolean {
 }
 
 /** Base verbs for a failed call's title, by tool kind. */
-const ATTEMPTED: Partial<Record<ToolItem['tool'], string>> = { read: 'Read', edit: 'Edit', create: 'Edit', bash: 'Run', grep: 'Search', glob: 'Search', websearch: 'Search', list: 'List', webfetch: 'Fetch', browser: 'Browse' }
+const ATTEMPTED: Partial<Record<ToolItem['tool'], string>> = { read: 'Read', edit: 'Edit', create: 'Edit', bash: 'Run', grep: 'Search', glob: 'Search', websearch: 'Search', list: 'List', webfetch: 'Fetch' }
 
 /** A failed call reads as "<Verb> attempted", such as "Read attempted" or "Run attempted"; null when it did not fail. */
 export function attemptedTitle(item: ToolItem): string | null {
+  // An Edit that changed nothing did not do what it set out to.
+  if (isNoChange(item)) return 'Edit attempted'
   if (item.status !== 'error') return null
   // A command that ran and exited non-zero keeps its title and shows its exit code; only a call that could not run is "attempted".
   if (item.tool === 'bash' && typeof item.meta?.exitCode === 'number') return null
+  // Browser and Computer calls keep their title even when a step fails; the reason stays in the details.
+  if (item.tool === 'browser' || item.tool === 'computer') return null
   const first = item.title.match(/^([A-Za-z]+)(?=\s|$)/)?.[1]
   const verb = ATTEMPTED[item.tool] ?? (first ? FORMS.get(first)?.[0] : undefined) ?? item.name ?? 'Call'
   return `${verb} attempted`
+}
+
+/** An Edit that ran but left every file as it was, so it has no diff. */
+export function isNoChange(item: ToolItem): boolean {
+  return item.tool === 'edit' && item.status === 'done' && !item.meta?.diffs?.length && /^(No changes:|Applied patch to 0 files)/.test(item.output ?? '')
 }
 
 export function toolActivityTitle(item: ToolItem): string {
@@ -106,7 +115,7 @@ export function toolActivityTitle(item: ToolItem): string {
   if (isToolOutputRead(item)) return isToolInProgress(item) ? 'Reading tool output' : 'Read tool output'
   // These titles are names, questions or labels the model wrote, which need not start with one verb.
   if (item.tool === 'agent' || item.tool === 'ask' || item.tool === 'mcp') return item.title
-  if ((item.tool === 'present' || item.tool === 'browser') && (item.input as { title?: unknown } | null)?.title) return item.title
+  if ((item.tool === 'present' || item.tool === 'browser' || item.tool === 'computer') && (item.input as { title?: unknown } | null)?.title) return item.title
   const first = item.title.match(/^([A-Za-z]+)(?=\s|$)/)?.[1]
   const forms = first ? FORMS.get(first) : undefined
   if (!forms) return item.title

@@ -129,7 +129,12 @@ async function loadReview(cwd: string, options?: ReviewOptions): Promise<{ isRep
     args = ['show', '--format=', '--root', '--diff-merges=first-parent', ...flags, hash, '--', '.']
   } else if (mode === 'unstaged') args = ['diff', ...flags, '--', '.']
   else if (mode === 'staged') args = ['diff', '--cached', ...flags, '--', '.']
-  else if (mode === 'uncommitted') {
+  else if (mode === 'branch') {
+    // Everything the branch adds to its base, committed or not, without what the base gained since.
+    const base = options?.base?.trim()
+    if (!base || base.startsWith('-')) throw new Error('This branch has no base to compare with.')
+    args = ['diff', (await git(cwd, ['merge-base', '--end-of-options', base, 'HEAD'])).trim(), ...flags, '--', '.']
+  } else if (mode === 'uncommitted') {
     const head = await git(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']).catch(() => '')
     // An unborn branch compares the working tree with Git's empty tree.
     const base = head.trim() || (await git(cwd, ['hash-object', '-w', '-t', 'tree', '--', process.platform === 'win32' ? 'NUL' : '/dev/null'])).trim()
@@ -139,7 +144,7 @@ async function loadReview(cwd: string, options?: ReviewOptions): Promise<{ isRep
   const diffArgs = args.slice(0, split)
   const [stats, untracked] = await Promise.all([
     git(cwd, [...diffArgs, '--numstat', '-z', '--', '.'], 0),
-    mode === 'uncommitted' || mode === 'unstaged' ? git(cwd, ['ls-files', '--others', '--exclude-standard', '-z', '--', '.']) : Promise.resolve('')
+    mode === 'uncommitted' || mode === 'unstaged' || mode === 'branch' ? git(cwd, ['ls-files', '--others', '--exclude-standard', '-z', '--', '.']) : Promise.resolve('')
   ])
   // Discover text files first; do not generate image or binary patches at all.
   const paths = stats.split('\0').flatMap((entry) => {
@@ -170,7 +175,7 @@ async function loadReview(cwd: string, options?: ReviewOptions): Promise<{ isRep
 const pendingReviews = new Map<string, Promise<{ isRepo: boolean; diffs: FileDiff[] }>>()
 
 export function readReview(cwd: string, options?: ReviewOptions): Promise<{ isRepo: boolean; diffs: FileDiff[] }> {
-  const key = JSON.stringify([resolve(cwd), options?.mode ?? 'uncommitted', options?.commit ?? ''])
+  const key = JSON.stringify([resolve(cwd), options?.mode ?? 'uncommitted', options?.commit ?? '', options?.base ?? ''])
   const pending = pendingReviews.get(key)
   if (pending) return pending
   const job: Promise<{ isRepo: boolean; diffs: FileDiff[] }> = loadReview(cwd, options).finally(() => {

@@ -21,7 +21,10 @@ import {
   Hammer,
   MessageSquareDiff,
   MessagesSquare,
+  GitBranch,
   GitCompare,
+  GitMerge,
+  GitPullRequestArrow,
   CloudUpload,
   GitCommitHorizontal,
   Plus,
@@ -36,7 +39,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { FileView, FileDiff } from '@shared/types'
 import type { ReviewCommit } from '@shared/api'
 import { isReviewTextDiff } from '@shared/review'
-import { basename, cn, formatBytes, languageForPath, relativeTo } from '../lib/utils'
+import { basename, cn, formatBytes, languageForPath, plural, relativeTo } from '../lib/utils'
 import { useStore, type OpenFile, type PanelTab } from '../store'
 import { LiveMarkdown } from './LiveMarkdown'
 import { Markdown } from './Markdown'
@@ -49,7 +52,7 @@ import { InlineModel, usableUtilityModels } from '@shared/models'
 import { CloseSideChatDialog, SideChatPane } from './SideChat'
 import { cleanError } from './Settings'
 import { isInstant, runGitCommand } from '../lib/gitCommands'
-import type { GitCommand } from '@shared/types'
+import type { GitCommand, WorktreeMergeStrategy, WorktreeStatus } from '@shared/types'
 
 // Browser
 
@@ -437,7 +440,7 @@ function TerminalPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean })
     } catch (error) {
       if (stoppedAsk.current === requestId) return
       setAnswer((current) => (current?.requestId === requestId ? null : current))
-      setAsk((current) => (current ? { ...current, busy: false, error: String(error instanceof Error ? error.message : error) } : current))
+      setAsk((current) => (current ? { ...current, busy: false, error: String(error instanceof Error ? error.message : error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') } : current))
     } finally {
       stop()
     }
@@ -595,7 +598,7 @@ function TerminalPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean })
   )
 }
 
-type ReviewMode = 'last-turn' | 'uncommitted' | 'unstaged' | 'staged' | 'commit'
+type ReviewMode = 'last-turn' | 'branch' | 'uncommitted' | 'unstaged' | 'staged' | 'commit'
 
 const REVIEW_MODES: DropdownOption<ReviewMode>[] = [
   { value: 'last-turn', label: 'Last turn', icon: <MessageSquareDiff size={13.5} /> },
@@ -605,10 +608,84 @@ const REVIEW_MODES: DropdownOption<ReviewMode>[] = [
   { value: 'commit', label: 'Commit…', icon: <GitCommitHorizontal size={13.5} /> }
 ]
 
+/** A worktree chat's branch against its base: where it stands, and the actions that land it. */
+function WorktreeBar({ chatId, status, running, onChanged }: { chatId: string; status: WorktreeStatus; running: boolean; onChanged(): void }): ReactNode {
+  const [busy, setBusy] = useState<WorktreeMergeStrategy | 'update' | null>(null)
+  const [menu, setMenu] = useState(false)
+  const [conflicts, setConflicts] = useState<string[]>([])
+  const anchor = useRef<HTMLDivElement>(null)
+  const { branch, baseBranch: base, ahead, behind, dirty, projectBranch } = status
+  const run = async (action: WorktreeMergeStrategy | 'update'): Promise<void> => {
+    setBusy(action)
+    setConflicts([])
+    const { notify } = useStore.getState()
+    try {
+      const result = action === 'update' ? await window.galaxy.worktree.update(chatId) : await window.galaxy.worktree.merge(chatId, action)
+      if (result.merged) notify(action === 'update' ? `Updated from ${base}` : `Merged into ${base} (${result.hash})`, 'info')
+      else setConflicts(result.conflicts)
+      onChanged()
+    } catch (error) {
+      notify(cleanError(error), 'error')
+      onChanged()
+    } finally {
+      setBusy(null)
+    }
+  }
+  const askAgent = (): void => {
+    const files = conflicts.join(', ')
+    setConflicts([])
+    void useStore.getState().send(`Merge ${base} into this branch and resolve the conflicts in ${files}. Commit the result.`, [], undefined, false, undefined, undefined, chatId)
+  }
+  const blocked = !base
+    ? 'This worktree has no base branch.'
+    : running ? 'Wait for the chat to finish.'
+    : projectBranch !== base ? `The project folder is on ${projectBranch ?? 'a detached HEAD'}. Switch it to ${base} to merge.`
+    : !ahead && !dirty ? `Nothing to merge into ${base}.`
+    : undefined
+  const facts = [ahead ? `${plural(ahead, 'commit')} ahead` : '', behind ? `${behind} behind` : '', dirty ? 'uncommitted changes' : ''].filter(Boolean)
+  return (
+    <div className="shrink-0 border-b border-line px-3 py-1.5 text-[12px]">
+      <div className="flex min-h-7 items-center gap-2">
+        <GitBranch size={13} className="shrink-0 text-subtle" />
+        <span className="min-w-0 flex-1 truncate text-muted" title={`${branch} → ${base ?? '?'}`}>
+          {branch} → {base ?? '?'}{facts.length ? ` · ${facts.join(' · ')}` : ' · up to date'}
+        </span>
+        {behind > 0 && (
+          <Button size="sm" disabled={busy !== null || running} title={`Bring ${base}'s new commits into this branch.`} onClick={() => void run('update')}>
+            {busy === 'update' ? <Spinner size={12} /> : <GitPullRequestArrow size={13} />} Update
+          </Button>
+        )}
+        <div ref={anchor} className="flex shrink-0 items-center">
+          <Button size="sm" variant="primary" disabled={busy !== null || !!blocked} title={blocked ?? `Merge ${branch} into ${base}, committing uncommitted changes first.`} onClick={() => void run('merge')} className="rounded-r-none">
+            {busy === 'merge' || busy === 'squash' ? <Spinner size={12} /> : <GitMerge size={13} />} Merge
+          </Button>
+          <Button size="sm" variant="primary" aria-label="More merge actions" disabled={busy !== null || !!blocked} onClick={() => setMenu((open) => !open)} className="w-4 rounded-l-none border-l border-white/20 px-0!">
+            <ChevronDown size={12} />
+          </Button>
+          <Popover open={menu} onClose={() => setMenu(false)} anchor={anchor} placement="bottom-end" className="w-48 p-1">
+            <MenuItem icon={<GitMerge size={13} />} label="Squash and merge" onClick={() => { setMenu(false); void run('squash') }} />
+          </Popover>
+        </div>
+      </div>
+      {conflicts.length > 0 && (
+        <div role="alert" className="mt-1.5 flex items-start gap-2 rounded-lg bg-inset px-2.5 py-2">
+          <div className="min-w-0 flex-1 text-muted">
+            <div>This conflicts with {base}, so nothing was changed.</div>
+            <div className="mt-0.5 break-all font-mono text-[11.5px] text-subtle">{conflicts.join(', ')}</div>
+          </div>
+          <Button size="sm" disabled={running} onClick={askAgent}>Ask the agent to resolve</Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): ReactNode {
   const chatId = useStore((s) => tab.chatId ?? s.activeChatId)
   const items = useStore((s) => chatId ? s.items[chatId] : undefined)
   const chatStatus = useStore((s) => chatId ? s.chats[chatId]?.status : undefined)
+  const worktree = useStore((s) => chatId ? s.chats[chatId]?.worktree ?? null : null)
+  const [worktreeStatus, setWorktreeStatus] = useState<WorktreeStatus | null>(null)
   const [git, setGit] = useState<{ isRepo: boolean; dirty: boolean; hasRemote: boolean } | null>(null)
   const [gitMenu, setGitMenu] = useState(false)
   // An action picked from the menu takes the main button until it finishes.
@@ -616,7 +693,8 @@ function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): 
   const [committing, setCommitting] = useState<GitCommand | null>(null)
   const commitStarted = useRef(false)
   const gitMenuAnchor = useRef<HTMLDivElement>(null)
-  const [mode, setMode] = useState<ReviewMode>('last-turn')
+  const [mode, setMode] = useState<ReviewMode>(worktree?.baseBranch ? 'branch' : 'last-turn')
+  const modes: DropdownOption<ReviewMode>[] = worktree?.baseBranch ? [{ value: 'branch', label: 'Branch', icon: <GitBranch size={13.5} />, title: `Everything this branch adds to ${worktree.baseBranch}` }, ...REVIEW_MODES] : REVIEW_MODES
   const [commits, setCommits] = useState<ReviewCommit[] | null>(null)
   const [commitError, setCommitError] = useState('')
   const [commit, setCommit] = useState('')
@@ -645,6 +723,15 @@ function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): 
     void window.galaxy.review.state(tab.cwd).then((value) => { if (!cancelled) setGit(value) }).catch(() => { if (!cancelled) setGit(null) })
     return () => { cancelled = true }
   }, [tab.cwd, visible, reload, tab.nonce, chatStatus])
+  useEffect(() => {
+    if (!visible || !chatId || !worktree) {
+      setWorktreeStatus(null)
+      return
+    }
+    let cancelled = false
+    void window.galaxy.worktree.status(chatId).then((value) => { if (!cancelled) setWorktreeStatus(value) }).catch(() => { if (!cancelled) setWorktreeStatus(null) })
+    return () => { cancelled = true }
+  }, [chatId, worktree, visible, reload, tab.nonce, chatStatus])
   // A commit is loading until the agent's turn for it ends.
   useEffect(() => {
     if (!committing) return
@@ -726,14 +813,14 @@ function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): 
     setInitError('')
     setReview(null)
     setError('')
-    void window.galaxy.review.read(tab.cwd, { mode, ...(mode === 'commit' ? { commit } : {}) }).then((value) => {
+    void window.galaxy.review.read(tab.cwd, { mode, ...(mode === 'commit' ? { commit } : {}), ...(mode === 'branch' ? { base: worktree?.baseBranch ?? '' } : {}) }).then((value) => {
       if (!cancelled) {
         setReview(value)
         setIsRepo(value.isRepo)
       }
     }).catch((error) => { if (!cancelled) setError(cleanError(error)) })
     return () => { cancelled = true }
-  }, [tab.cwd, visible, reload, tab.nonce, mode, commit])
+  }, [tab.cwd, visible, reload, tab.nonce, mode, commit, worktree?.baseBranch])
   // Main action: Commit & Push, Commit when there is no remote, Push once everything is committed.
   const gitBusy = committing !== null
   const gitActions = {
@@ -758,7 +845,7 @@ function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): 
   return (
     <div className="flex h-full flex-col">
       <div className="flex min-h-10 shrink-0 items-center gap-2 border-b border-line px-3 py-1">
-        <Dropdown<ReviewMode> label="Review changes" value={mode} options={REVIEW_MODES} onChange={setMode} className="shrink-0" />
+        <Dropdown<ReviewMode> label="Review changes" value={mode} options={modes} onChange={setMode} className="shrink-0" />
         <IconButton label="Refresh changes" onClick={() => setReload((value) => value + 1)}><RotateCw size={13} /></IconButton>
         {mode === 'commit' && isRepo === true && !!commits?.length && !commitError && (
           <Dropdown
@@ -782,6 +869,7 @@ function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): 
           </div>
         )}
       </div>
+      {worktreeStatus && chatId && <WorktreeBar chatId={chatId} status={worktreeStatus} running={chatStatus === 'running' || chatStatus === 'awaiting'} onChanged={() => setReload((value) => value + 1)} />}
       <div className={cn('selectable min-h-0 flex-1 overflow-auto px-4 py-3', centered && 'flex items-center justify-center text-center')}>
         {displayError ? <div role="alert" className="max-w-md whitespace-pre-wrap break-words text-[12px] text-danger">{displayError}</div>
           : needsRepository ? <div className="flex max-w-md flex-col items-center gap-3">

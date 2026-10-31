@@ -27,7 +27,7 @@ import {
   type WorkspaceMode
 } from '@shared/types'
 
-export type SettingsSection = 'general' | 'models' | 'providers' | 'subscriptions' | 'usage' | 'customize'
+export type SettingsSection = 'general' | 'models' | 'providers' | 'subscriptions' | 'usage' | 'customize' | 'browser' | 'computer'
 
 export interface Draft {
   projectId: string | null
@@ -198,6 +198,7 @@ interface State {
   toast: { id: number; text: string; tone: 'info' | 'error' } | null
   /** An Instant commit failure, shown in a dialog. */
   gitError: string | null
+  appError: string | null
 
   init(): Promise<void>
   selectChat(chatId: string | null): void
@@ -485,6 +486,7 @@ export const useStore = create<State>((set, get) => {
     settingsOpen: null,
     toast: null,
     gitError: null,
+    appError: null,
 
     setActivityCollapsed(key, collapsed) {
       set((s) => ({ activityCollapsed: { ...s.activityCollapsed, [key]: collapsed } }))
@@ -934,6 +936,10 @@ export const useStore = create<State>((set, get) => {
     },
 
     notify(text, tone = 'info') {
+      if (tone === 'error') {
+        set({ appError: text })
+        return
+      }
       const id = Date.now()
       set({ toast: { id, text, tone } })
       setTimeout(() => {

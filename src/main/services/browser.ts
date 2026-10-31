@@ -1,6 +1,7 @@
-import { WebContentsView, type BrowserWindow, type WebContents } from 'electron'
+import { dialog, session, WebContentsView, type BrowserWindow, type WebContents } from 'electron'
 import type { Rect } from '@shared/api'
-import type { BrowserState } from '@shared/types'
+import type { BrowserDataKind, BrowserSearchEngine, BrowserState } from '@shared/types'
+import { store } from '../store'
 import { errorMessage, newId, sleep, truncateEnd } from '../util'
 import { agentCursorScript, type CursorUpdate } from './browserCursor'
 
@@ -26,6 +27,7 @@ export interface BrowserAction {
     | 'reload'
     | 'wait'
     | 'console'
+    | 'dialog'
   url?: string
   ref?: number
   selector?: string
@@ -44,6 +46,8 @@ export interface BrowserAction {
   script?: string
   seconds?: number
   full_text?: boolean
+  /** dialog only: accept (default) or dismiss the next alert, confirm or prompt. `text` answers a prompt. */
+  accept?: boolean
 }
 
 export interface BrowserResult {
@@ -54,8 +58,71 @@ export interface BrowserResult {
   image?: { mime: string; base64: string }
 }
 
+interface LoadFailure {
+  url: string
+  code: number
+  name: string
+  description: string
+}
+
+const escapeHtml = (value: string): string => value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] as string)
+
+/** What went wrong and what to try, in the words a browser would use. */
+function failureCopy(failure: LoadFailure): { title: string; hint: string } {
+  let host = failure.url
+  try {
+    host = new URL(failure.url).host || failure.url
+  } catch { /* Keep the whole address. */ }
+  switch (failure.name) {
+    case 'ERR_CONNECTION_REFUSED':
+      return { title: `${host} refused to connect.`, hint: 'Check that the server is running, and that the address and port are right. A dev server may need to be started first.' }
+    case 'ERR_NAME_NOT_RESOLVED':
+      return { title: `${host}'s server IP address could not be found.`, hint: 'Check the address for typos, and that you are online.' }
+    case 'ERR_INTERNET_DISCONNECTED':
+      return { title: 'There is no internet connection.', hint: 'Check your network cable, modem and router, or reconnect to Wi-Fi.' }
+    case 'ERR_CONNECTION_TIMED_OUT':
+    case 'ERR_TIMED_OUT':
+      return { title: `${host} took too long to respond.`, hint: 'The server may be down or busy. Try again in a moment.' }
+    case 'ERR_CONNECTION_RESET':
+    case 'ERR_CONNECTION_CLOSED':
+      return { title: `The connection to ${host} was interrupted.`, hint: 'Try again. If it keeps happening, the server may be restarting.' }
+    case 'ERR_FILE_NOT_FOUND':
+      return { title: 'This file could not be found.', hint: 'It may have been moved or deleted.' }
+    default:
+      return /^ERR_CERT_|^ERR_SSL_/.test(failure.name)
+        ? { title: `The connection to ${host} is not private.`, hint: 'The site\'s security certificate could not be verified.' }
+        : { title: `${host} could not be reached.`, hint: failure.description || 'Something went wrong while loading the page.' }
+  }
+}
+
+/** The page shown in place of one that failed to load. It keeps the address in view and offers a retry. */
+function failurePageUrl(failure: LoadFailure): string {
+  const { title, hint } = failureCopy(failure)
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Can't reach this page</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+:root{color-scheme:light dark}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;color:#202124}
+.box{max-width:480px;padding:32px}
+.icon{width:44px;height:44px;border-radius:50%;border:2px solid currentColor;opacity:.55;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:600;margin-bottom:20px}
+h1{font-size:20px;font-weight:600;margin:0 0 10px}
+p{margin:0 0 8px;color:#5f6368}
+code{font:12px ui-monospace,Menlo,monospace;color:#5f6368;word-break:break-all}
+button{margin-top:18px;padding:7px 16px;border-radius:8px;border:0;background:#1a73e8;color:#fff;font:inherit;font-weight:500;cursor:pointer}
+button:hover{background:#1765cc}
+@media (prefers-color-scheme:dark){body{background:#202124;color:#e8eaed}p,code{color:#9aa0a6}button{background:#8ab4f8;color:#202124}button:hover{background:#aecbfa}}
+</style></head><body><div class="box"><div class="icon">!</div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(hint)}</p><p><code>${escapeHtml(failure.name)} (${failure.code})</code></p><p><code>${escapeHtml(failure.url)}</code></p><button id="retry">Try again</button></div><script>document.getElementById('retry').onclick=()=>location.replace(${JSON.stringify(failure.url).replace(/</g, '\\u003c')})</script></body></html>`
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+}
+
 const HOME_URL = 'about:blank'
 const SCREENSHOT_WIDTH = 1400
+const PARTITION = 'persist:galaxy-browser'
+
+const SEARCH_URLS: Record<BrowserSearchEngine, string> = {
+  duckduckgo: 'https://duckduckgo.com/?q=',
+  google: 'https://www.google.com/search?q=',
+  bing: 'https://www.bing.com/search?q=',
+  brave: 'https://search.brave.com/search?q='
+}
 
 function hasPoint(action: BrowserAction): boolean {
   return action.x !== undefined || action.y !== undefined
@@ -127,6 +194,9 @@ class BrowserService {
   private cursorWaitingAtCenter = false
   private consoleLog: string[] = []
   private favicon = ''
+  private failure: LoadFailure | null = null
+  private dialogLog: string[] = []
+  private dialogReply: { accept: boolean; text?: string } | null = null
   private faviconVersion = 0
   private listeners = new Set<(state: BrowserState) => void>()
   requestNewTab: (url: string, openedByAgent: boolean) => void = () => {}
@@ -159,7 +229,7 @@ class BrowserService {
     if (this.view) return this.view
     if (!this.window) throw new Error('The app window is not available')
     const view = new WebContentsView({
-      webPreferences: { partition: 'persist:galaxy-browser', sandbox: true, contextIsolation: true, backgroundThrottling: false }
+      webPreferences: { partition: PARTITION, sandbox: true, contextIsolation: true, backgroundThrottling: false }
     })
     view.setBackgroundColor('#ffffff')
     view.setBorderRadius(8)
@@ -172,7 +242,18 @@ class BrowserService {
       if (this.cursorWaitingAtCenter) void this.updateCursor({ action: 'center' })
       else if (this.agentActive && this.cursorPosition) void this.updateCursor({ action: 'show', ...this.cursorPosition })
     })
-    wc.on('did-start-navigation', (_event, _url, inPlace, mainFrame) => { if (mainFrame && !inPlace) { this.favicon = ''; this.faviconVersion++; this.emit() } })
+    wc.on('did-start-navigation', (_event, url, inPlace, mainFrame) => {
+      if (!mainFrame || inPlace) return
+      if (!url.startsWith('data:')) this.failure = null
+      this.favicon = ''
+      this.faviconVersion++
+      this.emit()
+    })
+    wc.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+      // A superseded or redirected load reports ERR_ABORTED; the page still arrives.
+      if (isMainFrame && code !== -3 && !url.startsWith('data:')) this.showFailure({ url, code, name: description, description })
+    })
+    this.watchDialogs(wc)
     wc.on('page-favicon-updated', (_event, urls) => {
       const url = urls.find((url) => /^(https?:|data:image\/)/i.test(url))
       if (!url) return
@@ -189,7 +270,8 @@ class BrowserService {
         } catch { /* Keep the fallback icon when the site has no usable favicon. */ }
       })()
     })
-    wc.setWindowOpenHandler(({ url }) => {
+    wc.setWindowOpenHandler(({ url, disposition }) => {
+      if (disposition === 'new-window' && store.settings.browserBlockPopups) return { action: 'deny' }
       if (/^https?:/i.test(url)) this.requestNewTab(url, this.agentActive)
       return { action: 'deny' }
     })
@@ -241,7 +323,9 @@ class BrowserService {
 
   state(): BrowserState {
     const wc = this.view?.webContents
-    const url = wc?.getURL() ?? ''
+    const current = wc?.getURL() ?? ''
+    // The error page stands in for the address that failed, which stays in the address bar.
+    const url = this.failure && current.startsWith('data:text/html') ? this.failure.url : current
     return {
       favicon: this.favicon,
       url: url === HOME_URL ? '' : url,
@@ -271,7 +355,71 @@ class BrowserService {
     if (/^(https?|file|about|data):/i.test(value)) return value
     if (/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(value)) return `http://${value}`
     if (/^[^\s]+\.[^\s]{2,}$/.test(value)) return `https://${value}`
-    return `https://duckduckgo.com/?q=${encodeURIComponent(value)}`
+    return `${SEARCH_URLS[store.settings.browserSearchEngine]}${encodeURIComponent(value)}`
+  }
+
+  /** Replaces a page that failed to load with the error page. */
+  private showFailure(failure: LoadFailure): void {
+    if (this.failure?.url === failure.url && this.wc.getURL().startsWith('data:text/html')) return
+    this.failure = failure
+    void this.wc.loadURL(failurePageUrl(failure)).catch(() => {})
+  }
+
+  /**
+   * JavaScript alert, confirm and prompt boxes, answered through the DevTools protocol. While the agent works, an
+   * alert is accepted and a confirm or prompt is dismissed unless the agent said otherwise with the dialog action.
+   * Otherwise the user answers in a sheet on the app window.
+   */
+  private watchDialogs(wc: WebContents): void {
+    const api = wc.debugger
+    try {
+      if (!api.isAttached()) api.attach('1.3')
+    } catch {
+      return
+    }
+    api.on('message', (_event, method, params) => {
+      if (method === 'Page.javascriptDialogOpening') void this.answerDialog(wc, params as { type: string; message: string; url?: string; defaultPrompt?: string })
+    })
+    void api.sendCommand('Page.enable').catch(() => {})
+  }
+
+  private async answerDialog(wc: WebContents, opening: { type: string; message: string; url?: string; defaultPrompt?: string }): Promise<void> {
+    const kind = opening.type
+    let reply = this.dialogReply
+    this.dialogReply = null
+    if (!reply) {
+      if (this.agentActive) {
+        reply = { accept: kind === 'alert' || kind === 'beforeunload' }
+      } else {
+        let host = ''
+        try {
+          host = new URL(opening.url ?? '').host
+        } catch { /* The dialog has no usable address. */ }
+        const ask = kind === 'confirm' || kind === 'prompt' || kind === 'beforeunload'
+        const options = {
+          type: 'info' as const,
+          message: host ? `${host} says` : 'This page says',
+          detail: kind === 'beforeunload' ? 'Leave this page? Changes you made may not be saved.' : kind === 'prompt' ? `${opening.message}\n\nDefault answer: ${opening.defaultPrompt ?? ''}` : opening.message,
+          buttons: ask ? [kind === 'beforeunload' ? 'Leave' : 'OK', 'Cancel'] : ['OK'],
+          defaultId: 0,
+          cancelId: ask ? 1 : 0
+        }
+        try {
+          const result = this.window && !this.window.isDestroyed() ? await dialog.showMessageBox(this.window, options) : await dialog.showMessageBox(options)
+          reply = { accept: result.response === 0, ...(kind === 'prompt' ? { text: opening.defaultPrompt ?? '' } : {}) }
+        } catch {
+          reply = { accept: false }
+        }
+      }
+    }
+    const shown = `${kind}: ${truncateEnd(opening.message, 300)}`
+    if (this.agentActive) {
+      const accepted = reply.accept
+      this.dialogLog.push(`A ${shown} was ${accepted ? 'accepted' : 'dismissed'}.${!accepted && (kind === 'confirm' || kind === 'prompt') ? ' Add a dialog step with accept before the action to accept it.' : ''}`)
+    }
+    try {
+      await wc.debugger.sendCommand('Page.handleJavaScriptDialog', { accept: reply.accept, ...(reply.text !== undefined ? { promptText: reply.text } : {}) })
+    } catch { /* The dialog already went away, for example when the page navigated. */ }
   }
 
   async navigate(url: string, openedByAgent = false): Promise<void> {
@@ -282,7 +430,14 @@ class BrowserService {
       await this.wc.loadURL(this.normalizeUrl(url))
     } catch (err) {
       // ERR_ABORTED fires on redirects and superseded loads, the page still arrives.
-      if (!/ERR_ABORTED|\(-3\)/.test(errorMessage(err))) throw err
+      const message = errorMessage(err)
+      if (/ERR_ABORTED|\(-3\)/.test(message)) { /* Fine. */ }
+      else {
+        // A page that cannot load shows the error page instead of raising an error.
+        const failed = /(ERR_[A-Z_]+) \((-?\d+)\) loading '([^']*)'/.exec(message)
+        if (!failed) throw err
+        this.showFailure({ url: failed[3], code: Number(failed[2]), name: failed[1], description: failed[1] })
+      }
     }
     if (this.cursorWaitingAtCenter) await this.updateCursor({ action: 'center' })
   }
@@ -464,6 +619,13 @@ class BrowserService {
   }
 
   async act(action: BrowserAction, signal?: AbortSignal): Promise<BrowserResult> {
+    const result = await this.run(action, signal)
+    // Dialogs that opened while the step ran are reported with its result.
+    const dialogs = this.dialogLog.splice(0)
+    return dialogs.length ? { ...result, text: `${result.text}\n\nBrowser dialogs:\n${dialogs.join('\n')}` } : result
+  }
+
+  private async run(action: BrowserAction, signal?: AbortSignal): Promise<BrowserResult> {
     this.ensureView()
     this.setAgentActive(true)
     const wc = this.wc
@@ -473,7 +635,9 @@ class BrowserService {
         if (!action.url) throw new Error('`url` is required')
         await this.navigate(action.url, true)
         await this.settle(signal)
-        return { text: await this.describe(true) }
+        const failure = this.failure
+        const prefix = failure ? `The page failed to load: ${failure.name} (${failure.code}) for ${failure.url}. The browser shows an error page with a Try again button.\n\n` : ''
+        return { text: `${prefix}${await this.describe(true)}` }
       }
       case 'snapshot':
         return { text: await this.describe(action.full_text !== false) }
@@ -560,6 +724,10 @@ class BrowserService {
         }
         await sleep(Math.min(30, Math.max(0.1, action.seconds ?? 1)) * 1000, signal)
         return { text: 'Done waiting.' }
+      }
+      case 'dialog': {
+        this.dialogReply = { accept: action.accept !== false, ...(action.text !== undefined ? { text: action.text } : {}) }
+        return { text: `The next dialog will be ${action.accept === false ? 'dismissed' : 'accepted'}${action.text !== undefined ? ` with ${JSON.stringify(action.text)}` : ''}.` }
       }
       case 'console':
         return { text: this.consoleLog.length ? this.consoleLog.slice(-60).join('\n') : 'No console messages.' }
@@ -659,6 +827,14 @@ class BrowserTabs {
     const order = this.order.get(window.id) ?? []
     return [...order.filter((id) => ids.includes(id)), ...ids.filter((id) => !order.includes(id))]
   }
+  /** The tab the user has open, or the newest tab when no browser tab is showing. */
+  private currentTab(window: BrowserWindow): string {
+    const ids = this.tabIds(window)
+    const active = this.active.get(window.id)
+    const id = active && ids.includes(active) ? active : ids.at(-1)
+    if (!id) throw new Error('No open browser tabs. Use Browser with action "create" and the requested url to open one.')
+    return id
+  }
   listTabs(window?: BrowserWindow): (BrowserState & { tabIndex: number; tabId: string; visible: boolean })[] {
     if (this.windows.size === 0) return []
     return this.tabIds(this.windowFor(undefined, window)).map((tabId, index) => {
@@ -695,6 +871,11 @@ class BrowserTabs {
   forward(id?: string, window?: BrowserWindow): void { this.get(id, window).forward() }
   reload(id?: string, window?: BrowserWindow): void { this.get(id, window).reload() }
   stop(id?: string, window?: BrowserWindow): void { this.get(id, window).stop() }
+  async clearData(kind: BrowserDataKind): Promise<void> {
+    const data = session.fromPartition(PARTITION)
+    if (kind === 'cache') await data.clearCache()
+    else await data.clearStorageData()
+  }
   async act(chatId: string, action: BrowserAction, signal?: AbortSignal): Promise<BrowserResult> {
     if (action.action === 'create') {
       action = { ...action, action: 'navigate', url: action.url || 'about:blank', tabIndex: undefined, background: action.background ?? false }
@@ -715,8 +896,9 @@ class BrowserTabs {
         else throw new Error(`No browser tab at index ${action.tabIndex}. Use Browser with action "create" and a url to open a new tab, or ListTabs to find an existing tab.`)
       } else id = selected
     } else {
-      if (action.action !== 'navigate') throw new Error('tabIndex is required. Use ListTabs to find a tab, then pass its tabIndex.')
-      id = this.create(window)
+      // Closing is the one action not worth guessing at: it would take the tab the user is on.
+      if (action.action === 'close') throw new Error('tabIndex is required to close a tab. Use ListTabs to find it.')
+      id = action.action === 'navigate' ? this.create(window) : this.currentTab(window)
     }
     if (action.action === 'close') {
       this.close(id, window)

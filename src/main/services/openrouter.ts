@@ -2,10 +2,11 @@ import { shell } from 'electron'
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { BYOK_PROVIDERS, byokProvider, directEffort, directModelId, parseCustomModel, type ByokProvider, type ProviderId } from '@shared/catalog'
+import { AUTO_MODEL, BYOK_PROVIDERS, byokProvider, directEffort, directModelId, parseCustomModel, type ByokProvider, type ProviderId } from '@shared/catalog'
 import { resolveAutoApprovalModel, TitleModel, type Effort } from '@shared/models'
 import type { CustomProvider } from '@shared/types'
 import { store } from '../store'
+import { CHATGPT_API, CHATGPT_PREFIX, chatgptHeaders } from './chatgpt'
 import { errorMessage, oneLine } from '../util'
 
 const APP_HEADERS = {
@@ -43,6 +44,8 @@ interface Route {
   provider: Pick<ByokProvider, 'id' | 'efforts'> | null
   /** The format the endpoint speaks. */
   api: 'chat' | 'responses'
+  /** Set for the ChatGPT subscription backend. Called after a 401 to get fresh headers. */
+  renewHeaders?: () => Promise<Record<string, string>>
 }
 
 function customProvider(id: string): CustomProvider | undefined {
@@ -65,6 +68,12 @@ function routeFor(model: string): Route {
   const key = provider && !store.settings.disabledProviders.includes(provider.id) && store.providerKey(provider.id)
   if (provider && key) return { base: provider.baseUrl, headers: directHeaders(provider, key), model: directModelId(provider, model), provider, api: 'chat' }
   return { base: OPENROUTER_API, headers: authHeaders(), model, provider: null, api: 'chat' }
+}
+
+/** Routes a ChatGPT subscription model (chatgpt/<id>) to the backend the Codex CLI uses; every other model goes through routeFor. */
+async function resolveRoute(model: string): Promise<Route> {
+  if (!model.startsWith(CHATGPT_PREFIX)) return routeFor(model)
+  return { base: CHATGPT_API, headers: await chatgptHeaders(), model: model.slice(CHATGPT_PREFIX.length), provider: null, api: 'responses', renewHeaders: () => chatgptHeaders(true) }
 }
 
 /** History may come from OpenRouter or another provider; strict APIs reject the fields they do not know. */
@@ -222,7 +231,7 @@ export async function standardPrices(): Promise<Map<string, TokenPrice>> {
 
 let usageCheck: { at: number; used: number } | null = null
 
-/** Stops a turn once OpenRouter usage reaches the limit set in Settings. Usage is rechecked every 30 seconds; a failed check lets the turn run. */
+/** Stops a turn once OpenRouter usage reaches the limit set in Settings (Auto is exempt). Usage is rechecked every 30 seconds; a failed check lets the turn run. */
 async function assertCreditLimit(): Promise<void> {
   const limit = store.settings.creditLimit
   if (limit === null) return
@@ -281,17 +290,28 @@ function responsesInput(messages: ChatMessage[]): { instructions?: string; input
 
 /** A turn over the OpenAI Responses API, reported the same way as a chat completion. */
 async function streamResponses(route: Route, req: StreamRequest): Promise<StreamResult> {
+  const input = responsesInput(req.messages)
   const body = {
     model: route.model,
-    ...responsesInput(req.messages),
+    ...input,
     stream: true,
     store: false,
+    ...(route.renewHeaders ? { instructions: input.instructions ?? '', include: ['reasoning.encrypted_content'], parallel_tool_calls: true } : {}),
+    ...(route.renewHeaders && req.effort && req.effort !== 'none' ? { reasoning: { effort: req.effort, summary: 'auto' } } : {}),
+    ...(route.renewHeaders && req.fast ? { service_tier: 'priority' } : {}),
     ...(req.tools?.length ? { tools: req.tools.map(({ function: fn }) => ({ type: 'function', ...fn })), tool_choice: 'auto' } : {})
   }
   let res: Response | null = null
+  let renewed = false
   for (let attempt = 0; attempt < 4; attempt++) {
     res = await fetch(`${route.base}/responses`, { method: 'POST', headers: route.headers, body: JSON.stringify(body), signal: req.signal })
     if (res.ok) break
+    if (res.status === 401 && route.renewHeaders && !renewed) {
+      renewed = true
+      route.headers = await route.renewHeaders()
+      attempt--
+      continue
+    }
     const retryable = res.status === 429 || res.status === 408 || res.status >= 500
     if (!retryable || attempt === 3) throw new Error(`${await readError(res)} [${res.status}]`)
     await new Promise((r) => setTimeout(r, 800 * 2 ** attempt))
@@ -355,10 +375,11 @@ async function streamResponses(route: Route, req: StreamRequest): Promise<Stream
 }
 
 export async function streamChat(req: StreamRequest): Promise<StreamResult> {
-  const route = routeFor(req.model)
+  const route = await resolveRoute(req.model)
   if (route.api === 'responses') return streamResponses(route, req)
   const direct = route.provider
-  if (!direct) await assertCreditLimit()
+  // Auto runs on free models, so the credit limit does not stop it. Premium and every paid model still stop at the limit.
+  if (!direct && req.model !== AUTO_MODEL.id) await assertCreditLimit()
   const body: Record<string, unknown> = {
     model: route.model,
     messages: direct ? directMessages(direct, req.messages) : withCacheMarkers(req.model, req.messages),
@@ -476,8 +497,36 @@ export async function streamChat(req: StreamRequest): Promise<StreamResult> {
 }
 
 /** One-shot completion for short utility prompts. */
+/** The OpenRouter credits are used up or the limit set in Settings is reached. */
+function isCreditFailure(err: unknown): boolean {
+  return /credit limit|\[402\]|insufficient credits|more credits|can only afford|payment required/i.test(errorMessage(err))
+}
+
+/**
+ * Runs a helper call, such as a chat title, a Tab completion or a commit message, and runs it again on the free Auto
+ * router when its OpenRouter model cannot be paid for. Chats keep the model the user picked and stop instead.
+ */
+export async function withAutoFallback<T>(model: string, run: (model: string) => Promise<T>): Promise<T> {
+  try {
+    return await run(model)
+  } catch (err) {
+    if (model === AUTO_MODEL.id || model.startsWith(CHATGPT_PREFIX) || parseCustomModel(model) || byokProvider(model) || !store.openRouterKey || !isCreditFailure(err)) throw err
+    try {
+      return await run(AUTO_MODEL.id)
+    } catch {
+      throw err
+    }
+  }
+}
+
 export async function complete(model: string, messages: ChatMessage[], signal?: AbortSignal, extra: Record<string, unknown> = {}): Promise<string> {
-  const route = routeFor(model)
+  const route = await resolveRoute(model)
+  if (!route.provider && !route.renewHeaders && model !== AUTO_MODEL.id) await assertCreditLimit()
+  if (route.renewHeaders) {
+    // The ChatGPT backend only streams.
+    const result = await streamResponses(route, { model, messages, signal: signal ?? new AbortController().signal, onText: () => {}, onReasoning: () => {} })
+    return result.content
+  }
   if (route.api === 'responses') {
     const res = await fetch(`${route.base}/responses`, { method: 'POST', headers: route.headers, body: JSON.stringify({ model: route.model, ...responsesInput(messages), store: false }), signal })
     if (!res.ok) throw new Error(await readError(res))
@@ -490,7 +539,7 @@ export async function complete(model: string, messages: ChatMessage[], signal?: 
     body: JSON.stringify({ model: route.model, messages: route.provider ? directMessages(route.provider, messages) : messages, stream: false, ...(route.provider ? {} : extra) }),
     signal
   })
-  if (!res.ok) throw new Error(await readError(res))
+  if (!res.ok) throw new Error(`${await readError(res)} [${res.status}]`)
   const json = (await res.json()) as { choices?: { message?: { content?: string } }[] }
   return json.choices?.[0]?.message?.content ?? ''
 }
@@ -498,8 +547,8 @@ export async function complete(model: string, messages: ChatMessage[], signal?: 
 export async function generateTitle(firstMessage: string): Promise<string | null> {
   if (!store.openRouterKey) return null
   try {
-    const text = await complete(
-      TitleModel.ID,
+    const text = await withAutoFallback(TitleModel.ID, (model) => complete(
+      model,
       [
         {
           role: 'system',
@@ -509,7 +558,7 @@ export async function generateTitle(firstMessage: string): Promise<string | null
         { role: 'user', content: firstMessage.slice(0, 2000) }
       ],
       AbortSignal.timeout(15000)
-    )
+    ))
     const title = text.split('\n')[0].replace(/^["'\s]+|["'.\s]+$/g, '')
     return title ? title.slice(0, 80) : null
   } catch {

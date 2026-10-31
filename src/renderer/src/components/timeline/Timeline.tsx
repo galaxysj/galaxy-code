@@ -1,4 +1,4 @@
-import { ArrowDown, ChevronRight, CircleAlert, CircleStop, Clock, File as FileIcon, FileText, GitCommitHorizontal, Globe, Info, MessageCircle, Package, Plug, Redo2, SquareTerminal, Undo2 } from 'lucide-react'
+import { ArrowDown, ChevronRight, CircleAlert, CircleStop, Clock, File as FileIcon, FileText, GitCommitHorizontal, Globe, Info, MessageCircle, Monitor, Package, Plug, Redo2, SquareTerminal, Undo2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AssistantItem, Chat, FileDiff, Item, MentionChip, NoticeItem, ReasoningItem, ToolItem, TurnItem, UserItem } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, plural } from '../../lib/utils'
@@ -13,7 +13,7 @@ import { cleanError } from '../Settings'
 import { Button, CopyButton, IconButton, Modal, SkillIcon } from '../ui'
 import { ExploreGroup, RollingText, isBrowsing, isCompactable, isExplore, isHiddenAgentMessage, PresentTool, ToolBlock, type TimelineContext } from './Tools'
 
-const CHIP_ICON = { skill: Package, file: FileText, chat: MessageCircle, browser: Globe, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
+const CHIP_ICON = { skill: Package, file: FileText, chat: MessageCircle, browser: Globe, computer: Monitor, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
 
 /** Shows the / and @ picks in a sent message as inline chips. */
 function MessageText({ text, mentions }: { text: string; mentions?: MentionChip[] }): ReactNode {
@@ -110,7 +110,7 @@ const UserMessage = memo(function UserMessage({ item, chatId }: { item: UserItem
   )
 })
 
-export function ErrorDialog({ title, message, onClose, action }: { title: string; message: string; onClose(): void; action?: { label: string; onClick(): void } }): ReactNode {
+export function ErrorDialog({ title, message, onClose, action, onFix }: { title: string; message: string; onClose(): void; action?: { label: string; onClick(): void }; onFix?(): void }): ReactNode {
   return (
     <Modal onClose={onClose} className="w-[420px] max-w-full p-5">
       <div className="flex items-start gap-3">
@@ -122,7 +122,8 @@ export function ErrorDialog({ title, message, onClose, action }: { title: string
       </div>
       <div className="mt-5 flex justify-end gap-2">
         {action && <Button size="sm" onClick={action.onClick}>{action.label}</Button>}
-        <Button variant="primary" size="sm" onClick={onClose}>OK</Button>
+        <Button size="sm" onClick={onClose}>Close</Button>
+        {onFix && <Button variant="primary" size="sm" onClick={onFix}>Fix with Agent</Button>}
       </div>
     </Modal>
   )
@@ -513,7 +514,7 @@ export function Timeline({ chat, items, root }: TimelineProps): ReactNode {
 
   const lastUser = [...top].reverse().find((i) => i.kind === 'user')
   const hasActivity = top.slice(lastUser ? top.indexOf(lastUser) + 1 : 0).some(hasLiveActivity)
-  const status = liveStatus(top.slice(lastUser ? top.indexOf(lastUser) + 1 : 0))
+  const status = chat.compacting ? 'Compacting context' : liveStatus(top.slice(lastUser ? top.indexOf(lastUser) + 1 : 0))
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -528,7 +529,7 @@ export function Timeline({ chat, items, root }: TimelineProps): ReactNode {
             </div>
           )}
           {chat.reverted && chat.status !== 'running' && <RevertedEditor key={chat.reverted.text} chat={chat} />}
-          {chat.status === 'running' && (!expand ? status !== null && <WorkingIndicator since={lastUser?.ts ?? Date.now()} status={status} /> : !hasActivity && <WorkingIndicator since={lastUser?.ts ?? Date.now()} />)}
+          {chat.status === 'running' && (!expand ? status !== null && <WorkingIndicator since={chat.runStartedAt ?? lastUser?.ts ?? Date.now()} status={status} /> : (!hasActivity || chat.compacting) && <WorkingIndicator since={chat.runStartedAt ?? lastUser?.ts ?? Date.now()} status={chat.compacting ? status ?? undefined : undefined} />)}
         </div>
       </div>
       {!atBottom && (

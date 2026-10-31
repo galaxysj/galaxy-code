@@ -630,8 +630,8 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
       })
     ])
     if (result.stopReason === 'refusal') failure = `${label} declined to continue.`
-    else if (result.stopReason === 'max_tokens') session.notice('info', 'The response hit the model output limit and was cut off.')
-    else if (result.stopReason === 'max_turn_requests') session.notice('info', `${label} reached its step limit. Send a message to continue.`)
+    else if (result.stopReason === 'max_tokens') session.notice('error', 'The response hit the model output limit and was cut off.')
+    else if (result.stopReason === 'max_turn_requests') session.notice('error', `${label} reached its step limit. Send a message to continue.`)
   } catch (err) {
     if (!turn.signal.aborted) {
       failure = err instanceof RpcError && (err.code === -32000 || /auth/i.test(err.message))

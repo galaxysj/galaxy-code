@@ -1,4 +1,5 @@
 import { terminals } from '../services/terminal'
+import { hasShell, shellInfo, watchShell } from './shell'
 import { sleep } from '../util'
 import { num, str, ToolInputError, type ToolDef } from './types'
 
@@ -11,6 +12,8 @@ export interface PendingEvent {
   label: string
   /** Subagents this event waits for keep running after the turn ends. */
   keepsTeam?: boolean
+  /** The Event call that set it, so reverting that turn can drop it. */
+  itemId?: string
   /** Starts listening; calls fire once with what happened. Returns a function that stops listening. */
   start(fire: (detail: string) => void): () => void
 }
@@ -32,7 +35,7 @@ export const eventTool: ToolDef = {
 
 Triggers:
 - subagent-finish: a subagent you started with Agent finishes (target = its ID, or a list of IDs to resume when any of them finishes). Its report comes back to you. Subagents you wait for this way keep running after your reply.
-- terminal-finish: the command running in a terminal tab finishes (target = tabId, or a list of tabIds to resume when any of them finishes). It fires when the tab's process exits or its output has been quiet for quiet_seconds. The end of its output comes back to you.
+- terminal-finish: a command finishes. The target is a terminal tabId, or the shell ID of a background command you started with Bash run_in_background, such as shell-3; a list resumes you when any of them finishes. It fires when the process exits or its output has been quiet for quiet_seconds. The end of its output comes back to you.
 - timer: a set number of seconds passes.
 
 Each Event resumes you once when it fires; other Events you set stay set, also while the user sends new messages. Stopping the chat cancels them. In your reply, tell the user what you are waiting for.`,
@@ -40,7 +43,7 @@ Each Event resumes you once when it fires; other Events you set stay set, also w
     type: 'object',
     properties: {
       trigger: { type: 'string', enum: [...TRIGGERS] },
-      target: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Subagent ID for subagent-finish, terminal tabId for terminal-finish. A list resumes you when any of them finishes.' },
+      target: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Subagent ID for subagent-finish. For terminal-finish, a terminal tabId, or the ID of a background command started with Bash run_in_background, such as shell-3. A list resumes you when any of them finishes.' },
       seconds: { type: 'number', description: 'For timer: how long to wait. For the other triggers: give up and resume after this many seconds. Defaults to 1800 for those.' },
       quiet_seconds: { type: 'number', description: 'For terminal-finish: how long the output must stay quiet. Defaults to 5.' }
     },
@@ -90,8 +93,20 @@ Each Event resumes you once when it fires; other Events you set stay set, also w
     } else {
       const ids = targets(input)
       const quietMs = (num(input, 'quiet_seconds') ?? 5) * 1000
-      for (const target of ids) if (!terminals.list().some((tab) => tab.tabId === target)) throw new ToolInputError(`No open terminal with tabId ${target}. Terminal tabIds come from the user's terminal mentions.`)
+      for (const target of ids) if (!terminals.list().some((tab) => tab.tabId === target) && !hasShell(target)) throw new ToolInputError(`No open terminal with tabId ${target} and no background command with that shell ID. Terminal tabIds come from the user's terminal tabs; shell IDs, such as shell-3, come from Bash run_in_background.`)
       const watch = (target: string, fire: (detail: string) => void): (() => void) => {
+        if (hasShell(target)) {
+          const info = (): NonNullable<ReturnType<typeof shellInfo>> => shellInfo(target) ?? { name: target, tail: '', exited: true, code: null }
+          const name = (): string => ids.length > 1 ? `Command ${target}` : `The command "${info().name}"`
+          const report = (): string => info().tail
+          let quiet = setTimeout(() => fire(`${name()} output has been quiet for ${quietMs / 1000} seconds. Its end:\n\n${report()}`), quietMs)
+          const stop = watchShell(target, (exited) => {
+            clearTimeout(quiet)
+            if (exited) fire(`${name()} exited with code ${info().code}. The end of its output:\n\n${report()}`)
+            else quiet = setTimeout(() => fire(`${name()} output has been quiet for ${quietMs / 1000} seconds. Its end:\n\n${report()}`), quietMs)
+          })
+          return () => { clearTimeout(quiet); stop() }
+        }
         const tail = (): string => terminals.read(target).slice(-4000)
         const name = ids.length > 1 ? `Terminal ${target}` : 'The terminal'
         let quiet = setTimeout(() => fire(`${name} output has been quiet for ${quietMs / 1000} seconds. Its end:\n\n${tail()}`), quietMs)
@@ -103,7 +118,7 @@ Each Event resumes you once when it fires; other Events you set stay set, also w
         return () => { clearTimeout(quiet); stop() }
       }
       event = {
-        label: 'Terminal finishes',
+        label: ids.length === 1 && hasShell(ids[0]) ? `${shellInfo(ids[0])!.name} finishes` : 'Terminal finishes',
         start: withTimeout((fire) => {
           let fired = false
           const once = (detail: string): void => { if (!fired) { fired = true; fire(detail) } }
@@ -112,6 +127,7 @@ Each Event resumes you once when it fires; other Events you set stay set, also w
         })
       }
     }
+    event.itemId = ctx.itemId
     ctx.session.events.push(event)
     return { text: `Event set: you will be resumed after ${event.label}. Finish your reply now; listening starts when it ends.` }
   }

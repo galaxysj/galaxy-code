@@ -55,6 +55,30 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM'): void
   }
 }
 
+/** Whether a background command started with Bash run_in_background has this ID, such as shell-3. */
+export function hasShell(id: string): boolean {
+  return shells.has(id)
+}
+
+/** A background command's name, the end of its output, and its exit code once it has exited. */
+export function shellInfo(id: string): { name: string; tail: string; exited: boolean; code: number | null } | null {
+  const shell = shells.get(id)
+  return shell ? { name: shell.name, tail: shell.output.slice(-4000), exited: shell.exited, code: shell.code } : null
+}
+
+/** Calls back with every burst of output, and once more with exited set when the command ends. Returns a function that stops listening. */
+export function watchShell(id: string, onChange: (exited: boolean) => void): () => void {
+  const shell = shells.get(id)
+  if (!shell) return () => {}
+  if (shell.exited) {
+    const timer = setTimeout(() => onChange(true), 0)
+    return () => clearTimeout(timer)
+  }
+  const listener = (): void => onChange(shell.exited)
+  shell.listeners.add(listener)
+  return () => { shell.listeners.delete(listener) }
+}
+
 export function killBackgroundProcesses(): void {
   for (const shell of shells.values()) if (!shell.exited) killTree(shell.child, 'SIGKILL')
   shells.clear()

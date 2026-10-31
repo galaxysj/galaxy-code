@@ -21,6 +21,7 @@ import {
   ListTodo,
   MessageCircle,
   MessageCircleQuestion,
+  Monitor,
   PanelRight,
   Plug,
   Search,
@@ -33,7 +34,7 @@ import {
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { EXPLORE_KINDS, type AskQuestion, type FileDiff, type Item, type ReasoningItem, type TaskEntry, type ToolItem, type ToolKind } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, plural, relativeTo } from '../../lib/utils'
-import { attemptedTitle, isTerminalRead, isToolOutputRead, readPath, thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
+import { attemptedTitle, isNoChange, isTerminalRead, isToolOutputRead, readPath, thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
 import { useStore } from '../../store'
 import { DiffStat, DiffView } from '../DiffView'
 import { Markdown } from '../Markdown'
@@ -41,6 +42,7 @@ import { FileIcon as FileTypeIcon } from '../ProjectFiles'
 import { Button, Spinner } from '../ui'
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
+import { openLink } from '../../lib/openLink'
 
 hljs.registerLanguage('bash', bash)
 
@@ -68,6 +70,7 @@ const KIND_ICON: Record<ToolKind, typeof Wrench> = {
   edit: FilePen,
   create: FilePlus,
   browser: Globe,
+  computer: Monitor,
   mcp: Plug,
   agent: Bot,
   ask: MessageCircleQuestion,
@@ -180,6 +183,7 @@ function escapeHtml(text: string): string {
 /** `preserveCollapse` and `preserveOpen` keep a manual close or open when the activity key changes. */
 /** Why a call failed, for the hover text of its "attempted" title. */
 function failureReason(item: ToolItem): string | undefined {
+  if (isNoChange(item)) return 'The patch left the files as they were.'
   if (item.status !== 'error') return undefined
   if (item.tool === 'bash' && typeof item.meta?.exitCode === 'number') return undefined
   return item.error || item.output?.trim().split('\n').pop() || 'The call failed.'
@@ -250,9 +254,18 @@ function BlurWord({ value, animate }: { value: string; animate: boolean }): Reac
   return <>{head}<span key={state.step} className="blur-fade shimmer inline-block whitespace-pre" onAnimationEnd={() => setState((now) => ({ ...now, previous: now.current }))}>{changed}</span>{tail}</>
 }
 
+/** A page's address without its scheme or www, as the tool log writes it. */
+function pageLabel(url: string): string {
+  try {
+    const page = new URL(url)
+    if (page.hostname) return page.hostname.replace(/^www\./, '') + (page.pathname.length > 1 ? page.pathname : '') + page.search
+  } catch { /* Keep the raw value. */ }
+  return url
+}
+
 function exploreSummary(all: ToolItem[], verb = 'Explored'): string {
-  // Failed calls are not counted; a group where every call failed says so instead.
-  const items = all.filter((item) => item.status !== 'error')
+  // Failed calls are not counted, except browser calls; a group where every call failed says so instead.
+  const items = all.filter((item) => (item.status !== 'error' || item.tool === 'browser') && !isNoChange(item))
   if (all.length && !items.length) return verb === 'Exploring' ? verb : 'Explore attempted'
   const reads = items.filter((i) => i.tool === 'read' && !i.meta?.skill)
   const terminals = reads.filter(isTerminalRead).length
@@ -279,14 +292,22 @@ function exploreSummary(all: ToolItem[], verb = 'Explored'): string {
     web && plural(web, 'web search', 'web searches'),
     pages && plural(pages, 'page')
   ].filter(Boolean)
-  // A single item names what it was rather than counting to one.
-  if (items.length === 1 && reads.length === 1) parts[0] = terminals ? 'terminal' : outputs ? 'tool output' : basename(readPath(reads[0])) || 'file'
-  else if (items.length === 1 && web === 1) parts[0] = 'web search'
+  // A single item names what it was rather than counting to one. Waits are not listed, so they do not make it two.
+  const listed = items.filter((i) => i.tool !== 'wait')
+  const single = listed.length === 1 ? listed[0] : null
+  if (single && reads.length === 1) parts[0] = terminals ? 'terminal' : outputs ? 'tool output' : basename(readPath(reads[0])) || 'file'
+  else if (single && skills) parts[0] = `${single.meta?.skill} skill`
+  else if (single && searches) parts[0] = single.meta?.query ? JSON.stringify(single.meta.query) : 'search'
+  else if (single && lists) parts[0] = basename(String((single.input as { path?: unknown } | null)?.path ?? '').replace(/\/+$/, '')).replace(/^\.$/, '') || 'folder'
+  else if (single && web) parts[0] = 'web search'
+  else if (single && pages) parts[0] = pageLabel(single.meta?.url ?? String((single.input as { url?: unknown } | null)?.url ?? '')) || 'page'
   const done = verb === 'Explored'
+  const editedPath = items.flatMap((i) => (i.tool === 'edit' || i.tool === 'create' ? i.meta?.diffs ?? [] : []))[0]?.path
+  const singleCommand = single?.tool === 'bash' ? toolActivityTitle(single) : ''
   const actions = [
-    commands && `${done ? 'ran' : 'running'} ${plural(commands, 'command')}`,
-    edited && `${done ? 'edited' : 'editing'} ${plural(edited, 'file')}`,
-    others && `${done ? 'used' : 'using'} ${plural(others, 'tool')}`
+    commands && `${done ? 'ran' : 'running'} ${singleCommand ? singleCommand.charAt(0).toLowerCase() + singleCommand.slice(1) : plural(commands, 'command')}`,
+    edited && `${done ? 'edited' : 'editing'} ${edited === 1 && editedPath ? basename(editedPath) : plural(edited, 'file')}`,
+    others && `${done ? 'used' : 'using'} ${others === 1 && single ? single.name : plural(others, 'tool')}`
   ].filter((part): part is string => !!part)
   // Waits sit in the group without being listed; on their own the group reads "Waited".
   if (!parts.length && !actions.length && items.some((i) => i.tool === 'wait')) return done ? 'Waited' : verb
@@ -318,17 +339,13 @@ function browsingTitle(verb: string, items: ToolItem[]): ReactNode {
   const pages = browsingPages(items)
   if (pages.length !== 1) {
     const count = pages.length || (items.some((item) => item.status !== 'denied' && item.status !== 'error') ? 1 : 0)
-    return `${verb} ${plural(count, 'page')}`
+    return count === 1 ? `${verb} a page` : `${verb} ${plural(count, 'page')}`
   }
   const [url] = pages
-  let label = url
-  try {
-    const page = new URL(url)
-    if (page.hostname) label = page.hostname.replace(/^www\./, '') + (page.pathname.length > 1 ? page.pathname : '') + page.search
-  } catch { /* Keep the raw value. */ }
+  const label = pageLabel(url)
   if (!/^https?:/i.test(url)) return <><span className="text-fg">{verb}</span> {label}</>
   // The row is a button, so the link is a span that keeps its click from toggling the row.
-  return <><span className="text-fg">{verb}</span> <span title={url} onClick={(event) => { event.stopPropagation(); void window.galaxy.files.openExternal(url) }} className="hover:text-fg hover:underline">{label}</span></>
+  return <><span className="text-fg">{verb}</span> <span title={url} onClick={(event) => { event.stopPropagation(); void openLink(url, event) }} className="hover:text-fg hover:underline">{label}</span></>
 }
 
 function ExploreLine({ item }: { item: ToolItem }): ReactNode {
@@ -345,7 +362,7 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
   const command = item.tool === 'bash' ? item.meta?.command ?? (item.input as { command?: string } | null)?.command ?? '' : ''
   // Grouped commands and edits expand in place, like their standalone blocks.
   const expandable = item.tool === 'bash' ? !!(item.output || item.error) : diffs.length > 0
-  const action = expandable ? toggle : path ? () => openFile(path) : url ? () => void window.galaxy.files.openExternal(url) : results?.length ? toggle : undefined
+  const action = expandable ? toggle : path ? () => openFile(path) : url ? (event?: { altKey?: boolean }) => void openLink(url, event) : results?.length ? toggle : undefined
   if (item.tool === 'mcp') return <McpTool item={item} />
   return (
     <div title={failureReason(item)}>
@@ -371,7 +388,7 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
       {open && results && (
         <div className="mb-1 ml-3 space-y-1">
           {results.slice(0, 8).map((result) => (
-            <button key={result.url} type="button" onClick={() => void window.galaxy.files.openExternal(result.url)} className="block w-full text-left hover:text-fg">
+            <button key={result.url} type="button" onClick={(event) => void openLink(result.url, event)} className="block w-full text-left hover:text-fg">
               <div className="truncate text-[13.2px] text-muted">{result.title}</div>
               <div className="truncate font-mono text-[11.6px] text-subtle">{result.url}</div>
             </button>
@@ -556,6 +573,43 @@ function editedTitle(item: ToolItem, diffs: FileDiff[]): string {
   return `${verb} ${diffs.length === 1 ? basename(diffs[0].path) : plural(diffs.length, 'file')}`
 }
 
+/** One file of a finished multi-file patch, as its own expandable card. */
+function FileEditCard({ item, diff, ctx }: { item: ToolItem; diff: FileDiff; ctx: TimelineContext }): ReactNode {
+  const homeDir = useStore((s) => s.homeDir)
+  const outputMode = useStore((s) => s.settings.terminalOutput)
+  const [open, toggle] = useDisclosure(false, `${outputMode}:complete`)
+  const Icon = KIND_ICON[item.tool]
+  const preview = !open && outputMode === 'preview'
+  const verb = diff.created ? 'Created' : diff.deleted ? 'Deleted' : 'Edited'
+  const where = relativeTo(ctx.root, diff.path, homeDir)
+  return (
+    <div className="my-1.5 overflow-hidden rounded-xl border border-line-strong bg-elev">
+      <div className="px-3 py-1">
+        <Row
+          icon={<Icon size={13.5} className="text-subtle" />}
+          title={`${verb} ${basename(diff.path)}`}
+          detail={where !== basename(diff.path) ? where : undefined}
+          open={open}
+          onToggle={toggle}
+          trailing={
+            <>
+              <DiffStat added={diff.added} removed={diff.removed} />
+              <StatusMark item={item} />
+            </>
+          }
+        />
+      </div>
+      {(open || preview) && (
+        <div className={cn('activity-output-surface activity-reveal relative border-t border-line', preview && 'explore-viewport')}>
+          <div className={cn('py-2', preview && 'max-h-[78px] overflow-auto overscroll-contain')}>
+            <DiffView diff={diff} maxHeight={null} monochrome={false} />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): ReactNode {
   const openFile = useStore((s) => s.openFile)
   const homeDir = useStore((s) => s.homeDir)
@@ -570,16 +624,21 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
   const Icon = KIND_ICON[item.tool]
   const inputPreview = useMemo(() => {
     const input = (item.input ?? {}) as Record<string, unknown>
-    if (diffs.length > 0) return null
+    if (diffs.length > 0 || isNoChange(item)) return null
     if (typeof input.content === 'string') return input.content
     if (typeof input.patch === 'string') return input.patch
     if (typeof input.new_string === 'string') return input.new_string
     return null
-  }, [item.input, diffs.length])
+  }, [item.input, item.output, item.status, diffs.length])
   const preview = !open && (diffs.length > 0 || inputPreview !== null || live) && (outputMode === 'preview' || outputMode === 'foreground' && live)
   useLayoutEffect(() => {
     if (live && preview && followPatch.current && patchViewport.current) patchViewport.current.scrollTop = patchViewport.current.scrollHeight
   }, [diffs, inputPreview, live, preview])
+
+  // A finished patch that touched several files shows one card per file instead of a single "Edited 12 files".
+  if (!live && item.status === 'done' && diffs.length > 1) {
+    return <>{diffs.map((diff) => <FileEditCard key={diff.path} item={item} diff={diff} ctx={ctx} />)}</>
+  }
 
   return (
     <div className="my-1.5 overflow-hidden rounded-xl border border-line-strong bg-elev">
@@ -591,10 +650,10 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
         detail={live ? undefined : item.tool === 'memory' ? item.detail : item.detail && item.detail !== basename(item.detail) ? item.detail : undefined}
         live={live}
         open={open}
-        onToggle={live ? undefined : toggle}
+        onToggle={live || isNoChange(item) ? undefined : toggle}
         trailing={
           <>
-            {!live && <DiffStat added={added} removed={removed} />}
+            {!live && !isNoChange(item) && <DiffStat added={added} removed={removed} />}
             <StatusMark item={item} />
           </>
         }
@@ -703,7 +762,7 @@ function GenericTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactN
         icon={<Icon size={13.5} className="text-subtle" />}
         title={attemptedTitle(item) ?? item.title}
         hint={failureReason(item)}
-        detail={item.tool === 'browser' || item.tool === 'image' ? undefined : item.detail}
+        detail={item.tool === 'browser' || item.tool === 'computer' || item.tool === 'image' ? undefined : item.detail}
         live={isLive(item)}
         open={open}
         onToggle={expandable ? toggle : undefined}
@@ -718,9 +777,9 @@ function GenericTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactN
       )}
       {open && (
         <Panel>
-          {input && (item.tool === 'mcp' || item.tool === 'other' || item.tool === 'browser' || awaiting) && <OutputBlock text={input} maxHeight={180} />}
+          {input && (item.tool === 'mcp' || item.tool === 'other' || item.tool === 'browser' || item.tool === 'computer' || awaiting) && <OutputBlock text={input} maxHeight={180} />}
           {item.output && (
-            <div className={cn(input && (item.tool === 'mcp' || item.tool === 'other' || item.tool === 'browser' || awaiting) && 'border-t border-line')}>
+            <div className={cn(input && (item.tool === 'mcp' || item.tool === 'other' || item.tool === 'browser' || item.tool === 'computer' || awaiting) && 'border-t border-line')}>
               <OutputBlock text={item.output.slice(0, 12000)} />
             </div>
           )}
@@ -971,6 +1030,7 @@ function AgentTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Rea
     return 'Starting'
   }, [children])
   const steps = children.filter((c) => c.kind === 'tool').length
+  const agentType = item.meta?.agentType === 'general' ? undefined : item.meta?.agentType
 
   return (
     <div className={cn('my-1.5 overflow-hidden rounded-xl border bg-elev', item.status === 'error' ? 'border-danger/30' : 'border-line-strong')}>
@@ -978,6 +1038,7 @@ function AgentTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Rea
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
             <span className={cn('truncate text-[13.8px] font-medium text-fg', live && 'shimmer')}>{item.title}</span>
+            {agentType && <span className="shrink-0 rounded-full bg-line-strong px-2 py-px text-[11.5px] capitalize leading-[16px] text-muted">{agentType}</span>}
           </span>
           <span className={cn('block truncate text-[12.7px]', live ? 'shimmer' : 'text-subtle')}>
             {live ? latest : item.status === 'error' ? (item.error ?? 'Failed') : `${plural(steps, 'step')}${item.endedAt ? ` · ${formatDuration(item.endedAt - item.ts)}` : ''}`}
@@ -1012,12 +1073,28 @@ export function isBrowsing(item: Item): item is ToolItem {
   return item.kind === 'tool' && (item.tool === 'browser' || (item.tool === 'webfetch' && item.status !== 'awaiting'))
 }
 
+/** A Bash call that only stops a running shell or sends it input. */
+function isShellControl(item: ToolItem): boolean {
+  const input = item.input as { shell_id?: unknown; command?: unknown } | null
+  return item.tool === 'bash' && !!input?.shell_id && !input.command
+}
+
 export const ToolBlock = memo(function ToolBlock({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): ReactNode {
   const medium = useStore((s) => s.settings.toolDensity === 'medium')
   const title = toolActivityTitle(item)
   if (title !== item.title) item = { ...item, title }
+  // Stopping a shell or typing into one has no command or output of its own, so it is a plain icon row, not a terminal card.
+  if (isShellControl(item) && !item.approval && item.status !== 'awaiting') {
+    return (
+      <div>
+        <Row icon={<SquareTerminal size={13.5} className="text-subtle" />} title={item.title} live={isLive(item)} trailing={<StatusMark item={item} />} plain />
+      </div>
+    )
+  }
   // Medium keeps commands and edits on their own line, without the card; approvals still get the full card.
-  if (medium && ['bash', 'edit', 'create'].includes(item.tool) && !item.approval && item.status !== 'awaiting') return <ExploreLine item={item} />
+  // An edit or create that could not run or changed nothing reads as one plain line, "Edit attempted", not a card; the reason is its tooltip.
+  const failedEdit = (item.tool === 'edit' || item.tool === 'create') && (item.status === 'error' || isNoChange(item))
+  if ((medium && ['bash', 'edit', 'create'].includes(item.tool) || failedEdit) && !item.approval && item.status !== 'awaiting') return <ExploreLine item={item} />
   if (isAgentMessage(item)) {
     if (isHiddenAgentMessage(item)) return null
     const to = String((item.input as { to?: string } | null)?.to ?? 'agent')

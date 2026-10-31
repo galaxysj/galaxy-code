@@ -120,7 +120,7 @@ export async function listSkills(projectPath: string | null): Promise<SkillInfo[
 export function skillNameForPath(path: string, known: SkillInfo[]): string | null {
   const abs = resolve(path)
   const hit = known.find((s) => resolve(s.path) === abs)
-  if (hit) return hit.name
+  if (hit) return hit.displayName ?? hit.name
   if (basename(abs) !== 'SKILL.md') return null
   const folder = dirname(abs)
   const parent = dirname(folder)

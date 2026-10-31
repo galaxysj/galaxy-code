@@ -82,6 +82,7 @@ const api: GalaxyApi = {
   },
   editor: {
     complete: call('editor.complete'),
+    suggestEdit: call('editor.suggestEdit'),
     inlineEdit: call('editor.inlineEdit'),
     cancelInlineEdit: call('editor.cancelInlineEdit'),
     terminalCommand: call('editor.terminalCommand')
@@ -104,11 +105,17 @@ const api: GalaxyApi = {
     reload: call('browser.reload'),
     stop: call('browser.stop'),
     state: call('browser.state'),
-    frame: call('browser.frame')
+    frame: call('browser.frame'),
+    clearData: call('browser.clearData')
+  },
+  computer: {
+    permissions: call('computer.permissions'),
+    requestPermission: call('computer.requestPermission')
   },
   terminal: {
     create: call('terminal.create'), write: call('terminal.write'), resize: call('terminal.resize'), interrupt: call('terminal.interrupt'), close: call('terminal.close')
   },
+  worktree: { status: call('worktree.status'), merge: call('worktree.merge'), update: call('worktree.update') },
   review: { read: call('review.read'), commits: call('review.commits'), status: call('review.status'), init: call('review.init'), push: call('review.push'), state: call('review.state'), instantCommit: call('review.instantCommit') },
   onChatEvent: (listener) => subscribe<ChatEvent>(IPC_CHAT_EVENT, listener),
   onUiEvent: (listener) => subscribe<UiEvent>(IPC_UI_EVENT, listener)

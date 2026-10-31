@@ -9,6 +9,26 @@ export interface CompletionRequest {
   path: string
   prefix: string
   suffix: string
+  /** Snippets from other open files that resemble the code at the cursor. */
+  related?: string
+  /** The user's latest edits, oldest first, as text. */
+  edits?: string
+}
+
+export interface EditSuggestionRequest {
+  path: string
+  /** The whole file, and the cursor's offset in it. */
+  text: string
+  offset: number
+  related?: string
+  edits?: string
+}
+
+/** Lines startLine to endLine (1-based, inclusive) become `text`. endLine is startLine - 1 when the text is only inserted. */
+export interface EditSuggestion {
+  startLine: number
+  endLine: number
+  text: string
 }
 
 export interface InlineEditRequest {
@@ -119,7 +139,7 @@ dist
 <COMPLETION>.env
 .DS_Store</COMPLETION>
 
-If you can tell where the user will edit next after this, you may add <NEXT>…</NEXT> after the completion, holding 10 to 40 characters copied exactly from the file that end right where the cursor should go.`
+Always add <NEXT>…</NEXT> after the completion, naming where the user will edit next, holding 10 to 40 characters copied exactly from the file that end right where the cursor should go.`
 
 /** Single-line comments by extension, where a multi-line answer is never wanted. */
 function lineComment(path: string): string | null {
@@ -230,8 +250,28 @@ function postprocess(raw: string, prefix: string, suffix: string, multiline: boo
   return text.replace(/\s+$/, '')
 }
 
+/** Recent suggestions by cursor context, so backspacing and retyping, or returning to a spot, answers at once. */
+const completionCache = new Map<string, Completion>()
+const CACHE_SIZE = 50
+
+function cacheKey(model: string, request: CompletionRequest): string {
+  return `${model}\0${request.path}\0${request.prefix.slice(-1500)}\0${request.suffix.slice(0, 500)}`
+}
+
 /** Suggests text at the cursor. A newer request cancels the older one. */
 export async function completeCode(request: CompletionRequest): Promise<Completion> {
+  const key = cacheKey(store.settings.completionModelId ?? '', request)
+  const cached = completionCache.get(key)
+  if (cached) return cached
+  const result = await completeUncached(request)
+  if (result.text) {
+    completionCache.set(key, result)
+    if (completionCache.size > CACHE_SIZE) completionCache.delete(completionCache.keys().next().value as string)
+  }
+  return result
+}
+
+async function completeUncached(request: CompletionRequest): Promise<Completion> {
   abortQuietly(pending)
   const controller = new AbortController()
   pending = controller
@@ -251,7 +291,7 @@ export async function completeCode(request: CompletionRequest): Promise<Completi
     const raw = await runUtilityModel(
       model,
       HOLE_FILLER,
-      `${folder ? `Files in the same folder:\n${folder}\n\n` : ''}File: ${basename(request.path)}\n\n<QUERY>\n${prefix}{{FILL_HERE}}${suffix}\n</QUERY>\nTASK: Fill the {{FILL_HERE}} hole.${multiline ? '' : ' Keep it to one line.'} Answer only with the completion in <COMPLETION></COMPLETION>, and nothing else.`,
+      `${request.related ? `Related code from other open files, for reference only:\n${request.related.slice(0, 6000)}\n\n` : ''}${request.edits ? `The programmer's latest edits, oldest first. They show what they are working on:\n${request.edits}\n\n` : ''}${folder ? `Files in the same folder:\n${folder}\n\n` : ''}File: ${basename(request.path)}\n\n<QUERY>\n${prefix}{{FILL_HERE}}${suffix}\n</QUERY>\nTASK: Fill the {{FILL_HERE}} hole.${multiline ? '' : ' Keep it to one line.'} Always propose the most likely completion and never leave it empty, even when unsure. Answer only with the completion in <COMPLETION></COMPLETION>, and nothing else.`,
       {
         cwd: dirname(expandHome(request.path)),
         signal: controller.signal,
@@ -273,6 +313,71 @@ export async function completeCode(request: CompletionRequest): Promise<Completi
     return NONE
   } finally {
     if (pending === controller) pending = null
+  }
+}
+
+const EDIT_BEFORE = 8
+const EDIT_AFTER = 24
+const MAX_EDIT_LINES = 24
+
+const EDIT_PREDICTOR = `You predict a programmer's next edit. You get a code file with an editable region between <EDITABLE> and </EDITABLE>, the cursor marked <CURSOR>, and the programmer's latest edits. Work out what they are doing, such as renaming something, changing a signature and its calls, or repeating a change on similar lines, and rewrite the editable region as it should look once the next edit is made. Change only lines that the latest edits make necessary. Keep every other line exactly as it is. Always make a prediction: if nothing in the region is left to fix, continue the work with the next thing the programmer would write at the cursor, such as the next statement, the missing case or the missing call. Reply with the whole region inside <REWRITTEN></REWRITTEN> and nothing else. Do not return the region unchanged.`
+
+let pendingEdit: AbortController | null = null
+
+/** What changes between two line lists, once the lines they share at both ends are set aside. */
+function changedLines(before: string[], after: string[]): { start: number; oldCount: number; lines: string[] } | null {
+  let start = 0
+  while (start < before.length && start < after.length && before[start] === after[start]) start++
+  let endBefore = before.length
+  let endAfter = after.length
+  while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) {
+    endBefore--
+    endAfter--
+  }
+  if (start === endBefore && start === endAfter) return null
+  return { start, oldCount: endBefore - start, lines: after.slice(start, endAfter) }
+}
+
+/** Predicts a change to the lines around the cursor, which can replace several lines at once. A newer request cancels the older one. */
+export async function suggestEdit(request: EditSuggestionRequest): Promise<EditSuggestion | null> {
+  abortQuietly(pendingEdit)
+  const controller = new AbortController()
+  pendingEdit = controller
+  const model = usableUtilityModels(CompletionModel, store.settings.accounts).find((m) => m.ID === store.settings.completionModelId) ?? CompletionModel[0]
+  if (model.Subscription === 'Default' && !store.openRouterKey) return null
+  const lines = request.text.split('\n')
+  const cursorLine = request.text.slice(0, request.offset).split('\n').length
+  const first = Math.max(1, cursorLine - EDIT_BEFORE)
+  const last = Math.min(lines.length, cursorLine + EDIT_AFTER)
+  const region = lines.slice(first - 1, last)
+  const column = request.offset - lines.slice(0, cursorLine - 1).reduce((total, line) => total + line.length + 1, 0)
+  const marked = region.map((line, index) => (first + index === cursorLine ? `${line.slice(0, column)}<CURSOR>${line.slice(column)}` : line))
+  const above = lines.slice(Math.max(0, first - 1 - 60), first - 1).join('\n')
+  const below = lines.slice(last, last + 40).join('\n')
+  try {
+    const raw = await runUtilityModel(
+      model,
+      EDIT_PREDICTOR,
+      `${request.related ? `Related code from other open files, for reference only:\n${request.related.slice(0, 4000)}\n\n` : ''}File: ${basename(request.path)}\n\n${above ? `${above}\n` : ''}<EDITABLE>\n${marked.join('\n')}\n</EDITABLE>${below ? `\n${below}` : ''}\n\nThe programmer's latest edits, oldest first:\n${request.edits || '(none)'}\n\nReply with the rewritten region in <REWRITTEN></REWRITTEN>.`,
+      {
+        cwd: dirname(expandHome(request.path)),
+        signal: controller.signal,
+        openRouterExtra: { reasoning: { effort: 'none', exclude: true }, max_tokens: 1500, temperature: 0 }
+      }
+    )
+    const match = raw.match(/<REWRITTEN>\n?([\s\S]*?)\n?(?:<\/REWRITTEN>|$)/)
+    if (!match) return null
+    const rewritten = match[1].replace(/<CURSOR>/g, '').split('\n')
+    const change = changedLines(region, rewritten)
+    if (!change || change.oldCount > MAX_EDIT_LINES || change.lines.length > MAX_EDIT_LINES) return null
+    // A change that only adds blank space is not worth showing.
+    if (change.lines.join('\n').trim() === region.slice(change.start, change.start + change.oldCount).join('\n').trim()) return null
+    return { startLine: first + change.start, endLine: first + change.start + change.oldCount - 1, text: change.lines.join('\n') }
+  } catch (error) {
+    if (!controller.signal.aborted) console.warn('[edit suggestion]', error)
+    return null
+  } finally {
+    if (pendingEdit === controller) pendingEdit = null
   }
 }
 

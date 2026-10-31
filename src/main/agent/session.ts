@@ -35,7 +35,7 @@ export interface Turn {
   /** Ultrafast tier. Only set when fast is. */
   ultrafast: boolean
   permissionMode: PermissionMode
-  /** Ask or Plan keeps the turn read-only. Native engine only. */
+  /** Ask or Plan keeps the turn read-only. Galaxy Code's own tools only. */
   mode?: AgentMode
   signal: AbortSignal
 }
@@ -54,12 +54,14 @@ export class Session {
   /** Triggers set by the Event tool this turn. The chat listens for them once the turn ends. */
   events: PendingEvent[] = []
   /** Events the chat listens for. Each resumes the agent once when it fires; the others stay set. */
-  listening = new Set<{ label: string; cancel(): void }>()
+  listening = new Set<{ label: string; itemId?: string; cancel(): void }>()
   /** Teams of finished turns whose subagents still run. */
   background = new Set<AgentTeam>()
   /** Event resumes that fired while a turn was running. They run once it ends. */
-  pendingResumes: { text: string; label: string; mode?: AgentMode }[] = []
+  pendingResumes: { text: string; label: string; mode?: AgentMode; itemId?: string }[] = []
   agentId = 'main'
+  /** For a subagent: general or explore. */
+  subagentType = 'general'
   readonly doc: ChatDoc
   controller: AbortController | null = null
   private approvals = new Map<string, { itemId: string; resolve: (decision: ApprovalDecision) => void }>()
@@ -107,6 +109,7 @@ export class Session {
   // Chat metadata
 
   patchChat(patch: Partial<Chat>): void {
+    if (patch.status === 'running' && this.chat.status !== 'running' && this.chat.status !== 'awaiting') patch = { ...patch, runStartedAt: Date.now() }
     Object.assign(this.chat, patch)
     store.saveChat(this.chat)
     this.emit({ type: 'chat', chat: { ...this.chat } })
@@ -197,6 +200,11 @@ export class Session {
   }
 
   notice(level: 'info' | 'error', text: string, parentId?: string): void {
+    // The main chat's errors sit above the message box; a subagent's stay in the timeline with its work.
+    if (level === 'error' && !parentId) {
+      this.patchChat({ error: this.chat.error ? `${this.chat.error}\n${text}` : text })
+      return
+    }
     this.add({ kind: 'notice', level, text, parentId })
   }
 
@@ -266,6 +274,19 @@ export class Session {
 
   /** Marks anything still live as finished so the UI stops spinning. */
   /** Ends everything still streaming or running, except what `keep` holds, such as subagents left running in the background. */
+  /**
+   * The subagents in this chat as the agent's context describes them: those still running, including ones an earlier
+   * turn left in the background, and those the current turn has started. Empty when there are none.
+   */
+  subagentStatus(): string {
+    const teams = new Set([...(this.team ? [this.team] : []), ...this.background])
+    const all = [...teams].flatMap((team) => team.status())
+    if (all.length === 0) return ''
+    const label = { running: 'running', done: 'finished', error: 'failed or stopped' } as const
+    const lines = all.slice(-24).map((worker) => `- ${worker.id} "${worker.name}" (started by ${worker.parent === 'main' ? 'main' : worker.parent}): ${label[worker.state]}`)
+    return lines.join('\n')
+  }
+
   settle(interrupted: boolean, keep?: (item: Item) => boolean): void {
     this.flushDeltas()
     for (const item of this.doc.items) {

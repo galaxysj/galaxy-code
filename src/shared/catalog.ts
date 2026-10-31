@@ -71,6 +71,11 @@ export function modelKey(subscription: string, id: string): string {
   return `${subscription}:${id}`
 }
 
+/** Whether Galaxy Code's own engine and tools run the subscription: its own models, and Codex on the ChatGPT login. */
+export function usesGalaxyTools(subscription: Subscription | null | undefined): boolean {
+  return subscription === 'Default' || subscription === 'Codex'
+}
+
 /** Existing chats stay within the native engines or their original ACP agent. */
 export function canUseChatSubscription(chat: { modelKey: string; initialSubscription?: Subscription } | null | undefined, subscription: Subscription): boolean {
   if (!chat) return true

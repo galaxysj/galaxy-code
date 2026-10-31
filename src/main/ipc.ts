@@ -9,14 +9,17 @@ import type {
   AccountId,
   Attachment,
   Bootstrap,
+  BrowserDataKind,
   ChatEvent,
+  ComputerPermission,
   CreateProjectInput,
   FileView,
   NewChatInput,
   Project,
   SendInput,
   Settings,
-  UiEvent
+  UiEvent,
+  WorktreeMergeStrategy
 } from '@shared/types'
 import { manager } from './agent/manager'
 import { initReviewRepository, readReview, reviewCommits } from './services/review'
@@ -24,6 +27,7 @@ import { accountStatuses, loginAccount } from './services/accounts'
 import { answerAntigravityConsent, configureAntigravityConsent, confirmAntigravityUse } from './services/antigravityConsent'
 import { probeAcpOptions } from './engines/acp'
 import { browser } from './services/browser'
+import { computer } from './services/computer'
 import { terminals } from './services/terminal'
 import { copyProjectEntries, createProjectEntry, listProjectFiles, renameProjectEntry, searchProjectFiles, trashProjectEntry } from './services/projectFiles'
 import { gitInfo, gitState, instantCommit, pushBranch } from './services/git'
@@ -31,7 +35,7 @@ import { disposeAccountWorkers } from './services/accountWorkers'
 import { mcp } from './services/mcp'
 import { signInWithOpenRouter, testKey, testProviderKey } from './services/openrouter'
 import { analyticsRows } from './services/analytics'
-import { cancelInlineEdit, completeCode, inlineEdit, saveFile, terminalCommand, type CompletionRequest, type InlineEditRequest, type TerminalCommandRequest } from './services/editor'
+import { cancelInlineEdit, completeCode, inlineEdit, saveFile, suggestEdit, terminalCommand, type CompletionRequest, type EditSuggestionRequest, type InlineEditRequest, type TerminalCommandRequest } from './services/editor'
 import { usageReport } from './services/usage'
 import { ensureSkillsDir, listSkills, projectSkillsDir, userSkillsDir } from './services/skills'
 import { store } from './store'
@@ -329,6 +333,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'files.read': (path: string) => readFileView(path),
     'files.write': (path: string, content: string) => saveFile(path, content),
     'editor.complete': (request: CompletionRequest) => completeCode(request),
+    'editor.suggestEdit': (request: EditSuggestionRequest) => suggestEdit(request),
     'editor.inlineEdit': (request: InlineEditRequest) => inlineEdit(request, (text) => emitUi({ type: 'inline-edit-delta', requestId: request.requestId, text })),
     'editor.cancelInlineEdit': (requestId: string) => cancelInlineEdit(requestId),
     'editor.terminalCommand': (request: TerminalCommandRequest) => terminalCommand(request, (text) => emitUi({ type: 'inline-edit-delta', requestId: request.requestId, text })),
@@ -358,6 +363,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'browser.stop': (id?: string) => browser.stop(id, requestWindow() ?? undefined),
     'browser.state': (id?: string) => browser.state(id, requestWindow() ?? undefined),
     'browser.frame': (id?: string) => browser.frame(id, requestWindow() ?? undefined),
+    'browser.clearData': (kind: BrowserDataKind) => browser.clearData(kind),
+    'computer.permissions': () => computer.permissions(),
+    'computer.requestPermission': (kind: ComputerPermission) => computer.requestPermission(kind),
     'terminal.create': (cwd: string, id = newId('terminal_')) => {
       const win = requestWindow()
       if (win) tabWindows.set(id, win.id)
@@ -367,6 +375,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'terminal.resize': (id: string, cols: number, rows: number) => terminals.resize(id, cols, rows),
     'terminal.interrupt': (id: string) => terminals.interrupt(id),
     'terminal.close': (id: string) => terminals.close(id),
+    'worktree.status': (chatId: string) => manager.worktreeStatus(chatId),
+    'worktree.merge': (chatId: string, strategy: WorktreeMergeStrategy) => manager.mergeWorktree(chatId, strategy),
+    'worktree.update': (chatId: string) => manager.updateWorktree(chatId),
     'review.read': readReview,
     'review.commits': reviewCommits,
     'review.status': gitInfo,
