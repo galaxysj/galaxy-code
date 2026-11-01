@@ -176,6 +176,7 @@ class ChatManager {
 
   async remove(chatId: string): Promise<void> {
     const session = this.sessions.get(chatId)
+    if (session) session.removed = true
     if (session?.running) await this.stop(chatId)
     // A deleted chat takes its subagents with it, including those of the run just stopped.
     session?.team?.abort()
@@ -223,6 +224,9 @@ class ChatManager {
     if (session.chat.queued.length) session.patchChat({ queued: [] })
     session.controller.abort()
     session.cancelPending()
+    // The user sees it stop now, and the computer is let go now, even if a tool takes a moment to notice.
+    computer.finishRun(chatId)
+    session.patchChat({ status: 'idle' })
   }
 
   async send(input: SendInput): Promise<void> {

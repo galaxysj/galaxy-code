@@ -108,7 +108,11 @@ export class Session {
 
   // Chat metadata
 
+  /** Set when the chat is deleted, so that a run still ending cannot save it back. */
+  removed = false
+
   patchChat(patch: Partial<Chat>): void {
+    if (this.removed) return
     if (patch.status === 'running' && this.chat.status !== 'running' && this.chat.status !== 'awaiting') patch = { ...patch, runStartedAt: Date.now() }
     Object.assign(this.chat, patch)
     store.saveChat(this.chat)

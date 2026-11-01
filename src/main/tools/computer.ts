@@ -184,7 +184,11 @@ Actions:
           outputs.push(await startFullControl(ctx, chatId, images, files, steps.length > 1 ? label : ''))
           continue
         }
-        const result = await computer.act(chatId, step as unknown as ComputerAction, ctx.signal)
+        // A step can sit in a slow app for a long time, and Stop must not wait for it.
+        const result = await Promise.race([
+          computer.act(chatId, step as unknown as ComputerAction, ctx.signal),
+          new Promise<never>((_, reject) => ctx.signal.addEventListener('abort', () => reject(ctx.signal.reason), { once: true }))
+        ])
         outputs.push(steps.length > 1 ? `${label}\n${result.text}` : result.text)
         await keepImage(result, images, files)
         await showApp()

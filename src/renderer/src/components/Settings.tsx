@@ -1902,6 +1902,35 @@ function ShortcutField({ value, onChange }: { value: string; onChange: (accelera
   )
 }
 
+/** Deletes every chat after a confirmation. Going through the normal delete stops running work and cleans up each chat. */
+function DeleteAllChats(): ReactNode {
+  const count = useStore((s) => Object.values(s.chats).filter((chat) => !chat.side).length)
+  const [confirming, setConfirming] = useState(false)
+  const removeAll = (): void => {
+    setConfirming(false)
+    for (const chat of Object.values(useStore.getState().chats)) void window.galaxy.chats.remove(chat.id)
+  }
+  return (
+    <Section title="Chats" description="Projects and files on disk are kept.">
+      <Card>
+        <RowItem label="Delete all chats" hint={`${count} chat${count === 1 ? '' : 's'} on this computer.`}>
+          <Button variant="danger" size="sm" disabled={count === 0} onClick={() => setConfirming(true)}>Delete all</Button>
+        </RowItem>
+      </Card>
+      {confirming && (
+        <Modal onClose={() => setConfirming(false)} className="w-[400px] max-w-full p-5">
+          <div className="text-[14px] font-semibold text-fg">Delete all chats?</div>
+          <div className="mt-1.5 text-[12.5px] leading-relaxed text-muted">All {count} chats will be deleted and any work still running will stop. This can't be undone.</div>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="secondary" size="sm" autoFocus onClick={() => setConfirming(false)}>Cancel</Button>
+            <Button variant="danger" size="sm" onClick={removeAll}>Delete all</Button>
+          </div>
+        </Modal>
+      )}
+    </Section>
+  )
+}
+
 function AppContextSection(): ReactNode {
   const settings = useStore((s) => s.settings)
   const update = useStore((s) => s.updateSettings)
@@ -2040,7 +2069,7 @@ export function SettingsPage(): ReactNode {
               {SECTIONS.find((entry) => entry.id === section)?.label}
               {SECTIONS.find((entry) => entry.id === section)?.beta && <BetaBadge />}
             </h2>
-            {section === 'general' && <GeneralSection />}
+            {section === 'general' && <><GeneralSection /><DeleteAllChats /></>}
             {section === 'models' && <ModelsSection />}
             {section === 'providers' && <ProvidersSection />}
             {section === 'subscriptions' && (

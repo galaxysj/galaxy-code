@@ -17,7 +17,7 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'reac
 import type { Chat, Project } from '@shared/types'
 import { cn, relativeTime } from '../lib/utils'
 import { useStore } from '../store'
-import { IconButton, MenuItem, MenuSeparator, Popover, Spinner } from './ui'
+import { IconButton, MenuItem, MenuSeparator, Popover, Spinner, Button, Modal } from './ui'
 
 const PAGE = 6
 
@@ -35,6 +35,8 @@ const ChatRow = memo(function ChatRow({ chat, active, now }: { chat: Chat; activ
   const [menu, setMenu] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(chat.title)
+  const renameAt = useRef(0)
+  const [confirming, setConfirming] = useState(false)
 
   const commit = (): void => {
     setRenaming(false)
@@ -54,7 +56,11 @@ const ChatRow = memo(function ChatRow({ chat, active, now }: { chat: Chat; activ
           autoFocus
           value={title}
           onChange={(event) => setTitle(event.target.value)}
-          onBlur={commit}
+          onBlur={(event) => {
+            // The closing menu can take the focus just after the box opens, which is not the user leaving it.
+            if (Date.now() - renameAt.current < 300) event.currentTarget.focus()
+            else commit()
+          }}
           onKeyDown={(event) => {
             if (event.key === 'Enter') commit()
             if (event.key === 'Escape') {
@@ -90,6 +96,7 @@ const ChatRow = memo(function ChatRow({ chat, active, now }: { chat: Chat; activ
           onClick={() => {
             setMenu(false)
             setTitle(chat.title)
+            renameAt.current = Date.now()
             setRenaming(true)
           }}
         />
@@ -99,10 +106,20 @@ const ChatRow = memo(function ChatRow({ chat, active, now }: { chat: Chat; activ
           danger
           onClick={() => {
             setMenu(false)
-            void window.galaxy.chats.remove(chat.id)
+            setConfirming(true)
           }}
         />
       </Popover>
+      {confirming && (
+        <Modal onClose={() => setConfirming(false)} className="w-[400px] max-w-full p-5">
+          <div className="text-[14px] font-semibold text-fg">Delete chat?</div>
+          <div className="mt-1.5 text-[12.5px] leading-relaxed text-muted">"{chat.title}" will be deleted and any work still running will stop. This can't be undone.</div>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="secondary" size="sm" onClick={() => setConfirming(false)}>Cancel</Button>
+            <Button variant="danger" size="sm" autoFocus onClick={() => { setConfirming(false); void window.galaxy.chats.remove(chat.id) }}>Delete</Button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 })
@@ -220,21 +237,25 @@ function ProjectGroup({ project, chats, activeId, now }: { project: Project; cha
           <MenuSeparator />
           <MenuItem
             icon={<Trash2 size={13} />}
-            label={confirming ? `Remove with ${chats.length} chat${chats.length === 1 ? '' : 's'}?` : 'Remove project'}
-            hint={confirming ? 'Confirm' : undefined}
+            label="Remove project"
             danger
             onClick={() => {
-              if (!confirming && chats.length > 0) {
-                setConfirming(true)
-                return
-              }
               setMenu(false)
-              void window.galaxy.projects.remove(project.id)
+              setConfirming(true)
             }}
           />
-          <div className="px-2 pb-1 pt-0.5 text-[11px] leading-snug text-subtle">Files on disk are kept.</div>
         </Popover>
       </div>
+      {confirming && (
+        <Modal onClose={() => setConfirming(false)} className="w-[400px] max-w-full p-5">
+          <div className="text-[14px] font-semibold text-fg">Remove project?</div>
+          <div className="mt-1.5 text-[12.5px] leading-relaxed text-muted">"{project.name}"{chats.length > 0 ? ` and its ${chats.length} chat${chats.length === 1 ? '' : 's'}` : ''} will be removed from Galaxy Code. Files on disk are kept.</div>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="secondary" size="sm" onClick={() => setConfirming(false)}>Cancel</Button>
+            <Button variant="danger" size="sm" autoFocus onClick={() => { setConfirming(false); void window.galaxy.projects.remove(project.id) }}>Remove</Button>
+          </div>
+        </Modal>
+      )}
       {!collapsed && (
         <div className="ml-[11px] border-l border-line pl-[5px]">
           {chats.length === 0 ? (
