@@ -65,7 +65,7 @@
     "zustand": "^5.0.8"
   },
   "build": {
-    "appId": "dev.galaxycode.app",
+    "appId": "com.galaxysj.galaxycode",
     "productName": "Galaxy Code",
     "directories": {
       "buildResources": "build",
