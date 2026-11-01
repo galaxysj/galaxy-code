@@ -11,6 +11,8 @@ import {
   type BrowserState,
   type Chat,
   type ChatEvent,
+  type ComputerCursor,
+  type ComputerWindow,
   type Effort,
   type Item,
   type McpServerStatus,
@@ -168,6 +170,9 @@ interface State {
   accountsLoading: boolean
   acpProbes: Record<string, AcpProbe>
   antigravityConsent: string | null
+  /** The windows each chat's agent has worked in during its run, the latest last, for the live view. */
+  computerWindows: Record<string, ComputerWindow[]>
+  computerCursor: ComputerCursor | null
   attachmentPreview: Attachment | null
   imageModels: ResolvedImageModel[]
   mcp: McpServerStatus[]
@@ -385,6 +390,15 @@ export const useStore = create<State>((set, get) => {
       case 'antigravity-consent':
         set({ antigravityConsent: event.requestId })
         break
+      case 'computer-window': {
+        const { [event.chatId]: previous = [], ...others } = get().computerWindows
+        const { window } = event
+        set({ computerWindows: window ? { ...others, [event.chatId]: [...previous.filter(({ id }) => id !== window.id), window] } : others })
+        break
+      }
+      case 'computer-cursor':
+        set({ computerCursor: event.cursor })
+        break
       case 'settings': {
         const previous = get().settings
         const accountsChanged = JSON.stringify(previous.accounts) !== JSON.stringify(event.settings.accounts) || previous.acpEnabled !== event.settings.acpEnabled ||
@@ -461,6 +475,8 @@ export const useStore = create<State>((set, get) => {
     accountsLoading: false,
     acpProbes: {},
     antigravityConsent: null,
+    computerWindows: {},
+    computerCursor: null,
     attachmentPreview: null,
     imageModels: resolveImageModels(),
     mcp: [],

@@ -8,6 +8,7 @@ import { Composer } from './components/Composer'
 import { SettingsPage } from './components/Settings'
 import { AntigravityConsent } from './components/AntigravityConsent'
 import { AttachmentPreview } from './components/AttachmentPreview'
+import { ComputerPip } from './components/ComputerPip'
 import { Sidebar } from './components/Sidebar'
 import { SidePanel } from './components/SidePanel'
 import { ErrorDialog, Timeline } from './components/timeline/Timeline'
@@ -322,6 +323,7 @@ export function App(): ReactNode {
       {appError && <ErrorDialog title="Error" message={appError} onClose={() => useStore.setState({ appError: null })} onFix={() => fixWithAgent(appError, () => useStore.setState({ appError: null }))} />}
       {antigravityConsent && <AntigravityConsent requestId={antigravityConsent} />}
       {attachmentPreview && <AttachmentPreview key={attachmentPreview.id} file={attachmentPreview} />}
+      <ComputerPip />
       {toast && (
         <div
           key={toast.id}

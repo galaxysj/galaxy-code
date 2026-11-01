@@ -348,6 +348,21 @@ function browsingTitle(verb: string, items: ToolItem[]): ReactNode {
   return <><span className="text-fg">{verb}</span> <span title={url} onClick={(event) => { event.stopPropagation(); void openLink(url, event) }} className="hover:text-fg hover:underline">{label}</span></>
 }
 
+/** The app a Computer call works in: what it reached, or else the app its steps name, which is known from the start. */
+export function computerApp(item: ToolItem): string | undefined {
+  if (item.meta?.appName) return item.meta.appName
+  const { steps } = (item.input ?? {}) as { steps?: { app?: unknown }[] }
+  if (!Array.isArray(steps)) return undefined
+  const named = steps.filter((step) => typeof step?.app === 'string' && step.app)
+  return named[named.length - 1]?.app as string | undefined
+}
+
+/** A tool's icon, or the icon of the app a Computer call worked in. */
+function ToolIcon({ item, icon: Icon }: { item: ToolItem; icon: typeof Monitor }): ReactNode {
+  const { appIcon } = item.meta ?? {}
+  return appIcon ? <img src={appIcon} alt="" width={20} height={20} className="max-w-none shrink-0" /> : <Icon size={13.5} className="text-subtle" />
+}
+
 function ExploreLine({ item }: { item: ToolItem }): ReactNode {
   const openFile = useStore((s) => s.openFile)
   const Icon = isTerminalRead(item) ? SquareTerminal : isToolOutputRead(item) ? FileOutput : KIND_ICON[item.tool]
@@ -372,7 +387,7 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
         onClick={action}
         className={cn('flex h-7 w-full min-w-0 items-center gap-2 text-left text-[13.8px] font-[450] text-muted', action && 'hover:text-fg')}
       >
-        <span className="flex w-4 shrink-0 justify-center">{isLive(item) ? <Spinner size={13} /> : <Icon size={13.5} className="text-subtle" />}</span>
+        <span className="flex w-4 shrink-0 justify-center">{isLive(item) ? <Spinner size={13} /> : <ToolIcon item={item} icon={Icon} />}</span>
         <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(item.tool === 'bash' && item.status !== 'error' ? `${isLive(item) ? 'Running' : 'Ran'} ${toolActivityTitle(item)}` : toolActivityTitle(item))}</span>
         {!isTerminalRead(item) && !isToolOutputRead(item) && item.detail && (item.tool === 'browser' || item.detail !== basename(item.detail)) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
         {item.meta?.matches !== undefined && item.tool !== 'read' && <span className="shrink-0 text-[12.1px] text-subtle">{plural(item.meta.matches, 'match', 'matches')}</span>}
@@ -399,9 +414,9 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
   )
 }
 
-export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, active = false, browsing = false, ctx }: { items: (ToolItem | ReasoningItem)[]; disclosureKey: string; active?: boolean; browsing?: boolean; ctx?: TimelineContext }): ReactNode {
+export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, active = false, browsing = false, computer = false, ctx }: { items: (ToolItem | ReasoningItem)[]; disclosureKey: string; active?: boolean; browsing?: boolean; computer?: boolean; ctx?: TimelineContext }): ReactNode {
   const tools = items.filter((item): item is ToolItem => item.kind === 'tool')
-  const current = items.find((item) => item.kind === 'reasoning' ? item.streaming : isLive(item) || (browsing && item.status === 'awaiting'))
+  const current = items.find((item) => item.kind === 'reasoning' ? item.streaming : isLive(item) || ((browsing || computer) && item.status === 'awaiting'))
   // Fast tools may finish between renderer frames while the exploration turn continues.
   const live = !!current || active
   const thinkingOnly = tools.length === 0
@@ -409,7 +424,7 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
   const thoughtTime = formatDuration(thoughtDuration)
   const latestItemId = items[items.length - 1].id
   // Preserve collapse within this group across remounts; new groups start fresh.
-  const collapseKey = `${disclosureKey}:${browsing ? 'browse' : 'explore'}`
+  const collapseKey = `${disclosureKey}:${computer ? 'computer' : browsing ? 'browse' : 'explore'}`
   const collapsed = useStore((s) => s.activityCollapsed[collapseKey] ?? false)
   const setCollapsed = useStore((s) => s.setActivityCollapsed)
   const expand = useStore((s) => s.settings.expandToolCalls !== false)
@@ -422,7 +437,10 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
     setCollapsed(collapseKey, open)
     if (!open && !disclosed) toggleDisclosure()
   }
-  const title = browsing
+  const appTool = tools.find((tool) => tool.meta?.appIcon)
+  const title = computer
+    ? `${live ? 'Using' : 'Used'} ${tools.map(computerApp).find(Boolean) ?? 'Computer'}`
+    : browsing
     ? live ? open ? 'Browsing' : browsingTitle('Browsing', tools) : browsingTitle('Browsed', tools)
     : thinkingOnly
       ? live ? (current?.kind === 'reasoning' && thinkingTopic(current.text)) || 'Thinking' : thoughtTime === '0s' ? 'Thought briefly' : `Thought for ${thoughtTime}`
@@ -440,7 +458,7 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
   return (
     <div className="explore-group" title={failures.length && failures.length === tools.length ? failures.map((tool) => `${toolActivityTitle({ ...tool, status: 'done' })}: ${failureReason(tool)}`).join('\n') : undefined}>
       <Row
-        icon={browsing ? <Globe size={13.5} className="text-subtle" /> : thinkingOnly ? <Lightbulb size={13.5} className="text-subtle" /> : <Search size={13.5} className="text-subtle" />}
+        icon={computer ? <ToolIcon item={appTool ?? tools[0]} icon={Monitor} /> : browsing ? <Globe size={13.5} className="text-subtle" /> : thinkingOnly ? <Lightbulb size={13.5} className="text-subtle" /> : <Search size={13.5} className="text-subtle" />}
         title={title}
         live={live}
         open={open}
@@ -462,7 +480,7 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
               ? !item.text.trim() ? null
                 : thinkingOnly ? <Markdown key={item.id} text={item.text} className="py-1 text-[13.8px]! text-muted" />
                 : <ThinkingLine key={item.id} item={item} exploring={live} />
-              : browsing && ctx ? <ToolBlock key={item.id} item={item} ctx={ctx} /> : <ExploreLine key={item.id} item={item} />)}
+              : (browsing || computer) && ctx ? <ToolBlock key={item.id} item={item} ctx={ctx} /> : <ExploreLine key={item.id} item={item} />)}
           </div>
         </div>
         </div>
@@ -748,7 +766,6 @@ function McpTool({ item }: { item: ToolItem }): ReactNode {
 function GenericTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactNode {
   const awaiting = item.status === 'awaiting'
   const [open, toggle] = useDisclosure(awaiting)
-  const Icon = KIND_ICON[item.tool]
   const images = item.meta?.images ?? []
   const input = useMemo(() => {
     const value = item.input
@@ -759,7 +776,7 @@ function GenericTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactN
   return (
     <div>
       <Row
-        icon={<Icon size={13.5} className="text-subtle" />}
+        icon={<ToolIcon item={item} icon={KIND_ICON[item.tool]} />}
         title={attemptedTitle(item) ?? item.title}
         hint={failureReason(item)}
         detail={item.tool === 'browser' || item.tool === 'computer' || item.tool === 'image' ? undefined : item.detail}

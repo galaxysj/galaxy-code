@@ -175,6 +175,31 @@ export interface ComputerPermissions {
 }
 export type ComputerPermission = keyof ComputerPermissions
 export type ComputerMode = 'background' | 'full'
+/** A desktop app found on this computer. */
+export interface InstalledApp {
+  name: string
+  path: string
+  /** As a data URL. */
+  icon?: string
+}
+/** Where the agent cursor is, as shares of the window's size, for the live view. */
+export interface ComputerCursor {
+  windowId: number
+  x: number
+  y: number
+  /** A click, or a drag's button going down or up. */
+  press: 'click' | 'down' | 'up' | null
+  /** How long the move takes, in milliseconds. */
+  duration: number
+}
+/** The window an agent is working in, for the live view. */
+export interface ComputerWindow {
+  id: number
+  app: string
+  title: string
+  width: number
+  height: number
+}
 
 export interface Settings {
   theme: ThemeMode
@@ -384,6 +409,8 @@ export interface PromptMentions {
   chats: { title: string; excerpt: string }[]
   browser: boolean
   computer?: boolean
+  /** Desktop apps the user named, to work in through the Computer tool. */
+  apps?: { name: string; path: string }[]
   tools: { server: string; name: string }[]
   /** Terminal tabs, or text selected in one, as they were when the message was sent. */
   terminals?: { name: string; tabId: string; cwd: string; text: string; selection: boolean }[]
@@ -397,13 +424,13 @@ export type GitCommand = 'commit' | 'commit-push' | 'push'
 
 export interface MentionChip {
   token: string
-  kind: 'skill' | 'file' | 'chat' | 'browser' | 'computer' | 'mcp' | 'terminal' | 'git'
+  kind: 'skill' | 'file' | 'chat' | 'browser' | 'computer' | 'app' | 'mcp' | 'terminal' | 'git'
   label: string
   /** Hover text, such as a file's full path. */
   title?: string
   /** A skill's name for people; `label` stays the id that finds it again. */
   displayName?: string
-  /** A skill's small icon, kept here so sent messages show it after the skill changes. */
+  /** A skill's small icon or an app's icon, kept here so sent messages show it after the skill changes. */
   icon?: string
   /** A skill's brand color. */
   color?: string
@@ -511,6 +538,10 @@ export interface ToolMeta {
   lines?: number
   autoApproved?: boolean
   autoReason?: string
+  /** The name of the app a Computer call worked in. */
+  appName?: string
+  /** That app's icon, as a data URL. */
+  appIcon?: string
 }
 
 interface ItemBase {
@@ -598,6 +629,9 @@ export type UiEvent =
   | { type: 'settings'; settings: Settings; secrets: SecretState }
   | { type: 'projects'; projects: Project[] }
   | { type: 'mcp-status'; statuses: McpServerStatus[] }
+  | { type: 'computer-window'; chatId: string; window: ComputerWindow | null }
+  | { type: 'computer-cursor'; cursor: ComputerCursor }
+  | { type: 'computer-frame'; windowId: number; jpeg: Uint8Array }
   | { type: 'browser-state'; state: BrowserState; tabId?: string }
   | { type: 'menu'; action: 'new-chat' | 'settings' | 'toggle-sidebar' | 'toggle-panel' | 'open-files' | 'open-browser' | 'open-terminal' }
 

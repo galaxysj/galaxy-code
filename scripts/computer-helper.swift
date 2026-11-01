@@ -3,12 +3,17 @@
 //
 // Clicks go through the accessibility API, by ref or by point, or are posted to the window in place,
 // which leaves the user's pointer and keyboard focus alone. Events only reach a window that is not
-// under the pointer when they name it, which takes the private field and call below.
+// under the pointer when they name it, which takes the private field and call below. Pages and many
+// controls also ignore clicks unless their app is active and the window key, so a step can tell the
+// app so without the real front app changing.
 // With full control, requests marked global act on the whole screen with the real pointer and keyboard.
 // Run with the argument hide-cursor, it hides the real cursor until it is killed.
+// Run with the arguments stream and a window number, it writes that window's picture to stdout until it is killed.
 
 import AppKit
 import ApplicationServices
+import CoreImage
+import ScreenCaptureKit
 
 struct Failure: Error {
   let message: String
@@ -17,11 +22,22 @@ struct Failure: Error {
 typealias Request = [String: Any]
 
 let MAX_NODES = 500
+let ICON_SIZE = 64
+let STREAM_WIDTH = 640
+let STREAM_FRAME_RATE: CMTimeScale = 12
+let STREAM_QUALITY = 0.6
 /** The event field AppKit reads a window number from. */
 let WINDOW_FIELD = CGEventField(rawValue: 51)!
-let setWindowLocation: (@convention(c) (CGEvent, CGPoint) -> Void)? = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_NOW)
+let skyLight = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_NOW)
+let setWindowLocation: (@convention(c) (CGEvent, CGPoint) -> Void)? = skyLight
   .flatMap { dlsym($0, "CGEventSetWindowLocation") }
   .map { unsafeBitCast($0, to: (@convention(c) (CGEvent, CGPoint) -> Void).self) }
+let postEventRecord: (@convention(c) (UnsafePointer<ProcessSerialNumber>, UnsafePointer<UInt8>) -> Int32)? = skyLight
+  .flatMap { dlsym($0, "SLPSPostEventRecordTo") }
+  .map { unsafeBitCast($0, to: (@convention(c) (UnsafePointer<ProcessSerialNumber>, UnsafePointer<UInt8>) -> Int32).self) }
+let processForPid: (@convention(c) (pid_t, UnsafeMutablePointer<ProcessSerialNumber>) -> Int32)? = dlopen(nil, RTLD_NOW)
+  .flatMap { dlsym($0, "GetProcessForPID") }
+  .map { unsafeBitCast($0, to: (@convention(c) (pid_t, UnsafeMutablePointer<ProcessSerialNumber>) -> Int32).self) }
 let MAX_DEPTH = 40
 /** Layout containers with nothing to read or press. Their children still appear. */
 let NOISE: Set<String> = ["AXGroup", "AXSplitGroup", "AXLayoutArea", "AXLayoutItem", "AXUnknown", "AXScrollArea"]
@@ -190,6 +206,29 @@ func webArea(_ element: AXUIElement) -> AXUIElement? {
   return nil
 }
 
+/** Whether an element is on a web page or holds one. Chromium answers for a point with the scroll area around its page. */
+func holdsPage(_ element: AXUIElement) -> Bool {
+  if webArea(element) != nil { return true }
+  var pending = children(element)
+  for _ in 0..<30 {
+    guard !pending.isEmpty else { break }
+    let next = pending.removeFirst()
+    if text(next, "AXRole") == "AXWebArea" { return true }
+    pending += children(next)
+  }
+  return false
+}
+
+/** Whether an element comes to differ from an earlier signature. Pages and slow apps show a click late, so this keeps looking until `limit` seconds have passed. */
+func showsChange(_ element: AXUIElement, from before: String?, within limit: TimeInterval) -> Bool {
+  let end = Date().addingTimeInterval(limit)
+  repeat {
+    usleep(150_000)
+    if signature(element) != before { return true }
+  } while Date() < end
+  return false
+}
+
 /** What a page shows, in a form that can be compared before and after a press. */
 func signature(_ area: AXUIElement) -> String {
   var parts: [String] = []
@@ -217,13 +256,120 @@ func clickInPlace(_ request: Request, _ point: CGPoint, kind: String) throws {
   }
 }
 
+/** The window a click lands in: the alert or dialog the service found at the point, or else the target. */
+func clickedWindow(_ request: Request) throws -> (id: Int64, frame: CGRect) {
+  if let hit = request["hit"] as? [Double], hit.count == 5 { return (Int64(hit[0]), CGRect(x: hit[1], y: hit[2], width: hit[3], height: hit[4])) }
+  return (Int64(try number(request, "windowId")), CGRect(x: try number(request, "x"), y: try number(request, "y"), width: try number(request, "width"), height: try number(request, "height")))
+}
+
 /** Where to click an element: the middle of its frame, or of the part inside the window. */
 func clickPoint(_ app: AXUIElement, _ element: AXUIElement, _ request: Request) -> CGPoint? {
   if let x = (request["pointX"] as? NSNumber)?.doubleValue, let y = (request["pointY"] as? NSNumber)?.doubleValue { return CGPoint(x: x, y: y) }
-  guard let box = frame(element) else { return nil }
-  let window = CGRect(x: (request["x"] as? NSNumber)?.doubleValue ?? 0, y: (request["y"] as? NSNumber)?.doubleValue ?? 0, width: (request["width"] as? NSNumber)?.doubleValue ?? 0, height: (request["height"] as? NSNumber)?.doubleValue ?? 0)
-  let visible = box.intersection(window)
-  return visible.isNull ? nil : CGPoint(x: visible.midX, y: visible.midY)
+  return visiblePart(element, request).map { CGPoint(x: $0.midX, y: $0.midY) }
+}
+
+/** The part of an element a click can reach: inside the window and inside every scroll area around it. */
+func visiblePart(_ element: AXUIElement, _ request: Request) -> CGRect? {
+  guard let box = frame(element), let window = try? clickedWindow(request) else { return nil }
+  var visible = box.intersection(window.frame)
+  var current = element
+  for _ in 0..<40 {
+    guard let parent = attribute(current, "AXParent") else { break }
+    current = parent as! AXUIElement
+    let role = text(current, "AXRole")
+    if role == "AXWindow" { break }
+    if role == "AXScrollArea", let clip = frame(current) { visible = visible.intersection(clip) }
+  }
+  return visible.isNull || visible.isEmpty ? nil : visible
+}
+
+func scrollArea(around element: AXUIElement) -> AXUIElement? {
+  var current = element
+  for _ in 0..<40 {
+    guard let parent = attribute(current, "AXParent") else { return nil }
+    current = parent as! AXUIElement
+    if text(current, "AXRole") == "AXScrollArea" { return current }
+  }
+  return nil
+}
+
+/** Narrows in on an element with a scroll bar. Content length is unknown, so it halves the range of the bar each time. */
+func scrollBar(_ element: AXUIElement, of area: AXUIElement, _ request: Request, horizontal: Bool) -> Bool {
+  guard let found = attribute(area, horizontal ? "AXHorizontalScrollBar" : "AXVerticalScrollBar"), let clip = frame(area) else { return false }
+  let bar = found as! AXUIElement
+  var low = 0.0
+  var high = 1.0
+  for _ in 0..<12 {
+    guard let box = frame(element), let value = (attribute(bar, "AXValue") as? NSNumber)?.doubleValue else { return false }
+    let past = horizontal ? box.midX > clip.maxX : box.midY > clip.maxY
+    if past { low = value } else { high = value }
+    guard AXUIElementSetAttributeValue(bar, "AXValue" as CFString, ((low + high) / 2) as CFNumber) == .success else { return false }
+    usleep(80_000)
+    if visiblePart(element, request) != nil { return true }
+  }
+  return false
+}
+
+/** Scrolls with the wheel, for views without a scroll bar. */
+func scrollWheel(_ element: AXUIElement, in area: AXUIElement, _ request: Request) throws -> Bool {
+  guard let clip = frame(area) else { return false }
+  let point = CGPoint(x: clip.midX, y: clip.midY)
+  for _ in 0..<12 {
+    guard let box = frame(element) else { return false }
+    let down = max(-clip.height * 0.8, min(clip.height * 0.8, box.midY - clip.midY))
+    let across = max(-clip.width * 0.8, min(clip.width * 0.8, box.midX - clip.midX))
+    guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: Int32(-down), wheel2: Int32(-across), wheel3: 0) else { return false }
+    event.location = point
+    try address(event, request, point)
+    event.postToPid(try pid(request))
+    usleep(120_000)
+    if visiblePart(element, request) != nil { return true }
+  }
+  return false
+}
+
+/** Brings an element that is scrolled away back into view, the way the app offers first. */
+func reveal(_ element: AXUIElement, _ request: Request) -> Bool {
+  if visiblePart(element, request) != nil { return true }
+  for candidate in ancestors(element) where actions(candidate).contains("AXScrollToVisible") {
+    _ = perform(candidate, "AXScrollToVisible")
+    usleep(150_000)
+    if visiblePart(element, request) != nil { return true }
+  }
+  guard let area = scrollArea(around: element), frame(element) != nil else { return false }
+  if scrollBar(element, of: area, request, horizontal: false) || scrollBar(element, of: area, request, horizontal: true) { return true }
+  return (try? scrollWheel(element, in: area, request)) == true
+}
+
+/** Something of the element that can be clicked in its place when it has no visible frame of its own: what is inside it, or the row around it. */
+func standIn(for element: AXUIElement, _ request: Request) -> AXUIElement? {
+  var pending = children(element)
+  for _ in 0..<40 {
+    guard !pending.isEmpty else { break }
+    let next = pending.removeFirst()
+    if visiblePart(next, request) != nil { return next }
+    pending += children(next)
+  }
+  return ancestors(element).dropFirst().first { ["AXCell", "AXRow"].contains(text($0, "AXRole")) && visiblePart($0, request) != nil }
+}
+
+/** What can still be done for an element that cannot be clicked at a point: press something inside it, or select it or its row. */
+func actWithoutPoint(_ start: AXUIElement, wanted: [String]) -> String? {
+  var pending = children(start)
+  for _ in 0..<40 {
+    guard !pending.isEmpty else { break }
+    let next = pending.removeFirst()
+    for action in wanted where actions(next).contains(action) {
+      let name = summary(next)
+      if perform(next, action) { return "\(action) on \(name)" }
+    }
+    pending += children(next)
+  }
+  for element in ancestors(start) where settable(element, "AXSelected") {
+    let name = summary(element)
+    if AXUIElementSetAttributeValue(element, "AXSelected" as CFString, kCFBooleanTrue) == .success { return "Selected \(name)" }
+  }
+  return nil
 }
 
 /** Presses the element by name when it has such an action, and clicks where it is when it has none or a page ignores it. */
@@ -243,35 +389,49 @@ func click(_ app: AXUIElement, _ request: Request) throws -> Request {
     }
   }
   var dialogs = pressed == nil ? [] : openDialogs(app, request)
-  if let done = pressed, dialogs.isEmpty, let page = page, { usleep(300_000); return signature(page) == before }() == false {
+  if let done = pressed, dialogs.isEmpty, let page = page, showsChange(page, from: before, within: 1) {
     return ["done": done, "dialogs": dialogs]
   }
   if let done = pressed, page == nil || !dialogs.isEmpty { return ["done": done, "dialogs": dialogs] }
-  guard let point = clickPoint(app, start, request) else {
+  // An element scrolled away is brought back first. A click at the agent's own point already says where to go.
+  let atPoint = request["pointX"] != nil
+  let moved = !atPoint && visiblePart(start, request) == nil
+  if moved { _ = reveal(start, request) }
+  guard let point = clickPoint(app, start, request) ?? standIn(for: start, request).flatMap({ clickPoint(app, $0, request) }) else {
     if let done = pressed { return ["done": done, "dialogs": dialogs, "unchanged": true] }
-    throw Failure(message: "\(summary(start)) is not on screen, so it cannot be clicked.")
+    if let done = actWithoutPoint(start, wanted: wanted) { return ["done": done, "dialogs": openDialogs(app, request)] }
+    throw Failure(message: "\(summary(start)) could not be scrolled into view, and nothing inside it can be pressed or selected.")
   }
   // Normal apps show a click in their tree too, so a click in place is checked against the window.
   let scope = page ?? (try? windowElement(app, request))
-  let earlier = page == nil ? scope.map(signature) : before
+  let earlier = page == nil || moved ? scope.map(signature) : before
+  // Closing an alert changes nothing in the window behind it.
+  let hadDialogs = !extras(app, request).isEmpty
   if settable(start, "AXFocused") { AXUIElementSetAttributeValue(start, "AXFocused" as CFString, kCFBooleanTrue) }
   try clickInPlace(request, point, kind: kind)
   dialogs = openDialogs(app, request)
   var reply: Request = ["done": "Clicked \(summary(start)) in place", "dialogs": dialogs]
-  if let scope = scope, dialogs.isEmpty {
-    usleep(300_000)
-    if signature(scope) == earlier { reply["unchanged"] = true }
-  }
+  if let scope = scope, dialogs.isEmpty, !hadDialogs, !showsChange(scope, from: earlier, within: 1.5) { reply["unchanged"] = true }
   return reply
 }
 
 /** Sets what an event needs so that AppKit hands it to the window instead of dropping it. */
 func address(_ event: CGEvent, _ request: Request, _ point: CGPoint) throws {
-  let id = Int64(try number(request, "windowId"))
-  event.setIntegerValueField(WINDOW_FIELD, value: id)
-  event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: id)
-  event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: id)
-  setWindowLocation?(event, CGPoint(x: point.x - (try number(request, "x")), y: point.y - (try number(request, "y"))))
+  let window = try clickedWindow(request)
+  event.setIntegerValueField(WINDOW_FIELD, value: window.id)
+  event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: window.id)
+  event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: window.id)
+  setWindowLocation?(event, CGPoint(x: point.x - window.frame.minX, y: point.y - window.frame.minY))
+}
+
+/** Posts a mouse event to the window, which leaves the real pointer where it is. */
+func postInPlace(_ request: Request, _ type: CGEventType, _ point: CGPoint, button: CGMouseButton = .left, clicks: Int64 = 0, flags: UInt64 = 0) throws {
+  guard let event = CGEvent(mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: type, mouseCursorPosition: point, mouseButton: button) else { throw Failure(message: "Could not create a mouse event") }
+  if clicks > 0 { event.setIntegerValueField(.mouseEventClickState, value: clicks) }
+  event.setDoubleValueField(.mouseEventPressure, value: [CGEventType.leftMouseUp, .rightMouseUp, .mouseMoved].contains(type) ? 0 : 1)
+  event.flags = CGEventFlags(rawValue: flags)
+  try address(event, request, point)
+  event.postToPid(try pid(request))
 }
 
 func postMouse(_ request: Request, _ type: CGEventType, _ point: CGPoint, button: CGMouseButton = .left, clicks: Int64 = 0, flags: UInt64 = 0) throws {
@@ -304,13 +464,66 @@ func glide(_ request: Request, to point: CGPoint, flags: UInt64) throws {
   try postMouse(request, .mouseMoved, point, flags: flags)
 }
 
-/** Brings the target app forward for the real pointer, and stops if it did not come. */
-func bringForward(_ app: AXUIElement, _ request: Request) throws {
+/** Makes the app active, which leaves its windows in their order and its open menus and dialogs as they are. */
+func activate(_ app: AXUIElement) throws {
   AXUIElementSetAttributeValue(app, "AXFrontmost" as CFString, kCFBooleanTrue)
-  if let window = try? windowElement(app, request) { AXUIElementPerformAction(window, "AXRaise" as CFString) }
   for _ in 0..<50 where (attribute(app, "AXFrontmost") as? Bool) != true { usleep(10_000) }
   guard (attribute(app, "AXFrontmost") as? Bool) == true else { throw Failure(message: "The app could not be brought to the front") }
+}
+
+/** Brings the target window forward for the real pointer, and stops if it did not come. */
+func bringForward(_ app: AXUIElement, _ request: Request) throws {
+  try activate(app)
+  if let window = try? windowElement(app, request) { AXUIElementPerformAction(window, "AXRaise" as CFString) }
   usleep(150_000)
+}
+
+/** Tells an app, with AppKit's own event, whether it is active. The real front app keeps its place and the keyboard. */
+func postActivation(_ request: Request, _ subtype: NSEvent.EventSubtype) throws {
+  guard let event = NSEvent.otherEvent(with: .appKitDefined, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: Int(try clickedWindow(request).id), context: nil, subtype: subtype.rawValue, data1: 0, data2: 0), let posted = event.cgEvent else { throw Failure(message: "Could not create an activation event") }
+  posted.postToPid(try pid(request))
+}
+
+/** Makes a window key in its app without moving it. A click on a window that is not key only makes it key, so what is under the click never gets it. */
+func makeKey(_ request: Request) throws {
+  guard let post = postEventRecord, let lookup = processForPid else { return }
+  var process = ProcessSerialNumber()
+  guard lookup(try pid(request), &process) == 0 else { return }
+  var record = [UInt8](repeating: 0, count: 0xf8)
+  record[0x04] = 0xf8
+  record[0x3a] = 0x10
+  var id = UInt32(try clickedWindow(request).id)
+  withUnsafeBytes(of: &id) { bytes in for (offset, byte) in bytes.enumerated() { record[0x3c + offset] = byte } }
+  for offset in 0x20..<0x30 { record[offset] = 0xff }
+  for phase: UInt8 in [1, 2] {
+    record[0x08] = phase
+    _ = post(&process, &record)
+  }
+}
+
+/** Whether the system has the app in front. */
+func isReallyFront(_ request: Request) throws -> Bool {
+  return NSWorkspace.shared.frontmostApplication?.processIdentifier == (try pid(request))
+}
+
+/** Has a background app act as if it were in front until `unfocus`. An app really in front needs none of this. Telling an app again makes it redraw as if it had just become active, so `front` says which app was in front the last time, and only a change of front app, which can end this, repeats it. Answers with the app in front now. */
+func focusInPlace(_ request: Request) throws -> Request {
+  let front = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+  let reply: Request = ["done": "Focused", "front": front]
+  if try isReallyFront(request) || (request["front"] as? NSNumber)?.int32Value == front { return reply }
+  try postActivation(request, .applicationActivated)
+  usleep(100_000)
+  try makeKey(request)
+  usleep(100_000)
+  return reply
+}
+
+/** Ends `focus`, unless the app came to the front since. */
+func unfocusInPlace(_ request: Request) throws {
+  if try isReallyFront(request) { return }
+  try postActivation(request, .applicationDeactivated)
+  // A posted event is lost if the process ends right away.
+  usleep(100_000)
 }
 
 func isGlobal(_ request: Request) -> Bool {
@@ -346,37 +559,55 @@ func pointer(_ app: AXUIElement, _ request: Request) throws -> Request {
   let button: CGMouseButton = right ? .right : .left
   let flags = UInt64((request["flags"] as? NSNumber)?.intValue ?? 0)
   let (down, up, dragged): (CGEventType, CGEventType, CGEventType) = right ? (.rightMouseDown, .rightMouseUp, .rightMouseDragged) : (.leftMouseDown, .leftMouseUp, .leftMouseDragged)
-  if !isGlobal(request) { try bringForward(app, request) }
-  for point in points { try requireOnTop(point, request) }
-  try glide(request, to: first, flags: flags)
-  usleep(20_000)
-  switch request["kind"] as? String {
-  case "move":
-    for point in points.dropFirst() { try glide(request, to: point, flags: flags) }
-    return ["done": "Moved"]
-  case "drag":
-    try postMouse(request, down, first, button: button, clicks: 1, flags: flags)
-    usleep(40_000)
+  // In the background the gesture goes to the window, whatever covers it, and the real pointer stays out of it.
+  let background = (request["background"] as? Bool) == true
+  let post = background ? postInPlace : postMouse
+  // Pages drop a posted move, since the real pointer is elsewhere, but take a drag with no button down as one. Native views could act on that, so only pages get it.
+  var element: AXUIElement?
+  let onPage = background && AXUIElementCopyElementAtPosition(app, Float(first.x), Float(first.y), &element) == .success && element.map(holdsPage) == true
+  let hover: CGEventType = onPage ? .leftMouseDragged : .mouseMoved
+  /** Small steps, so that apps which sample the pointer draw a line and not dots. */
+  func walk(_ type: CGEventType, clicks: Int64) throws {
     var previous = first
     for point in points.dropFirst() {
-      // Small steps, so that apps which sample the pointer draw a line and not dots.
       let steps = max(1, Int(hypot(point.x - previous.x, point.y - previous.y) / 6))
       for step in 1...steps {
         let share = CGFloat(step) / CGFloat(steps)
-        try postMouse(request, dragged, CGPoint(x: previous.x + (point.x - previous.x) * share, y: previous.y + (point.y - previous.y) * share), button: button, clicks: 1, flags: flags)
+        try post(request, type, CGPoint(x: previous.x + (point.x - previous.x) * share, y: previous.y + (point.y - previous.y) * share), button, clicks, flags)
         usleep(8_000)
       }
       previous = point
     }
+  }
+  if background {
+    try post(request, hover, first, .left, 0, flags)
+  } else {
+    if !isGlobal(request) { try bringForward(app, request) }
+    for point in points { try requireOnTop(point, request) }
+    try glide(request, to: first, flags: flags)
+  }
+  usleep(20_000)
+  switch request["kind"] as? String {
+  case "move":
+    if background {
+      try walk(hover, clicks: 0)
+    } else {
+      for point in points.dropFirst() { try glide(request, to: point, flags: flags) }
+    }
+    return ["done": "Moved"]
+  case "drag":
+    try post(request, down, first, button, 1, flags)
     usleep(40_000)
-    try postMouse(request, up, last, button: button, clicks: 1, flags: flags)
+    try walk(dragged, clicks: 1)
+    usleep(40_000)
+    try post(request, up, last, button, 1, flags)
     return ["done": "Dragged"]
   default:
     let count = max(1, Int64((request["count"] as? NSNumber)?.intValue ?? 1))
     for click in 1...count {
-      try postMouse(request, down, first, button: button, clicks: click, flags: flags)
+      try post(request, down, first, button, click, flags)
       usleep(20_000)
-      try postMouse(request, up, first, button: button, clicks: click, flags: flags)
+      try post(request, up, first, button, click, flags)
       usleep(40_000)
     }
     return ["done": count > 1 ? "Clicked \(count) times" : "Clicked"]
@@ -527,13 +758,48 @@ func state(_ request: Request) throws -> Request {
   return ["state": String(mark, radix: 16)]
 }
 
+/** An icon drawn large as a PNG, for the app to show smaller, so that every icon comes out equally sharp. */
+func iconPng(_ icon: NSImage) -> String? {
+  guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: ICON_SIZE, pixelsHigh: ICON_SIZE, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+  NSGraphicsContext.saveGraphicsState()
+  NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+  NSGraphicsContext.current?.imageInterpolation = .high
+  icon.draw(in: NSRect(x: 0, y: 0, width: ICON_SIZE, height: ICON_SIZE))
+  NSGraphicsContext.restoreGraphicsState()
+  return bitmap.representation(using: .png, properties: [:])?.base64EncodedString()
+}
+
+/** A running app's icon. */
+func appIcon(_ request: Request) throws -> Request {
+  guard let icon = NSRunningApplication(processIdentifier: try pid(request))?.icon, let png = iconPng(icon) else { throw Failure(message: "The app has no icon") }
+  return ["icon": png]
+}
+
+/** The icons of apps on disk, in the order of `paths`. */
+func fileIcons(_ request: Request) -> Request {
+  let paths = (request["paths"] as? [String]) ?? []
+  // Safari and a few others are links in /Applications, whose icon carries the shortcut arrow.
+  return ["icons": paths.map { iconPng(NSWorkspace.shared.icon(forFile: URL(fileURLWithPath: $0).resolvingSymlinksInPath().path)) ?? "" }]
+}
+
 func handle(_ request: Request) throws -> Request {
   switch request["op"] as? String {
+  case "icon": return try appIcon(request)
+  case "fileIcons": return fileIcons(request)
   case "windows": return windows()
   case "state": return try state(request)
   case "raise":
     try bringForward(try application(request), request)
     return ["done": "Raised"]
+  case "bringForward":
+    // Raising a window of the app already in front could close its open menu or cover its dialog.
+    if try !isReallyFront(request) { try bringForward(try application(request), request) }
+    return ["done": "In front"]
+  case "focus":
+    return try focusInPlace(request)
+  case "unfocus":
+    try unfocusInPlace(request)
+    return ["done": "Unfocused"]
   case "frame": return try locate(try application(request), request)
   case "tree": return try tree(try application(request), request)
   case "click": return try click(try application(request), request)
@@ -583,7 +849,63 @@ func hideCursor() -> Never {
   exit(0)
 }
 
+/** Writes each new picture of a window as a JPEG after its length. */
+@available(macOS 12.3, *)
+final class WindowStream: NSObject, SCStreamOutput, SCStreamDelegate {
+  let context = CIContext()
+
+  func stream(_ stream: SCStream, didOutputSampleBuffer buffer: CMSampleBuffer, of type: SCStreamOutputType) {
+    // A frame with no change holds no image.
+    guard type == .screen, let pixels = CMSampleBufferGetImageBuffer(buffer) else { return }
+    let options = [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): STREAM_QUALITY]
+    let image = CIImage(cvPixelBuffer: pixels)
+    let scale = min(1, CGFloat(STREAM_WIDTH) / image.extent.width)
+    guard let jpeg = context.jpegRepresentation(of: image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)), colorSpace: CGColorSpaceCreateDeviceRGB(), options: options) else { return }
+    var length = UInt32(jpeg.count).bigEndian
+    FileHandle.standardOutput.write(Data(bytes: &length, count: 4))
+    FileHandle.standardOutput.write(jpeg)
+  }
+
+  func stream(_ stream: SCStream, didStopWithError error: Error) { exit(0) }
+}
+
+/** Chromium's capture always draws the user's cursor over a window. This one leaves it out. */
+@available(macOS 12.3, *)
+func streamWindow(_ id: CGWindowID) -> Never {
+  let output = WindowStream()
+  let parent = getppid()
+  Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in if getppid() != parent { exit(0) } }
+  var running: SCStream?
+  Task {
+    do {
+      let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+      guard let window = content.windows.first(where: { $0.windowID == id }) else { exit(1) }
+      let config = SCStreamConfiguration()
+      config.showsCursor = false
+      // The stream crops to this size rather than scaling, so it takes the whole window and each frame is scaled down.
+      let density = NSScreen.main?.backingScaleFactor ?? 2
+      config.width = max(1, Int(window.frame.width * density))
+      config.height = max(1, Int(window.frame.height * density))
+      config.minimumFrameInterval = CMTime(value: 1, timescale: STREAM_FRAME_RATE)
+      config.queueDepth = 3
+      let stream = SCStream(filter: SCContentFilter(desktopIndependentWindow: window), configuration: config, delegate: output)
+      try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: DispatchQueue(label: "stream"))
+      try await stream.startCapture()
+      running = stream
+    } catch {
+      exit(1)
+    }
+  }
+  _ = running
+  RunLoop.main.run()
+  exit(0)
+}
+
 if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "hide-cursor" { hideCursor() }
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "stream", let id = CGWindowID(CommandLine.arguments[2]) {
+  guard #available(macOS 12.3, *) else { exit(1) }
+  streamWindow(id)
+}
 
 // An action that opens a modal alert does not answer until the alert closes, so do not wait on it for long.
 AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 2)

@@ -572,7 +572,7 @@ class BrowserService {
     const from = await this.pagePoint(action.x, action.y)
     const to = await this.pagePoint(action.toX, action.toY)
     await this.moveCursor(from, signal)
-    await this.updateCursor({ action: 'click', ...from })
+    await this.updateCursor({ action: 'press', ...from })
     await this.command('Input.dispatchMouseEvent', { type: 'mouseMoved', ...from })
     await this.command('Input.dispatchMouseEvent', { type: 'mousePressed', ...from, button: 'left', buttons: 1, clickCount: 1 })
     let last = from
@@ -587,6 +587,7 @@ class BrowserService {
     } finally {
       // A stopped drag must not leave the page holding the button down.
       await this.command('Input.dispatchMouseEvent', { type: 'mouseReleased', ...last, button: 'left', buttons: 0, clickCount: 1 })
+      await this.updateCursor({ action: 'release' })
       this.cursorPosition = last
     }
   }

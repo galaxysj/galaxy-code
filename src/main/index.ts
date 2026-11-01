@@ -9,6 +9,7 @@ import { disposeAccountWorkers } from './services/accountWorkers'
 import { registerIpc } from './ipc'
 import { bridge } from './services/bridge'
 import { browser } from './services/browser'
+import { computer } from './services/computer'
 import { mcp } from './services/mcp'
 import { store } from './store'
 import { killBackgroundProcesses } from './tools/shell'
@@ -192,6 +193,7 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     manager.stopAll()
+    computer.releaseAll()
     store.flushSync()
     killBackgroundProcesses()
     terminals.closeAll()

@@ -130,7 +130,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     }
   }
   const emitUi = (event: UiEvent): void => {
-    if (event.type === 'settings' || event.type === 'projects' || event.type === 'mcp-status' || event.type === 'inline-edit-delta') {
+    if (event.type === 'computer-window' || event.type === 'computer-cursor' || event.type === 'computer-frame' || event.type === 'settings' || event.type === 'projects' || event.type === 'mcp-status' || event.type === 'inline-edit-delta') {
       for (const win of getWindows()) sendUi(win, event)
       return
     }
@@ -165,6 +165,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
   browser.registerTab = (chatId, tabId, background) => emitUi({ type: 'open-browser', chatId, tabId, background })
   browser.requestNewTab = (tabId) => emitUi({ type: 'open-browser-tab', tabId, background: true })
   terminals.emit = emitUi
+  computer.onWindow = (chatId, window) => emitUi({ type: 'computer-window', chatId, window })
+  computer.onCursor = (cursor) => emitUi({ type: 'computer-cursor', cursor })
+  computer.onFrame = (windowId, jpeg) => emitUi({ type: 'computer-frame', windowId, jpeg })
 
   const handlers: Record<string, Handler> = {
     'windows.create': createWindow,
@@ -366,6 +369,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'browser.clearData': (kind: BrowserDataKind) => browser.clearData(kind),
     'computer.permissions': () => computer.permissions(),
     'computer.requestPermission': (kind: ComputerPermission) => computer.requestPermission(kind),
+    'computer.searchApps': (query: string) => computer.searchApps(query),
+    'computer.watch': (windowIds: number[]) => computer.watch(windowIds),
     'terminal.create': (cwd: string, id = newId('terminal_')) => {
       const win = requestWindow()
       if (win) tabWindows.set(id, win.id)

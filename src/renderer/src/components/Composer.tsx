@@ -1,4 +1,5 @@
 import {
+  AppWindow,
   ArrowUp,
   Check,
   ChevronDown,
@@ -31,7 +32,7 @@ import {
   X
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from 'react'
-import type { AgentMode, Attachment, Chat, GitCommand, Item, PermissionMode, ProjectFileEntry, PromptMentions, RevertedMessage, SkillInfo, ToolItem } from '@shared/types'
+import type { AgentMode, Attachment, Chat, GitCommand, InstalledApp, Item, PermissionMode, ProjectFileEntry, PromptMentions, RevertedMessage, SkillInfo, ToolItem } from '@shared/types'
 import { basename, cn, tildify } from '../lib/utils'
 import { GIT_COMMAND_ICON, GIT_COMMANDS, gitCommandFor, gitToken, runGitCommand } from '../lib/gitCommands'
 import { useActiveChat, useChatId, useRunConfig, useStore, type PanelTab } from '../store'
@@ -404,6 +405,10 @@ function selectedFrom(mentions: PromptMentions | undefined): SelectedMention[] {
     const id = `${chip.kind}:${chip.token}`
     if (chip.kind === 'browser') return [{ id, kind: 'browser', token: chip.token }]
     if (chip.kind === 'computer') return [{ id, kind: 'computer', token: chip.token }]
+    if (chip.kind === 'app') {
+      const entry = mentions.apps?.find(({ name }) => name === chip.label)
+      return entry ? [{ id: `app:${entry.path}`, kind: 'app', token: chip.token, name: entry.name, path: entry.path, icon: chip.icon }] : []
+    }
     if (chip.kind === 'git') {
       const command = gitCommandFor(chip.label)
       return command ? [{ id, kind: 'git', token: chip.token, command }] : []
@@ -480,6 +485,8 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const [mention, setMention] = useState<{ trigger: '/' | '@'; start: number; end: number; query: string } | null>(null)
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [mentionFiles, setMentionFiles] = useState<ProjectFileEntry[]>([])
+  const [mentionApps, setMentionApps] = useState<InstalledApp[]>([])
+  const computerUse = useStore((s) => s.settings.computerUse)
   const [mentionIndex, setMentionIndex] = useState(0)
   useEffect(() => {
     if (settingsOpen) {
@@ -572,6 +579,18 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
     return () => { current = false }
   }, [mention?.trigger, mention?.query, projectId, chat?.id])
 
+  // Apps only come up for a search: a Mac has too many to list under a bare @.
+  useEffect(() => {
+    const query = mention?.trigger === '@' && computerUse ? mention.query.trim() : ''
+    if (!query) {
+      setMentionApps([])
+      return
+    }
+    let current = true
+    void window.galaxy.computer.searchApps(query).then((apps) => { if (current) setMentionApps(apps) }).catch(() => { if (current) setMentionApps([]) })
+    return () => { current = false }
+  }, [mention?.trigger, mention?.query, computerUse])
+
   const terminalTabs = panelTabs.filter((tab): tab is Extract<PanelTab, { type: 'terminal' }> => tab.type === 'terminal' && !terminalOutput[tab.id]?.exited)
   const recentChats = Object.values(chats)
     .filter((entry) => entry.id !== activeChatId && !entry.side)
@@ -602,6 +621,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
           ...skills.map((skill) => ({ id: `skill:${skill.path}`, kind: 'skill' as const, name: skill.name, detail: skill.description || skill.scope, path: skill.path, displayName: skill.displayName, icon: skill.icon, color: skill.brandColor })),
           { id: 'browser', kind: 'browser' as const, name: 'Browser', detail: 'Use the in-app browser for this task.' },
           { id: 'computer', kind: 'computer' as const, name: 'Computer', detail: useStore.getState().settings.computerUse ? 'Work in other apps in the background.' : 'Turn this on in Settings > Computer Use.' },
+          ...mentionApps.map((entry) => ({ id: `app:${entry.path}`, kind: 'app' as const, name: entry.name, detail: entry.path, path: entry.path, icon: entry.icon })),
           ...(Object.keys(GIT_COMMANDS) as GitCommand[]).map((command) => ({ id: `git:${command}`, kind: 'git' as const, name: GIT_COMMANDS[command].label, detail: GIT_COMMANDS[command].detail, git: command })),
           ...mcp.filter((server) => server.state === 'ready').map((server) => ({ id: `mcp:${server.id}`, kind: 'mcp' as const, name: mcpServers.find((config) => config.id === server.id)?.name ?? server.id, detail: `${server.tools.length} tools`, server: server.id })),
           ...terminalTabs.map((tab) => ({ id: `terminal:${tab.id}`, kind: 'terminal' as const, name: tab.customTitle || tab.title, detail: tab.cwd, tabId: tab.id, cwd: tab.cwd })),
@@ -695,6 +715,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
     else if (entry.kind === 'chat' && entry.chatId) selected = { id: entry.id, kind: 'chat', token, name: entry.name, chatId: entry.chatId }
     else if (entry.kind === 'browser') selected = { id: entry.id, kind: 'browser', token }
     else if (entry.kind === 'computer') selected = { id: entry.id, kind: 'computer', token }
+    else if (entry.kind === 'app' && entry.path) selected = { id: entry.id, kind: 'app', token, name: entry.name, path: entry.path, icon: entry.icon }
     else if (entry.kind === 'mcp' && entry.server) selected = { id: entry.id, kind: 'mcp', token, server: entry.server, name: entry.name }
     else if (entry.kind === 'terminal' && entry.tabId) selected = { id: entry.id, kind: 'terminal', token, name: entry.name, tabId: entry.tabId, cwd: entry.cwd ?? '' }
     if (!selected) return
@@ -841,6 +862,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
       chats: mentionedChats,
       browser: selected.some((item) => item.kind === 'browser'),
       computer: selected.some((item) => item.kind === 'computer'),
+      apps: selected.flatMap((item) => item.kind === 'app' ? [{ name: item.name, path: item.path }] : []),
       tools: selected.flatMap((item) => {
         if (item.kind !== 'mcp') return []
         if (item.tool) return [{ server: item.server, name: item.tool }]
@@ -857,6 +879,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         kind: item.kind,
         label: item.kind === 'browser' ? 'Browser' : item.kind === 'computer' ? 'Computer' : item.kind === 'git' ? GIT_COMMANDS[item.command].label : item.name,
         ...(item.kind === 'file' ? { title: item.path } : {}),
+        ...(item.kind === 'app' ? { title: item.path, icon: item.icon } : {}),
         ...(item.kind === 'skill' ? { displayName: item.displayName, icon: item.icon, color: item.color } : {}),
         ...(item.kind === 'terminal' ? { title: item.selection ? item.selection.slice(0, 400) : item.cwd } : {}),
         ...(item.kind === 'mcp' && !item.tool ? { title: item.server } : {})
@@ -966,7 +989,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
                   onMouseMove={() => { if (index !== mentionIndex) setMentionIndex(index) }}
                   className={cn('flex h-9.5 w-full min-w-0 items-center gap-3 rounded-lg px-3 text-left', index === mentionIndex ? 'bg-hover text-fg' : 'text-muted', entry.disabled && 'cursor-default opacity-40')}
                 >
-                  <span className="flex w-4 shrink-0 justify-center">{entry.kind === 'model' && entry.brand ? <ModelBrandIcon brand={entry.brand} /> : entry.kind === 'file' ? <FileTypeIcon name={entry.name} /> : entry.kind === 'skill' ? <SkillIcon icon={entry.icon} color={entry.color} size={15} fallback={<Icon size={15} className={entry.color ? undefined : 'text-subtle'} />} /> : <Icon size={15} className="text-subtle" />}</span>
+                  <span className="flex w-4 shrink-0 justify-center">{entry.kind === 'app' && entry.icon ? <img src={entry.icon} alt="" width={22} height={22} className="max-w-none shrink-0" /> : entry.kind === 'model' && entry.brand ? <ModelBrandIcon brand={entry.brand} /> : entry.kind === 'file' ? <FileTypeIcon name={entry.name} /> : entry.kind === 'skill' ? <SkillIcon icon={entry.icon} color={entry.color} size={15} fallback={<Icon size={15} className={entry.color ? undefined : 'text-subtle'} />} /> : <Icon size={15} className="text-subtle" />}</span>
                   <span className="flex min-w-0 flex-1 items-baseline gap-2.5">
                     <span className="max-w-[60%] shrink-0 truncate text-[13px] text-fg">{entry.displayName ?? entry.name}</span>
                     <span className="min-w-0 truncate text-[11.5px] text-subtle">{entry.detail}</span>
@@ -1253,9 +1276,9 @@ function CurrentTask({ chat, items }: { chat: Chat; items: Item[] | undefined })
   )
 }
 
-const MENU_HEADINGS: Record<MentionKind, string> = { model: 'Models', mode: 'Modes', command: 'Commands', upload: 'Attachments', skill: 'Skills', git: 'Tools', browser: 'Tools', computer: 'Tools', mcp: 'MCP servers', terminal: 'Terminals', chat: 'Recent chats', file: 'Files' }
+const MENU_HEADINGS: Record<MentionKind, string> = { model: 'Models', mode: 'Modes', command: 'Commands', upload: 'Attachments', skill: 'Skills', git: 'Tools', browser: 'Tools', computer: 'Tools', app: 'Apps', mcp: 'MCP servers', terminal: 'Terminals', chat: 'Recent chats', file: 'Files' }
 
-const CHIP_ICON: Record<MentionKind, typeof Globe> = { model: Sparkles, mode: FileText, command: MessagesSquare, upload: Paperclip, skill: Package, file: FileText, chat: MessageCircle, browser: Globe, computer: Monitor, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
+const CHIP_ICON: Record<MentionKind, typeof Globe> = { model: Sparkles, mode: FileText, command: MessagesSquare, upload: Paperclip, skill: Package, file: FileText, chat: MessageCircle, browser: Globe, computer: Monitor, app: AppWindow, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
 
 /**
  * Draws picked mentions as chips under the transparent textarea text. Each chip keeps
@@ -1274,7 +1297,7 @@ function ComposerChips({ text, mentions }: { text: string; mentions: SelectedMen
           <span key={index} className="text-link" style={item.kind === 'git' ? { color: 'var(--orange)' } : item.kind === 'skill' && item.color ? { color: item.color } : undefined}>
             <span className="relative">
               <span className="invisible">{part[0]}</span>
-              <span className="absolute left-0 top-1/2 flex -translate-y-1/2">{item.kind === 'file' ? <FileTypeIcon name={item.name} size={11} /> : item.kind === 'skill' ? <SkillIcon icon={item.icon} color={item.color} size={13} fallback={<Icon size={13} />} /> : <Icon size={13} />}</span>
+              <span className="absolute left-0 top-1/2 flex -translate-y-1/2">{item.kind === 'app' && item.icon ? <img src={item.icon} alt="" width={16} height={16} className="max-w-none shrink-0" /> : item.kind === 'file' ? <FileTypeIcon name={item.name} size={11} /> : item.kind === 'skill' ? <SkillIcon icon={item.icon} color={item.color} size={13} fallback={<Icon size={13} />} /> : <Icon size={13} />}</span>
             </span>
             {part.slice(1)}
           </span>
@@ -1285,13 +1308,14 @@ function ComposerChips({ text, mentions }: { text: string; mentions: SelectedMen
   )
 }
 
-type MentionKind = 'model' | 'mode' | 'command' | 'git' | 'upload' | 'skill' | 'file' | 'chat' | 'browser' | 'computer' | 'mcp' | 'terminal'
+type MentionKind = 'model' | 'mode' | 'command' | 'git' | 'upload' | 'skill' | 'file' | 'chat' | 'browser' | 'computer' | 'app' | 'mcp' | 'terminal'
 type SelectedMention =
   | { id: string; kind: 'skill'; token: string; name: string; displayName?: string; path: string; icon?: string; color?: string }
   | { id: string; kind: 'file'; token: string; name: string; path: string }
   | { id: string; kind: 'chat'; token: string; name: string; chatId: string }
   | { id: string; kind: 'browser'; token: string }
   | { id: string; kind: 'computer'; token: string }
+  | { id: string; kind: 'app'; token: string; name: string; path: string; icon?: string }
   | { id: string; kind: 'git'; token: string; command: GitCommand }
   | { id: string; kind: 'mcp'; token: string; server: string; name: string; tool?: string }
   | { id: string; kind: 'terminal'; token: string; name: string; tabId: string; cwd: string; selection?: string }

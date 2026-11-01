@@ -1,5 +1,5 @@
 export interface CursorUpdate {
-  action: 'center' | 'move' | 'click' | 'show' | 'hide'
+  action: 'center' | 'move' | 'click' | 'press' | 'release' | 'show' | 'hide'
   x?: number
   y?: number
 }
@@ -103,13 +103,24 @@ export function agentCursorScript(update: CursorUpdate): string {
         click(x, y) {
           this.move(x, y, false);
           press?.cancel();
-          if (!reduced()) press = glyph.animate([{ transform: 'scale(1)' }, { transform: 'scale(.9)', offset: .35 }, { transform: 'scale(1)' }], { duration: 200, easing: 'cubic-bezier(.2,.8,.2,1)' });
+          if (!reduced()) press = glyph.animate([{ transform: 'scale(1)' }, { transform: 'scale(.78)', offset: .35 }, { transform: 'scale(1)' }], { duration: 240, easing: 'cubic-bezier(.2,.8,.2,1)' });
+        },
+        press(x, y) {
+          this.move(x, y, false);
+          press?.cancel();
+          if (!reduced()) press = glyph.animate([{ transform: 'scale(1)' }, { transform: 'scale(.78)' }], { duration: 110, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' });
+        },
+        release() {
+          press?.cancel();
+          if (!reduced()) press = glyph.animate([{ transform: 'scale(.78)' }, { transform: 'scale(1)' }], { duration: 140, easing: 'cubic-bezier(.2,.8,.2,1)' });
         }
       };
     }
     const api = globalThis[key];
     if (update.action === 'center') return api.center();
     if (update.action === 'click') { api.click(update.x, update.y); return 0; }
+    if (update.action === 'press') { api.press(update.x, update.y); return 0; }
+    if (update.action === 'release') { api.release(); return 0; }
     return api.move(update.x, update.y, update.action === 'move');
   })()`
 }

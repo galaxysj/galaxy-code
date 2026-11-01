@@ -1,10 +1,10 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
-import { mkdir, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { app, BrowserWindow, desktopCapturer, globalShortcut, nativeImage, screen, shell, systemPreferences, type Rectangle } from 'electron'
-import type { ComputerPermission, ComputerPermissions } from '@shared/types'
+import type { ComputerCursor, ComputerPermission, ComputerPermissions, ComputerWindow, InstalledApp } from '@shared/types'
 import { store } from '../store'
 import { errorMessage, newId, sleep, truncateEnd } from '../util'
 import { agentCursorScript } from './browserCursor'
@@ -12,10 +12,10 @@ import { agentCursorScript } from './browserCursor'
 const run = promisify(execFile)
 
 export interface ComputerAction {
-  action: 'apps' | 'open_app' | 'activate' | 'tree' | 'screenshot' | 'click' | 'move' | 'drag' | 'type' | 'set_value' | 'press' | 'scroll' | 'wait'
-  /** tree, screenshot, activate and open_app: the app's name. */
+  action: 'apps' | 'open_app' | 'activate' | 'tree' | 'screenshot' | 'snapshot' | 'click' | 'move' | 'drag' | 'type' | 'set_value' | 'press' | 'scroll' | 'wait'
+  /** tree, screenshot, snapshot, activate and open_app: the app's name. */
   app?: string
-  /** tree, screenshot and activate: part of the window's title, when the app has several. */
+  /** tree, screenshot, snapshot and activate: part of the window's title, when the app has several. */
   window?: string
   /** tree only: read the menu bar instead of the window. */
   menu?: boolean
@@ -80,14 +80,28 @@ interface Target {
   nodes: Map<string, TreeNode>
   /** The lines of the latest tree of the window and of the menu bar, by ref. */
   lines: { window?: Map<string, string>; menu?: Map<string, string> }
+  /** When the agent last acted on the window, until a read has waited for that to show. */
+  actedAt?: number
   /** What the window showed at the latest read, until the agent itself acts on it. */
   seen?: string
   /** The agent was told about a change, so a page that never stops changing cannot block it for good. */
   warned?: boolean
-  image: { width: number; height: number; windowWidth: number; windowHeight: number } | null
+  /** `alert` is set when the screenshot shows an alert instead of the window, so its pixels map to the alert. */
+  image: { width: number; height: number; windowWidth: number; windowHeight: number; alert: AppWindow | null } | null
 }
 
 const SCREENSHOT_WIDTH = 1400
+
+/** How long after an action a read waits at least and at most. Pages and apps show what a click did late, and a page that animates never stops changing. */
+const SETTLE_MIN_MS = 1000
+const SETTLE_MAX_MS = 3000
+
+/** The pace of the helper's drags, whose small steps take at least this long, and how often the cursor follows them. */
+const GESTURE_PIXELS_PER_MS = 6 / 9
+const CURSOR_STEP_MS = 40
+
+/** The modal panel level, where macOS puts alerts. */
+const ALERT_LAYER = 8
 
 const CANCELED = 'The user pressed Esc and canceled computer use. Do not make any more Computer calls this turn. Stop all computer actions, continue with the rest of the work without them, and tell the user what was left undone.'
 
@@ -108,6 +122,12 @@ html,body{margin:0;height:100%;background:transparent;overflow:hidden;font:600 1
 @media (prefers-reduced-motion:reduce){.glow{animation:none}}
 </style></head><body><div class="glow">${across('top')}${across('bottom')}${down('left')}${down('right')}</div>${notice !== null ? '<div class="note">Galaxy is using your computer<span>Press Esc to cancel</span></div>' : ''}</body></html>`
 }
+
+/** Where macOS keeps apps, and the one app people use that lives elsewhere. */
+const APP_FOLDERS = ['/Applications', '/Applications/Utilities', '/System/Applications', '/System/Applications/Utilities', join(homedir(), 'Applications')]
+const FINDER = { name: 'Finder', path: '/System/Library/CoreServices/Finder.app' }
+const APP_LIST_MS = 60_000
+const APP_RESULTS = 8
 
 /** System prompts for passwords and permissions, which only the user may answer. */
 const SYSTEM_PROMPTS = new Set(['SecurityAgent', 'universalAccessAuthWarn', 'coreautha', 'Dock', 'Window Server'])
@@ -198,8 +218,25 @@ function treeChanges(previous: Map<string, string>, current: Map<string, string>
 }
 
 class ComputerService {
+  /** Tells the app which window a chat is working in, for the live view. */
+  onWindow: (chatId: string, window: ComputerWindow | null) => void = () => {}
+  /** The overlay is a window of its own, so a capture of the target misses it and the live view draws the cursor itself. */
+  onCursor: (cursor: ComputerCursor) => void = () => {}
+  onFrame: (windowId: number, jpeg: Uint8Array) => void = () => {}
+  /** The apps found on this computer, and when. */
+  private installed: { at: number; apps: InstalledApp[] } | null = null
+  /** Installed apps' icons as data URLs, by path. */
+  private fileIcons = new Map<string, string>()
+  /** App icons as data URLs, by process. */
+  private icons = new Map<number, string>()
+  /** Every window a chat has worked in during its run, which are the ones the live view may show. */
+  private visited = new Map<string, Set<number>>()
+  /** The helpers streaming the windows of the live view, so that switching between them shows a picture at once. */
+  private live = new Map<number, ChildProcess>()
   /** A window of its own that draws the agent cursor. Clicks pass through it. */
   private overlay: Promise<BrowserWindow> | null = null
+  /** The window server level the overlay was last given, so it is only set when it changes. */
+  private overlayLayer = 0
   /** The window the cursor last sat on. */
   private anchor: AppWindow | null = null
   /** Windows of this app that clicks pass through. Everything else it owns is out of an agent's reach. */
@@ -213,6 +250,10 @@ class ComputerService {
   /** Chats the user stopped with Esc. They can do nothing more on the computer until their run ends. */
   private canceled = new Set<string>()
   private asked = new Set<string>()
+  /** Chats in Full Access, whose apps really come to the front instead of acting as if they were there. */
+  private inFront = new Set<string>()
+  /** The app each chat has told it is active, until its run ends or it moves to another app. */
+  private held = new Map<string, Record<string, unknown>>()
   private fullControlWindows: { window: BrowserWindow; bounds: Rectangle }[] = []
   private cursorProcess: ChildProcess | null = null
   private cursorTimer: NodeJS.Timeout | null = null
@@ -222,6 +263,12 @@ class ComputerService {
     if (store.settings.computerMode !== 'full' || this.fullControl.has(chatId) || this.canceled.has(chatId) || this.asked.has(chatId)) return false
     this.asked.add(chatId)
     return true
+  }
+
+  /** Sets whether a chat's apps come to the front, which Full Access asks for. */
+  setInFront(chatId: string, inFront: boolean): void {
+    if (inFront) this.inFront.add(chatId)
+    else this.inFront.delete(chatId)
   }
 
   /** Throws what the agent must be told once the user has canceled. */
@@ -234,6 +281,7 @@ class ComputerService {
     if (!this.permissions().screen) throw new Error('Galaxy Code needs the Screen Recording permission. Ask the user to grant it in Settings > Computer Use.')
     this.requireAccessibility()
     this.fullControl.add(chatId)
+    void this.release(chatId)
     // From here on the agent works on the screen as a whole, not in the window it had.
     this.screenTarget(chatId)
     if (this.fullControlWindows.length) return
@@ -282,6 +330,17 @@ class ComputerService {
       const here = point.x >= bounds.x && point.y >= bounds.y && point.x < bounds.x + bounds.width && point.y < bounds.y + bounds.height
       const update = agentCursorScript(here ? { action: 'show', x: point.x - bounds.x, y: point.y - bounds.y } : { action: 'hide' })
       void window.webContents.executeJavaScript(update).catch(() => {})
+    }
+  }
+
+  /** Shows a press on the Galaxy cursor of full control. */
+  private pressPointer(action: 'click' | 'press' | 'release'): void {
+    const point = screen.getCursorScreenPoint()
+    for (const { window, bounds } of this.fullControlWindows) {
+      if (window.isDestroyed()) continue
+      const here = point.x >= bounds.x && point.y >= bounds.y && point.x < bounds.x + bounds.width && point.y < bounds.y + bounds.height
+      // A drag can end on another display, and release has to reach the one it started on.
+      if (here || action === 'release') void window.webContents.executeJavaScript(agentCursorScript({ action, x: point.x - bounds.x, y: point.y - bounds.y })).catch(() => {})
     }
   }
 
@@ -336,6 +395,8 @@ class ComputerService {
         movable: false,
         focusable: false,
         skipTaskbar: true,
+        // Otherwise a window taller than the screen never matches the overlay, which then resizes on every step.
+        enableLargerThanScreen: true,
         hiddenInMissionControl: true,
         show: false,
         webPreferences: { sandbox: true, contextIsolation: true }
@@ -355,6 +416,7 @@ class ComputerService {
       if (!window.isDestroyed()) window.destroy()
     }).catch(() => {})
     this.overlay = null
+    this.overlayLayer = 0
     this.anchor = null
   }
 
@@ -370,17 +432,26 @@ class ComputerService {
     return BrowserWindow.getAllWindows().filter((window) => !this.clickThrough.has(window) && !window.isDestroyed()).map((window) => Number(window.getMediaSourceId().split(':')[1]))
   }
 
-  /** Draws the agent cursor over one window and right above it, so whatever covers that window covers the cursor too. */
-  private async updateCursor(anchor: AppWindow, action: 'move' | 'click', point: { x: number; y: number }): Promise<number> {
-    try {
-      const window = await this.openOverlay()
-      const frame = { x: anchor.x, y: anchor.y, width: anchor.width, height: anchor.height }
-      const current = window.getBounds()
-      if (current.x !== frame.x || current.y !== frame.y || current.width !== frame.width || current.height !== frame.height) window.setBounds(frame)
+  /** Puts the overlay over one window and right above it, so whatever covers that window covers the cursor too. */
+  private async placeOverlay(anchor: AppWindow): Promise<BrowserWindow> {
+    const window = await this.openOverlay()
+    const frame = { x: anchor.x, y: anchor.y, width: anchor.width, height: anchor.height }
+    const current = window.getBounds()
+    if (current.x !== frame.x || current.y !== frame.y || current.width !== frame.width || current.height !== frame.height) window.setBounds(frame)
+    if (anchor.layer !== this.overlayLayer) {
       if (anchor.layer > 0) window.setAlwaysOnTop(true, anchor.layer >= 8 ? 'modal-panel' : 'floating')
       else window.setAlwaysOnTop(false)
-      this.anchor = anchor
-      window.moveAbove(`window:${anchor.id}:0`)
+      this.overlayLayer = anchor.layer
+    }
+    this.anchor = anchor
+    window.moveAbove(`window:${anchor.id}:0`)
+    return window
+  }
+
+  /** Draws the agent cursor over the window the overlay is on. */
+  private async updateCursor(anchor: AppWindow, action: 'move' | 'click' | 'show' | 'press' | 'release', point: { x: number; y: number }): Promise<number> {
+    try {
+      const window = await this.placeOverlay(anchor)
       const { x, y } = window.getBounds()
       return Number(await window.webContents.executeJavaScript(agentCursorScript({ action, x: point.x - x, y: point.y - y }))) || 0
     } catch {
@@ -389,15 +460,25 @@ class ComputerService {
     }
   }
 
-  private async pointAt(target: Target, point: { x: number; y: number } | null, signal?: AbortSignal): Promise<void> {
+  /** The window of the target's app at a point, which is not the target itself when a dialog is there. */
+  private async windowAt(target: Target, point: { x: number; y: number }): Promise<AppWindow> {
+    const siblings = (await listWindows()).filter((window) => window.pid === target.window.pid)
+    return siblings.find((window) => point.x >= window.x && point.y >= window.y && point.x < window.x + window.width && point.y < window.y + window.height) ?? target.window
+  }
+
+  private async pointAt(target: Target, point: { x: number; y: number } | null, signal?: AbortSignal, press = true): Promise<void> {
     if (!point || this.fullControl.size) return
     // A dialog sits in front of the window, so the cursor goes with whichever is at the point.
-    const siblings = (await listWindows()).filter((window) => window.pid === target.window.pid)
-    const anchor = siblings.find((window) => point.x >= window.x && point.y >= window.y && point.x < window.x + window.width && point.y < window.y + window.height) ?? target.window
+    const anchor = await this.windowAt(target, point)
     const inside = { x: Math.min(anchor.x + anchor.width - 8, Math.max(anchor.x + 8, point.x)), y: Math.min(anchor.y + anchor.height - 8, Math.max(anchor.y + 8, point.y)) }
     const duration = await this.updateCursor(anchor, 'move', inside)
+    const { window } = target
+    const shown = { windowId: window.id, x: (inside.x - window.x) / window.width, y: (inside.y - window.y) / window.height }
+    this.onCursor({ ...shown, press: null, duration })
     if (duration) await sleep(duration, signal)
+    if (!press) return
     await this.updateCursor(anchor, 'click', inside)
+    this.onCursor({ ...shown, press: 'click', duration: 0 })
   }
 
   private requireAccessibility(): void {
@@ -418,8 +499,9 @@ class ComputerService {
       }
       const target: Target = { window, nodes: new Map(), lines: {}, image: null }
       this.targets.set(chatId, target)
-      // A window comes to the front once, when work in it starts. After that everything stays in the background.
-      if (this.permissions().accessibility) await helper(this.request(target, 'raise')).catch(() => {})
+      this.visited.set(chatId, (this.visited.get(chatId) ?? new Set()).add(window.id))
+      this.onWindow(chatId, { id: window.id, app: window.app, title: window.title, width: window.width, height: window.height })
+      if (this.inFront.has(chatId)) await helper(this.request(target, 'bringForward')).catch(() => {})
       return target
     }
     if (!current) throw new Error('Start with a tree or screenshot step that names `app`. It picks the window to work in.')
@@ -436,7 +518,14 @@ class ComputerService {
     if (previous?.window.id) this.windows.set(chatId, previous)
     const target: Target = { window: { id: 0, pid: 0, app: 'Screen', title: '', layer: 0, ...bounds }, nodes: new Map(), lines: {}, image: null }
     this.targets.set(chatId, target)
+    this.onWindow(chatId, null)
     return target
+  }
+
+  /** An alert the app has open. It blocks the window and is a window of its own, so a screenshot of the window would miss it. */
+  private async openAlert(target: Target): Promise<AppWindow | null> {
+    if (target.window.layer >= ALERT_LAYER) return null
+    return (await listWindows()).find((window) => window.pid === target.window.pid && window.layer >= ALERT_LAYER) ?? null
   }
 
   /** Remembers what the agent has just read, so a change it did not make can be noticed. */
@@ -451,6 +540,9 @@ class ComputerService {
     const window = action.ref && this.targets.get(chatId)?.window.id === 0 ? this.windows.get(chatId) : undefined
     if (window) this.targets.set(chatId, window)
     const target = await this.pick(chatId, { ...action, app: undefined })
+    // Points on a screenshot of an alert mean nothing once it has closed.
+    const alert = target.image?.alert
+    if (alert && !(await listWindows()).some((entry) => entry.id === alert.id)) target.image = null
     const { seen } = target
     if (seen === undefined) return target
     const { state } = await helper<{ state: string }>(this.request(target, 'state')).catch(() => ({ state: seen }))
@@ -468,9 +560,10 @@ class ComputerService {
     return { op, windowId: id, pid, x, y, width, height, ...whole, ...fields }
   }
 
-  private async tree(chatId: string, action: ComputerAction): Promise<ComputerResult> {
+  private async tree(chatId: string, action: ComputerAction, signal?: AbortSignal): Promise<ComputerResult> {
     this.requireAccessibility()
     const target = await this.pick(chatId, action)
+    await this.settle(target, signal)
     const { nodes, truncated } = await helper<{ nodes: TreeNode[]; truncated: boolean }>(this.request(target, 'tree', { menu: action.menu === true }))
     const source = action.menu ? 'menu' : 'window'
     const previous = target.lines[source]
@@ -489,12 +582,14 @@ class ComputerService {
     return { text: `${heading}\n${truncateEnd(lines, 24000)}${note}` }
   }
 
-  private async capture(chatId: string, action: ComputerAction): Promise<ComputerResult> {
+  private async capture(chatId: string, action: ComputerAction, signal?: AbortSignal): Promise<ComputerResult> {
     if (!this.permissions().screen) throw new Error('Galaxy Code needs the Screen Recording permission. Ask the user to grant it in Settings > Computer Use.')
     const current = this.targets.get(chatId)
     const whole = this.fullControl.has(chatId) && !action.app
     const target = whole ? (current?.window.id === 0 ? current : this.screenTarget(chatId)) : await this.pick(chatId, action)
-    const { window } = target
+    await this.settle(target, signal)
+    const alert = target.window.id ? await this.openAlert(target) : null
+    const window = alert ?? target.window
     const dir = join(tmpdir(), 'galaxy-code', 'screenshots')
     await mkdir(dir, { recursive: true })
     const file = join(dir, `${newId()}.png`)
@@ -513,11 +608,12 @@ class ComputerService {
       const jpeg = image.toJPEG(72)
       if (jpeg.length === 0) throw new Error(`The ${window.app} window could not be captured`)
       const size = image.getSize()
-      target.image = { width: size.width, height: size.height, windowWidth: window.width, windowHeight: window.height }
+      target.image = { width: size.width, height: size.height, windowWidth: window.width, windowHeight: window.height, alert }
       await this.markRead(target)
       const title = window.title ? ` "${window.title}"` : ''
       if (!window.id) return { text: `Screenshot of the whole main display, ${size.width}x${size.height} pixels. Use x and y in these pixels.`, image: { mime: 'image/jpeg', base64: jpeg.toString('base64') } }
-      return { text: `Screenshot of the ${window.app} window${title}, ${size.width}x${size.height} pixels. Use x and y in these pixels. Later steps act on this window.`, image: { mime: 'image/jpeg', base64: jpeg.toString('base64') } }
+      const scope = alert ? 'The alert blocks the window behind it, so x and y point into the alert until it closes.' : 'Later steps act on this window.'
+      return { text: `Screenshot of the ${window.app} ${alert ? 'alert' : 'window'}${title}, ${size.width}x${size.height} pixels. Use x and y in these pixels. ${scope}`, image: { mime: 'image/jpeg', base64: jpeg.toString('base64') } }
     } finally {
       await rm(file, { force: true })
     }
@@ -543,8 +639,9 @@ class ComputerService {
 
   /** Converts a point on the latest screenshot to global display points. */
   private toScreen(target: Target, x: number | undefined, y: number | undefined): { x: number; y: number } {
-    const { window, image } = target
+    const { image } = target
     if (!image) throw new Error('Take a screenshot before using x and y.')
+    const window = image.alert ?? target.window
     if (image.windowWidth !== window.width || image.windowHeight !== window.height) throw new Error(`The ${window.app} window changed size. Take a new screenshot.`)
     const px = Number(x)
     const py = Number(y)
@@ -573,6 +670,67 @@ class ComputerService {
     return this.done(target, 'pointer', { ...fields, kind, points: points.map(({ x, y }) => [x, y]) })
   }
 
+  /** Moves the agent cursor along a gesture for as long as it runs, so it drags with it instead of waiting at the start. */
+  private async traceCursor(target: Target, anchor: AppWindow, points: { x: number; y: number }[], running: Promise<unknown>): Promise<void> {
+    if (this.fullControl.size) return
+    const segments = points.slice(1).map((point, index) => ({ from: points[index], to: point, length: Math.hypot(point.x - points[index].x, point.y - points[index].y) }))
+    const total = segments.reduce((sum, { length }) => sum + length, 0)
+    const { window } = target
+    const started = Date.now()
+    let finished = false
+    const finish = (): void => { finished = true }
+    void running.then(finish, finish)
+    while (!finished) {
+      let left = Math.min(total, (Date.now() - started) * GESTURE_PIXELS_PER_MS)
+      const segment = segments.find(({ length }) => {
+        if (left <= length) return true
+        left -= length
+        return false
+      }) ?? segments[segments.length - 1]
+      if (!segment) return
+      const share = segment.length ? left / segment.length : 1
+      const point = { x: segment.from.x + (segment.to.x - segment.from.x) * share, y: segment.from.y + (segment.to.y - segment.from.y) * share }
+      await this.updateCursor(anchor, 'show', point)
+      this.onCursor({ windowId: window.id, x: (point.x - window.x) / window.width, y: (point.y - window.y) / window.height, press: null, duration: CURSOR_STEP_MS })
+      await sleep(CURSOR_STEP_MS)
+    }
+  }
+
+  /** Runs a gesture at points: with full control the real pointer, otherwise posted to the window, which leaves the real pointer alone. */
+  private async pointerGesture(chatId: string, target: Target, kind: string, points: { x: number; y: number }[], fields: Record<string, unknown>, signal?: AbortSignal): Promise<ComputerResult> {
+    const dragging = kind === 'drag'
+    if (this.fullControl.has(chatId)) {
+      // The helper does not say when the real pointer arrives, so a drag looks pressed from the start.
+      if (dragging) this.pressPointer('press')
+      const result = await this.gesture(target, kind, points, fields).finally(() => { if (dragging) this.pressPointer('release') })
+      if (kind === 'click') this.pressPointer('click')
+      return result
+    }
+    const hit = await this.windowAt(target, points[0])
+    await this.hold(chatId, target, hit)
+    await this.pointAt(target, points[0], signal, kind === 'click')
+    if (dragging) await this.pressCursor(target, hit, points[0], 'press')
+    try {
+      const running = this.gesture(target, kind, points, { ...fields, background: true, hit: [hit.id, hit.x, hit.y, hit.width, hit.height] })
+      if (kind === 'click') return await running
+      await this.traceCursor(target, hit, points, running)
+      const result = await running
+      // The helper may be ahead of the estimate, so the cursor ends exactly where the gesture did.
+      await this.pointAt(target, points[points.length - 1], signal, false)
+      return result
+    } finally {
+      if (dragging) await this.pressCursor(target, hit, points[points.length - 1], 'release')
+    }
+  }
+
+  /** Shows a drag's button going down or up, on the cursor of the desktop and of the live view. */
+  private async pressCursor(target: Target, anchor: AppWindow, point: { x: number; y: number }, action: 'press' | 'release'): Promise<void> {
+    if (this.fullControl.size) return
+    const { window } = target
+    await this.updateCursor(anchor, action, point)
+    this.onCursor({ windowId: window.id, x: (point.x - window.x) / window.width, y: (point.y - window.y) / window.height, press: action === 'press' ? 'down' : 'up', duration: 0 })
+  }
+
   /** Screen-wide keys go to whatever has focus. That must not be this app, whose prompts answer to the keyboard. */
   private async keepKeysOffGalaxy(target: Target): Promise<void> {
     if (target.window.id || !BrowserWindow.getFocusedWindow()) return
@@ -581,14 +739,123 @@ class ComputerService {
     await helper({ op: 'raise', windowId: next.id, pid: next.pid, x: next.x, y: next.y, width: next.width, height: next.height })
   }
 
+  /** Keeps the app acting as if it were in front with the window key, while the real front app stays, until the run ends. The step still runs if that fails, since most input reaches an app behind others. */
+  private async hold(chatId: string, target: Target, window: AppWindow | null): Promise<void> {
+    if (!target.window.id || this.fullControl.has(chatId)) return
+    if (this.inFront.has(chatId)) {
+      await helper(this.request(target, 'bringForward')).catch(() => {})
+      return
+    }
+    const { id, x, y, width, height } = window ?? (await this.openAlert(target)) ?? target.window
+    if (this.held.get(chatId)?.pid !== target.window.pid) await this.release(chatId)
+    const previous = this.held.get(chatId)
+    // Another window has to be made key, whatever is in front.
+    const sameWindow = (previous?.hit as number[] | undefined)?.[0] === id
+    const request = this.request(target, 'focus', { hit: [id, x, y, width, height], front: sameWindow ? previous?.front : undefined })
+    this.held.set(chatId, request)
+    const reply = await helper<{ front?: number }>(request).catch(() => null)
+    this.held.set(chatId, { ...request, front: reply?.front })
+  }
+
+  private async release(chatId: string): Promise<void> {
+    const request = this.held.get(chatId)
+    if (!request) return
+    this.held.delete(chatId)
+    await helper({ ...request, op: 'unfocus' }).catch(() => {})
+  }
+
+  /** Installed apps by name. The list is read again after a while, so a new app shows up without a restart. */
+  async searchApps(query: string): Promise<InstalledApp[]> {
+    if (process.platform !== 'darwin') return []
+    if (!this.installed || Date.now() - this.installed.at > APP_LIST_MS) {
+      const found = await Promise.all(APP_FOLDERS.map(async (folder) => (await readdir(folder).catch(() => [] as string[])).filter((name) => name.endsWith('.app')).map((name) => ({ name: name.slice(0, -4), path: join(folder, name) }))))
+      this.installed = { at: Date.now(), apps: [FINDER, ...found.flat()] }
+    }
+    const wanted = query.toLowerCase()
+    const matches = this.installed.apps.filter(({ name }) => name.toLowerCase().includes(wanted))
+      .sort((a, b) => Number(b.name.toLowerCase().startsWith(wanted)) - Number(a.name.toLowerCase().startsWith(wanted)) || a.name.localeCompare(b.name))
+      .slice(0, APP_RESULTS)
+    // app.getFileIcon answers with the generic icon for an app bundle, so the helper asks the system.
+    const missing = matches.filter(({ path }) => !this.fileIcons.has(path)).map(({ path }) => path)
+    if (missing.length) {
+      const { icons } = await helper<{ icons: string[] }>({ op: 'fileIcons', paths: missing }).catch(() => ({ icons: [] as string[] }))
+      missing.forEach((path, index) => { if (icons[index]) this.fileIcons.set(path, `data:image/png;base64,${icons[index]}`) })
+    }
+    return matches.map((entry) => ({ ...entry, icon: this.fileIcons.get(entry.path) }))
+  }
+
+  /** The name and icon of the app a chat is working in, for its timeline. */
+  async currentApp(chatId: string): Promise<{ appName: string; appIcon?: string } | undefined> {
+    const window = this.targets.get(chatId)?.window
+    if (!window?.pid) return undefined
+    const { app: appName, pid } = window
+    if (!this.icons.has(pid)) {
+      const reply = await helper<{ icon: string }>({ op: 'icon', pid }).catch(() => null)
+      if (reply) this.icons.set(pid, `data:image/png;base64,${reply.icon}`)
+    }
+    return { appName, appIcon: this.icons.get(pid) }
+  }
+
+  /** Lets go of every app when Galaxy Code quits, so none is left believing it is active. */
+  releaseAll(): void {
+    for (const chatId of this.held.keys()) void this.release(chatId)
+    this.watch([])
+  }
+
+  /** Streams these windows for the live view. Only windows an agent has worked in, so the live view cannot be pointed at anything else. */
+  watch(windowIds: number[]): void {
+    const allowed = this.permissions().screen ? windowIds.filter((id) => [...this.visited.values()].some((windows) => windows.has(id))) : []
+    for (const [id, process] of this.live) {
+      if (allowed.includes(id)) continue
+      process.kill()
+      this.live.delete(id)
+    }
+    for (const id of allowed) if (!this.live.has(id)) this.streamWindow(id)
+  }
+
+  private streamWindow(windowId: number): void {
+    const process = spawn(helperPath(), ['stream', String(windowId)], { stdio: ['ignore', 'pipe', 'ignore'] })
+    this.live.set(windowId, process)
+    let pending = Buffer.alloc(0)
+    process.on('error', () => {})
+    // A closed window ends its stream, and the same number can then be watched again.
+    process.on('exit', () => { if (this.live.get(windowId) === process) this.live.delete(windowId) })
+    process.stdout.on('data', (chunk: Buffer) => {
+      pending = Buffer.concat([pending, chunk])
+      while (pending.length >= 4) {
+        const size = pending.readUInt32BE(0)
+        if (pending.length < 4 + size) break
+        this.onFrame(windowId, pending.subarray(4, 4 + size))
+        pending = pending.subarray(4 + size)
+      }
+    })
+  }
+
+  /** Waits for what the agent last did to show, so a read does not report the window from before it took effect. */
+  private async settle(target: Target, signal?: AbortSignal): Promise<void> {
+    const { actedAt } = target
+    if (actedAt === undefined) return
+    target.actedAt = undefined
+    const mark = (): Promise<string | undefined> => helper<{ state: string }>(this.request(target, 'state')).then(({ state }) => state, () => undefined)
+    await sleep(Math.max(0, actedAt + SETTLE_MIN_MS - Date.now()), signal)
+    let last = await mark()
+    while (Date.now() < actedAt + SETTLE_MAX_MS) {
+      await sleep(200, signal)
+      const current = await mark()
+      if (current === last) return
+      last = current
+    }
+  }
+
   private async done(target: Target, op: string, fields: Record<string, unknown>): Promise<ComputerResult> {
     // From here on the window may change because of the agent, so there is nothing to compare until it reads again.
     target.seen = undefined
     const { done, dialogs, unchanged } = await helper<{ done: string; dialogs?: string[]; unchanged?: boolean }>(this.request(target, op, fields))
+    target.actedAt = Date.now()
     // Clicking can bring the window forward, now or a moment later.
     this.restackCursor()
     setTimeout(() => this.restackCursor(), 350)
-    const note = unchanged ? ' Nothing changed, so this click may have done nothing: clicks in place often need the app to be active. Check with a screenshot; if so, add a request_full_control step and click at x, y.' : ''
+    const note = unchanged ? ' Nothing changed even after waiting, so this click may have done nothing. Check with a screenshot; if so, add a request_full_control step and click at x, y.' : ''
     return { text: `${done}.${dialogs?.length ? ` Now open: ${dialogs.join(', ')}. Read the tree to see it.` : ''}${note}` }
   }
 
@@ -599,7 +866,7 @@ class ComputerService {
     switch (action.action) {
       case 'apps': {
         const windows = await listWindows()
-        return { text: windows.length ? windows.map((window) => `${window.app}${window.title ? `: ${window.title}` : ''} (${window.width}x${window.height})`).join('\n') : 'No app windows are open.' }
+        return { text: windows.length ? windows.map((window) => `${window.app}${window.title ? `: ${window.title}` : ''} (${window.width}x${window.height})${window.layer >= ALERT_LAYER ? ' alert' : ''}`).join('\n') : 'No app windows are open.' }
       }
       case 'open_app': {
         if (!action.app) throw new Error('`app` is required, for example "Safari"')
@@ -615,9 +882,17 @@ class ComputerService {
         return { text: `${target.window.app} is now in front.` }
       }
       case 'tree':
-        return this.tree(chatId, action)
+        return this.tree(chatId, action, signal)
       case 'screenshot':
-        return this.capture(chatId, action)
+        return this.capture(chatId, action, signal)
+      case 'snapshot': {
+        // With full control and no app the target is the screen, which has no tree.
+        if (this.fullControl.has(chatId) && !action.app) return this.capture(chatId, action, signal)
+        const tree = await this.tree(chatId, action, signal)
+        // The tree is worth having even if the window cannot be captured.
+        const shot = await this.capture(chatId, { ...action, region: undefined }, signal).catch((error: unknown) => ({ text: `No screenshot: ${errorMessage(error)}`, image: undefined }))
+        return { text: `${tree.text}\n\n${shot.text}`, image: shot.image }
+      }
       case 'click': {
         const target = await this.working(chatId, action)
         const { fields, point } = await this.locate(target, action)
@@ -625,33 +900,40 @@ class ComputerService {
         const plain = action.button !== 'right' && !action.modifiers?.length && pointer.count === 1
         const full = this.fullControl.has(chatId)
         // With full control a point is a real click. Otherwise, and for refs, the click goes through accessibility.
-        if (full && point && (!action.ref || !plain)) return this.gesture(target, 'click', [point], pointer)
-        if (action.modifiers?.length) this.requireFullControl(chatId, 'A click with modifiers')
+        if (full && point && (!action.ref || !plain)) return this.pointerGesture(chatId, target, 'click', [point], pointer, signal)
+        // Held keys and triple clicks have no accessibility action, so they go to the window as a gesture.
+        if (point && (action.modifiers?.length || pointer.count > 2)) return this.pointerGesture(chatId, target, 'click', [point], pointer, signal)
+        if (action.modifiers?.length) this.requireFullControl(chatId, 'A click with modifiers on a menu')
+        // A click in place has to name the window it lands in, and an alert is not the target.
+        const hit = point && target.window.id ? await this.windowAt(target, point) : null
+        await this.hold(chatId, target, hit)
         await this.pointAt(target, point, signal)
-        const pressed = this.done(target, 'click', { ...fields, kind: action.button === 'right' ? 'menu' : pointer.count > 1 ? 'open' : 'press' })
+        const pressed = this.done(target, 'click', { ...fields, ...(hit ? { hit: [hit.id, hit.x, hit.y, hit.width, hit.height] } : {}), kind: action.button === 'right' ? 'menu' : pointer.count > 1 ? 'open' : 'press' })
         return pressed.catch((error: unknown) => {
-          if (full && point) return this.gesture(target, 'click', [point], pointer)
-          throw new Error(`${errorMessage(error)} Add a request_full_control step to use the real pointer.`)
+          if (full && point) return this.pointerGesture(chatId, target, 'click', [point], pointer, signal)
+          throw new Error(`${errorMessage(error)} Read the tree again or scroll to it, and look for another element that does the same. Add a request_full_control step only if that fails too.`)
         })
       }
       case 'move': {
-        this.requireFullControl(chatId, 'Hovering')
         const target = await this.working(chatId, action)
-        return this.gesture(target, 'move', this.route(target, action), {})
+        return this.pointerGesture(chatId, target, 'move', this.route(target, action), {}, signal)
       }
       case 'drag': {
-        this.requireFullControl(chatId, 'Dragging')
         const target = await this.working(chatId, action)
         const points = this.route(target, action)
         if (points.length < 2) throw new Error('`drag` needs `toX` and `toY`, or a `path` of at least two points')
-        return this.gesture(target, 'drag', points, this.pointerFields(action))
+        return this.pointerGesture(chatId, target, 'drag', points, this.pointerFields(action), signal)
       }
       case 'type': {
         if (action.text === undefined) throw new Error('`text` is required')
         const target = await this.working(chatId, action)
         await this.keepKeysOffGalaxy(target)
-        if (!action.ref) return this.done(target, 'type', { text: action.text })
+        if (!action.ref) {
+          await this.hold(chatId, target, null)
+          return this.done(target, 'type', { text: action.text })
+        }
         const { fields, point } = await this.locate(target, action)
+        await this.hold(chatId, target, null)
         await this.pointAt(target, point, signal)
         return this.done(target, 'type', { ...fields, text: action.text })
       }
@@ -660,6 +942,7 @@ class ComputerService {
         if (!action.ref) throw new Error('`ref` is required')
         const target = await this.working(chatId, action)
         const { fields, point } = await this.locate(target, action)
+        await this.hold(chatId, target, null)
         await this.pointAt(target, point, signal)
         return this.done(target, 'set_value', { ...fields, text: action.text })
       }
@@ -670,6 +953,7 @@ class ComputerService {
         // The agent's own Esc must not count as the user canceling.
         const parsed = parseKey(action.key)
         const ownEsc = !target.window.id && parsed.code === KEY_CODES.escape
+        await this.hold(chatId, target, null)
         if (ownEsc) this.listenForEsc(false)
         const { text } = await this.done(target, 'key', parsed).finally(() => { if (ownEsc && this.fullControl.size) this.listenForEsc(true) })
         return { text: text.replace('Sent.', `Pressed ${action.key}.`) }
@@ -678,6 +962,7 @@ class ComputerService {
         const target = await this.working(chatId, action)
         const { fields, point } = await this.locate(target, action)
         const amount = Math.max(1, Math.min(20, action.amount ?? 3)) * 0.05
+        await this.hold(chatId, target, null)
         await this.pointAt(target, point, signal)
         return this.done(target, 'scroll', { ...fields, delta: action.direction === 'up' || action.direction === 'left' ? -amount : amount, horizontal: action.direction === 'left' || action.direction === 'right' })
       }
@@ -690,8 +975,13 @@ class ComputerService {
   }
 
   finishRun(chatId: string): void {
+    void this.release(chatId)
+    this.inFront.delete(chatId)
+    this.onWindow(chatId, null)
     this.targets.delete(chatId)
     this.windows.delete(chatId)
+    this.visited.delete(chatId)
+    this.watch([...this.live.keys()])
     this.owners.delete(chatId)
     this.canceled.delete(chatId)
     this.asked.delete(chatId)

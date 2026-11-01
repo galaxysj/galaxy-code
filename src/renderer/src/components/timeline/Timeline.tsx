@@ -1,4 +1,4 @@
-import { ArrowDown, ChevronRight, CircleAlert, CircleStop, Clock, File as FileIcon, FileText, GitCommitHorizontal, Globe, Info, MessageCircle, Monitor, Package, Plug, Redo2, SquareTerminal, Undo2 } from 'lucide-react'
+import { AppWindow, ArrowDown, ChevronRight, CircleAlert, CircleStop, Clock, File as FileIcon, FileText, GitCommitHorizontal, Globe, Info, MessageCircle, Monitor, Package, Plug, Redo2, SquareTerminal, Undo2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AssistantItem, Chat, FileDiff, Item, MentionChip, NoticeItem, ReasoningItem, ToolItem, TurnItem, UserItem } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, plural } from '../../lib/utils'
@@ -11,9 +11,9 @@ import { Markdown } from '../Markdown'
 import { FileIcon as FileTypeIcon } from '../ProjectFiles'
 import { cleanError } from '../Settings'
 import { Button, CopyButton, IconButton, Modal, SkillIcon } from '../ui'
-import { ExploreGroup, RollingText, isBrowsing, isCompactable, isExplore, isHiddenAgentMessage, PresentTool, ToolBlock, type TimelineContext } from './Tools'
+import { ExploreGroup, RollingText, computerApp, isBrowsing, isCompactable, isExplore, isHiddenAgentMessage, PresentTool, ToolBlock, type TimelineContext } from './Tools'
 
-const CHIP_ICON = { skill: Package, file: FileText, chat: MessageCircle, browser: Globe, computer: Monitor, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
+const CHIP_ICON = { skill: Package, file: FileText, chat: MessageCircle, browser: Globe, computer: Monitor, app: AppWindow, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
 
 /** Shows the / and @ picks in a sent message as inline chips. */
 function MessageText({ text, mentions }: { text: string; mentions?: MentionChip[] }): ReactNode {
@@ -27,7 +27,7 @@ function MessageText({ text, mentions }: { text: string; mentions?: MentionChip[
     const Icon = command ? GIT_COMMAND_ICON[command] : CHIP_ICON[chip.kind]
     return (
       <span key={index} title={chip.title ?? part} className="whitespace-nowrap text-link" style={chip.kind === 'git' ? { color: 'var(--orange)' } : chip.color ? { color: chip.color } : undefined}>
-        <span className="mr-[0.3em] inline-flex h-[1em] items-center align-[-0.15em]">{chip.kind === 'file' ? <FileTypeIcon name={chip.label} size={11} /> : chip.kind === 'skill' ? <SkillIcon icon={chip.icon} color={chip.color} size={13} fallback={<Icon size={13} />} /> : <Icon size={13} />}</span>
+        <span className="mr-[0.3em] inline-flex h-[1em] items-center align-[-0.15em]">{chip.kind === 'app' && chip.icon ? <img src={chip.icon} alt="" width={17} height={17} className="max-w-none shrink-0" /> : chip.kind === 'file' ? <FileTypeIcon name={chip.label} size={11} /> : chip.kind === 'skill' ? <SkillIcon icon={chip.icon} color={chip.color} size={13} fallback={<Icon size={13} />} /> : <Icon size={13} />}</span>
         {chip.displayName ?? chip.label}
       </span>
     )
@@ -275,6 +275,7 @@ type Block =
   | { type: 'item'; item: Item }
   | { type: 'explore'; items: (ToolItem | ReasoningItem)[]; key: string; scope: string }
   | { type: 'browse'; items: (ToolItem | ReasoningItem)[]; key: string; scope: string }
+  | { type: 'computer'; items: (ToolItem | ReasoningItem)[]; key: string; scope: string; app?: string }
   | { type: 'turn'; item: TurnItem; changes: FileDiff[]; answer: string; folded: boolean }
   | { type: 'work'; item: TurnItem; blocks: Block[] }
   | { type: 'present'; items: ToolItem[]; key: string }
@@ -308,9 +309,19 @@ function buildBlocks(items: Item[], all: Item[], topLevel: boolean, compact = fa
       else blocks.push({ type: 'browse', items: [item], key: item.id, scope })
       continue
     }
+    if (item.kind === 'tool' && item.tool === 'computer') {
+      const last = blocks[blocks.length - 1]
+      const app = computerApp(item)
+      // A call that names no app stays with the one before it, and each app gets a group of its own. Agents can name an app in any case.
+      if (last?.type === 'computer' && (!app || !last.app || app.toLowerCase() === last.app.toLowerCase())) {
+        last.items.push(item)
+        last.app ??= app
+      } else blocks.push({ type: 'computer', items: [item], key: item.id, scope, app })
+      continue
+    }
     if (item.kind === 'reasoning' || isExplore(item)) {
       const last = blocks[blocks.length - 1]
-      if (last?.type === 'explore' || (item.kind === 'reasoning' && last?.type === 'browse')) last.items.push(item)
+      if (last?.type === 'explore' || (item.kind === 'reasoning' && (last?.type === 'browse' || last?.type === 'computer'))) last.items.push(item)
       else blocks.push({ type: 'explore', items: [item], key: item.id, scope })
       continue
     }
@@ -368,7 +379,7 @@ function Blocks({ blocks, ctx, running = false, stickyMessages = false }: { bloc
             {block.items.map((item) => <PresentTool key={item.id} item={item} />)}
           </section>
         )
-        if (block.type === 'explore' || block.type === 'browse') return <ExploreGroup key={block.key} items={block.items} disclosureKey={`${ctx.chatId}:${block.scope}:${block.key}`} active={running && index === blocks.length - 1} browsing={block.type === 'browse'} ctx={ctx} />
+        if (block.type === 'explore' || block.type === 'browse' || block.type === 'computer') return <ExploreGroup key={block.key} items={block.items} disclosureKey={`${ctx.chatId}:${block.scope}:${block.key}`} active={running && index === blocks.length - 1} browsing={block.type === 'browse'} computer={block.type === 'computer'} ctx={ctx} />
         if (block.type === 'work') return <WorkGroup key={`work:${block.item.id}`} item={block.item} blocks={block.blocks} ctx={ctx} />
         if (block.type === 'turn') return <TurnFooter key={block.item.id} item={block.item} folded={block.folded} changes={block.changes} answer={block.answer} root={ctx.root} />
         const item = block.item

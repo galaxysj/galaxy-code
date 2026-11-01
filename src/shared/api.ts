@@ -13,6 +13,7 @@ import type {
   ChatEvent,
   ComputerPermission,
   ComputerPermissions,
+  InstalledApp,
   CreateProjectInput,
   FileView,
   FileDiff,
@@ -173,6 +174,10 @@ export interface GalaxyApi {
     permissions(): Promise<ComputerPermissions>
     /** Registers the app with macOS and opens the matching Privacy & Security list. */
     requestPermission(kind: ComputerPermission): Promise<void>
+    /** Finds installed desktop apps by name, for @ mentions. */
+    searchApps(query: string): Promise<InstalledApp[]>
+    /** Streams exactly these windows an agent has worked in as computer-frame events. */
+    watch(windowIds: number[]): Promise<void>
   }
 
   terminal: {
