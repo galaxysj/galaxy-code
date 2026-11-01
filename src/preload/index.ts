@@ -29,6 +29,7 @@ const api: GalaxyApi = {
     testOpenRouterKey: call('settings.testOpenRouterKey'),
     setProviderKey: call('settings.setProviderKey'),
     testProviderKey: call('settings.testProviderKey'),
+    creditsLocked: call('settings.creditsLocked'),
     usage: call('settings.usage'),
     analytics: call('settings.analytics'),
     signInOpenRouter: call('settings.signInOpenRouter')

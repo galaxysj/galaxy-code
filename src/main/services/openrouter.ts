@@ -231,6 +231,45 @@ export async function standardPrices(): Promise<Map<string, TokenPrice>> {
 
 let usageCheck: { at: number; used: number } | null = null
 
+let creditLock: { at: number; locked: boolean } | null = null
+const listeners = new Set<(locked: boolean) => void>()
+
+export function onCreditLock(listener: (locked: boolean) => void): void {
+  listeners.add(listener)
+}
+
+/**
+ * Whether OpenRouter has nothing left to spend: the credits are used up, were never bought, or the key's or Settings' limit
+ * is reached. Checked at most every 30 seconds unless forced, and a failed check keeps the last answer.
+ */
+export async function creditsLocked(force = false): Promise<boolean> {
+  if (!store.openRouterKey) return false
+  if (!force && creditLock && Date.now() - creditLock.at < 30_000) return creditLock.locked
+  const previous = creditLock?.locked ?? false
+  try {
+    const { total, used, keyRemaining } = await openRouterCredits()
+    const limit = store.settings.creditLimit
+    const locked = total <= used || (keyRemaining !== null && keyRemaining <= 0) || (limit !== null && used >= limit)
+    return settleCreditLock(locked, previous)
+  } catch {
+    // A key without access to the account's credits still says about itself whether anything was ever bought.
+    try {
+      const res = await fetch(`${OPENROUTER_API}/key`, { headers: authHeaders(), signal: AbortSignal.timeout(15000) })
+      if (!res.ok) return previous
+      const info = ((await res.json()) as { data?: { is_free_tier?: boolean; limit_remaining?: number | null } }).data ?? {}
+      return settleCreditLock(info.is_free_tier === true || (typeof info.limit_remaining === 'number' && info.limit_remaining <= 0), previous)
+    } catch {
+      return previous
+    }
+  }
+}
+
+function settleCreditLock(locked: boolean, previous: boolean): boolean {
+  creditLock = { at: Date.now(), locked }
+  if (locked !== previous) for (const listener of listeners) listener(locked)
+  return locked
+}
+
 /** Stops a turn once OpenRouter usage reaches the limit set in Settings (Auto is exempt). Usage is rechecked every 30 seconds; a failed check lets the turn run. */
 async function assertCreditLimit(): Promise<void> {
   const limit = store.settings.creditLimit
@@ -376,6 +415,8 @@ async function streamResponses(route: Route, req: StreamRequest): Promise<Stream
 
 export async function streamChat(req: StreamRequest): Promise<StreamResult> {
   const route = await resolveRoute(req.model)
+  // With nothing left to spend the chat carries on with Auto, which is free, instead of stopping.
+  if (!route.provider && !route.renewHeaders && req.model !== AUTO_MODEL.id && !parseCustomModel(req.model) && await creditsLocked()) return streamChat({ ...req, model: AUTO_MODEL.id })
   if (route.api === 'responses') return streamResponses(route, req)
   const direct = route.provider
   // Auto runs on free models, so the credit limit does not stop it. Premium and every paid model still stop at the limit.

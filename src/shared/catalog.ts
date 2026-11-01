@@ -67,6 +67,13 @@ export function hasModelKey(secrets: SecretState, settings: Pick<Settings, 'disa
   return secrets.openRouterKey || (!!provider && !!secrets.providerKeys[provider.id] && !settings.disabledProviders.includes(provider.id))
 }
 
+/** Whether a model runs on OpenRouter credits. Auto is free, and accounts, custom providers and models on their own provider's key pay elsewhere. */
+export function needsCredits(model: Pick<ResolvedModel, 'id' | 'subscription'>, secrets: SecretState, settings: Pick<Settings, 'disabledProviders'>): boolean {
+  if (model.subscription !== 'Default' || model.id === 'openrouter/free' || parseCustomModel(model.id)) return false
+  const provider = byokProvider(model.id)
+  return !provider || !secrets.providerKeys[provider.id] || settings.disabledProviders.includes(provider.id)
+}
+
 export function modelKey(subscription: string, id: string): string {
   return `${subscription}:${id}`
 }

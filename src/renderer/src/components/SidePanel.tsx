@@ -36,6 +36,7 @@ import {
   X
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { FileView, FileDiff } from '@shared/types'
 import type { ReviewCommit } from '@shared/api'
 import { isReviewTextDiff } from '@shared/review'
@@ -43,7 +44,7 @@ import { basename, cn, formatBytes, languageForPath, plural, relativeTo } from '
 import { useStore, type OpenFile, type PanelTab } from '../store'
 import { LiveMarkdown } from './LiveMarkdown'
 import { Markdown } from './Markdown'
-import { Button, CopyButton, Dropdown, IconButton, MenuItem, MenuSeparator, Popover, Segmented, Spinner, usePopoverShown, type DropdownOption } from './ui'
+import { Button, CopyButton, Dropdown, IconButton, MenuItem, MenuSeparator, Popover, Segmented, Spinner, TabFavicon, usePopoverShown, type DropdownOption } from './ui'
 import { DiffView, DiffStat } from './DiffView'
 import { AgentTimeline } from './timeline/Timeline'
 import { ProjectFilesPane } from './ProjectFiles'
@@ -893,12 +894,6 @@ function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): 
   )
 }
 
-function TabFavicon({ src }: { src?: string }): ReactNode {
-  const [failed, setFailed] = useState(false)
-  useEffect(() => setFailed(false), [src])
-  return src && !failed ? <img src={src} alt="" draggable={false} onError={() => setFailed(true)} className="h-4 w-4 shrink-0 object-contain" /> : <Globe size={14} className="shrink-0" />
-}
-
 export function SidePanel({ root, covered }: { root: string | null; covered: boolean }): ReactNode {
   const tab = useStore((s) => s.panelTab)
   const tabs = useStore((s) => s.panelTabs)
@@ -986,7 +981,8 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
         <div className="ml-auto"><IconButton label="Close panel" onClick={() => setPanel(false)}>
           <X size={15} />
         </IconButton></div>
-        <div ref={contextAnchor} className="no-drag pointer-events-none fixed h-px w-px" style={{ left: context?.x ?? 0, top: context?.y ?? 0 }} />
+        {/* In the body, since the transform of the sliding pane would make `fixed` count from the pane and not the window. */}
+        {createPortal(<div ref={contextAnchor} className="no-drag pointer-events-none fixed h-px w-px" style={{ left: context?.x ?? 0, top: context?.y ?? 0 }} />, document.body)}
         <Popover open={!!contextTab} onClose={() => setContext(null)} anchor={contextAnchor} placement="bottom-start" offset={0} className="w-60">
           {contextTab && <>
             <MenuItem icon={<Pin size={14} />} label={contextTab.pinned ? 'Unpin tab' : 'Pin tab'} onClick={() => act(() => updateTab(contextTab.id, { pinned: !contextTab.pinned }))} />

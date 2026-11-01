@@ -132,3 +132,12 @@ export async function copyText(text: string): Promise<void> {
     // clipboard unavailable
   }
 }
+
+/** The site of a URL, without www, so its pages share a favicon. */
+export function pageHost(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return ''
+  }
+}

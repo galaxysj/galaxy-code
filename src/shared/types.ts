@@ -254,6 +254,10 @@ export interface Settings {
   browserAgentControl: boolean
   /** Off makes the Computer tool fail for every agent. */
   computerUse: boolean
+  /** Lets a global shortcut attach the front app's tree and screenshot to the message box. */
+  appContext: boolean
+  /** That shortcut, as an Electron accelerator. */
+  appContextShortcut: string
   /** How agents start on the computer. 'full' asks for full access on the first Computer call of a turn. */
   computerMode: ComputerMode
   sidebarWidth: number
@@ -391,6 +395,8 @@ export interface Attachment {
   size: number
   /** Data URL thumbnail for images. */
   preview?: string
+  /** Set on an App Context capture, which shows as a card and whose tree goes in the prompt. */
+  appContext?: { app: string; icon?: string; tree?: string }
 }
 
 export interface QueuedMessage {
@@ -409,6 +415,8 @@ export interface PromptMentions {
   chats: { title: string; excerpt: string }[]
   browser: boolean
   computer?: boolean
+  /** Accessibility trees of the apps the user captured with App Context. */
+  appContexts?: { app: string; tree: string }[]
   /** Desktop apps the user named, to work in through the Computer tool. */
   apps?: { name: string; path: string }[]
   tools: { server: string; name: string }[]
@@ -629,6 +637,8 @@ export type UiEvent =
   | { type: 'settings'; settings: Settings; secrets: SecretState }
   | { type: 'projects'; projects: Project[] }
   | { type: 'mcp-status'; statuses: McpServerStatus[] }
+  | { type: 'app-context'; attachments: Attachment[]; error?: string }
+  | { type: 'credits-locked'; locked: boolean }
   | { type: 'computer-window'; chatId: string; window: ComputerWindow | null }
   | { type: 'computer-cursor'; cursor: ComputerCursor }
   | { type: 'computer-frame'; windowId: number; jpeg: Uint8Array }

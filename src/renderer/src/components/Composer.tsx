@@ -29,21 +29,25 @@ import {
   Square,
   SquareTerminal,
   Sparkles,
-  X
+  X,
+  FoldVertical,
+  Gauge
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from 'react'
-import type { AgentMode, Attachment, Chat, GitCommand, InstalledApp, Item, PermissionMode, ProjectFileEntry, PromptMentions, RevertedMessage, SkillInfo, ToolItem } from '@shared/types'
+import type { AgentMode, Attachment, Chat, GitCommand, InstalledApp, Item, PermissionMode, ProjectFileEntry, PromptMentions, ResolvedModel, UsageReport, RevertedMessage, SkillInfo, ToolItem } from '@shared/types'
 import { basename, cn, tildify } from '../lib/utils'
 import { GIT_COMMAND_ICON, GIT_COMMANDS, gitCommandFor, gitToken, runGitCommand } from '../lib/gitCommands'
 import { useActiveChat, useChatId, useRunConfig, useStore, type PanelTab } from '../store'
 import { FileIcon as FileTypeIcon } from './ProjectFiles'
 import { AcpOptions } from './AcpOptions'
-import { ModelPicker } from './ModelPicker'
+import { FastIcon, ModelPicker, UltrafastIcon } from './ModelPicker'
 import { ModelBrandIcon } from './SubscriptionIcon'
-import { usesGalaxyTools } from '@shared/catalog'
+import { AUTO_MODEL, needsCredits, usesGalaxyTools } from '@shared/catalog'
+import { SUBSCRIPTION_ACCOUNT } from '@shared/types'
 import type { ModelBrand } from '@shared/models'
 import { ApprovalPrompt } from './ApprovalPrompt'
 import { SubscriptionPicker } from './SubscriptionPicker'
+import { AppContextCard } from './AppContextCard'
 import { Button, MenuItem, MenuSeparator, Popover, Segmented, SkillIcon, Spinner, TextInput } from './ui'
 import { openLink } from '../lib/openLink'
 
@@ -457,6 +461,8 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const { model, subscription, acp } = runConfig
   const models = useStore((s) => s.models)
   const pickModel = useStore((s) => s.pickModel)
+  const setRunOptions = useStore((s) => s.setRunOptions)
+  const [usageBubble, setUsageBubble] = useState<string | null>(null)
   const chatId = useChatId()
   // Ask and Plan are enforced by Galaxy Code's own tools, so only models that run on them offer them.
   const modesAvailable = usesGalaxyTools(model?.subscription)
@@ -606,6 +612,15 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         ...(canCompact && 'compact'.startsWith(mention.query.toLowerCase())
           ? [{ id: 'command:compact', kind: 'command' as const, name: 'Compact', detail: 'Summarize the conversation so far to free up context.' }]
           : []),
+        ...(model?.fastMode && 'fast'.startsWith(mention.query.toLowerCase())
+          ? [{ id: 'command:fast', kind: 'command' as const, name: 'Fast', detail: runConfig.fast && !runConfig.ultrafast ? 'Turn Fast off.' : 'Turn Fast on.' }]
+          : []),
+        ...(model?.ultrafastMode && 'ultrafast'.startsWith(mention.query.toLowerCase())
+          ? [{ id: 'command:ultrafast', kind: 'command' as const, name: 'Ultrafast', detail: runConfig.ultrafast ? 'Turn Ultrafast off.' : 'Turn Ultrafast on.' }]
+          : []),
+        ...('usage'.startsWith(mention.query.toLowerCase())
+          ? [{ id: 'command:usage', kind: 'command' as const, name: 'Usage', detail: 'See your credits, plan limits and spend.' }]
+          : []),
         ...(!edit && SIDE_COMMANDS.some((command) => command.startsWith(mention.query.toLowerCase()))
           ? [{ id: 'command:side', kind: 'command' as const, name: 'Side Chat', detail: 'Open a side chat in the panel. It is deleted when closed.' }]
           : []),
@@ -679,6 +694,30 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
     if (entry.id === 'command:compact') {
       replaceMention('')
       compactChat()
+      return
+    }
+    if (entry.id === 'command:fast') {
+      replaceMention('')
+      setRunOptions({ fast: !runConfig.fast || runConfig.ultrafast, ultrafast: false }, chatId)
+      return
+    }
+    if (entry.id === 'command:ultrafast') {
+      replaceMention('')
+      setRunOptions({ fast: !runConfig.ultrafast, ultrafast: !runConfig.ultrafast }, chatId)
+      return
+    }
+    if (entry.id === 'command:usage') {
+      replaceMention('')
+      // The home screen has no chat for the bubble to speak for.
+      if (!chat) {
+        useStore.setState({ settingsOpen: 'usage' })
+        return
+      }
+      setUsageBubble('Checking usage…')
+      void window.galaxy.settings.usage().then((report) => {
+        const { secrets, settings } = useStore.getState()
+        setUsageBubble(usageSummary(report, model, !!model && !needsCredits(model, secrets, settings)))
+      }).catch(() => setUsageBubble('Could not check usage'))
       return
     }
     if (entry.kind === 'command' && mention) {
@@ -819,6 +858,12 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
     [key, setAttachments]
   )
 
+  // App Context attaches through the store, and the user will want to type about it right away.
+  useEffect(() => {
+    if (edit) return
+    return window.galaxy.onUiEvent((event) => { if (event.type === 'app-context' && event.attachments.length) textarea.current?.focus() })
+  }, [edit])
+
   const submit = async (steer = false): Promise<void> => {
     if (!canSend) return
     if (!edit && /^\/compact\s*$/i.test(text.trim()) && canCompact) {
@@ -863,6 +908,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
       browser: selected.some((item) => item.kind === 'browser'),
       computer: selected.some((item) => item.kind === 'computer'),
       apps: selected.flatMap((item) => item.kind === 'app' ? [{ name: item.name, path: item.path }] : []),
+      appContexts: attachments.flatMap(({ appContext }) => appContext?.tree ? [{ app: appContext.app, tree: appContext.tree }] : []),
       tools: selected.flatMap((item) => {
         if (item.kind !== 'mcp') return []
         if (item.tool) return [{ server: item.server, name: item.tool }]
@@ -917,7 +963,18 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   }
 
   return (
-    <div className={cn(!edit && 'mx-auto w-full px-6', !edit && (centered ? 'max-w-[680px] pb-0' : 'max-w-[780px] pb-4'))}>
+    <div className={cn(!edit && 'chat-column mx-auto w-full px-6', !edit && (centered ? 'max-w-[680px] pb-0' : 'max-w-[780px] pb-4'))}>
+      {usageBubble && (
+        <div className="group/att relative mb-2 flex w-fit max-w-full">
+          <button type="button" title="Open usage in Settings" onClick={() => { setUsageBubble(null); useStore.setState({ settingsOpen: 'usage' }) }} className={SUGGESTION_CHIP}>
+            <Gauge size={13.5} className="shrink-0" />
+            <span className="min-w-0 truncate">{usageBubble}</span>
+          </button>
+          <button type="button" title="Dismiss" onClick={() => setUsageBubble(null)} className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-fg text-bg opacity-0 transition-opacity group-hover/att:opacity-100">
+            <X size={10} strokeWidth={3} />
+          </button>
+        </div>
+      )}
       {!edit && !compact && !chat?.side && (
         <div className="mb-1.5 flex h-6 items-center gap-1.5 pl-1">
           {!chat && <ProjectChip chat={chat} />}
@@ -973,7 +1030,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         {!settingsOpen && mention && mentionEntries.length > 0 && (
           <div ref={mentionList} role="listbox" aria-label={mention.trigger === '/' ? 'Commands' : 'Mentions'} className={cn('absolute left-2 right-2 z-40 max-h-80 overflow-y-auto flex flex-col gap-0.5 rounded-2xl border border-line bg-elev p-2 shadow-pop', edit ? 'top-full mt-2' : 'bottom-full mb-2')}>
             {mentionEntries.map((entry, index) => {
-              const Icon = entry.mode ? MODES[entry.mode].icon : entry.git ? GIT_COMMAND_ICON[entry.git] : CHIP_ICON[entry.kind]
+              const Icon = entry.mode ? MODES[entry.mode].icon : entry.git ? GIT_COMMAND_ICON[entry.git] : COMMAND_ICON[entry.id] ?? CHIP_ICON[entry.kind]
               const heading = index === 0 || MENU_HEADINGS[mentionEntries[index - 1].kind] !== MENU_HEADINGS[entry.kind] ? MENU_HEADINGS[entry.kind] : null
               return (
                 <div key={entry.id} role="presentation">
@@ -989,7 +1046,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
                   onMouseMove={() => { if (index !== mentionIndex) setMentionIndex(index) }}
                   className={cn('flex h-9.5 w-full min-w-0 items-center gap-3 rounded-lg px-3 text-left', index === mentionIndex ? 'bg-hover text-fg' : 'text-muted', entry.disabled && 'cursor-default opacity-40')}
                 >
-                  <span className="flex w-4 shrink-0 justify-center">{entry.kind === 'app' && entry.icon ? <img src={entry.icon} alt="" width={22} height={22} className="max-w-none shrink-0" /> : entry.kind === 'model' && entry.brand ? <ModelBrandIcon brand={entry.brand} /> : entry.kind === 'file' ? <FileTypeIcon name={entry.name} /> : entry.kind === 'skill' ? <SkillIcon icon={entry.icon} color={entry.color} size={15} fallback={<Icon size={15} className={entry.color ? undefined : 'text-subtle'} />} /> : <Icon size={15} className="text-subtle" />}</span>
+                  <span className="flex w-4 shrink-0 justify-center">{entry.id === 'command:fast' ? <FastIcon size={14} /> : entry.id === 'command:ultrafast' ? <UltrafastIcon size={14} /> : entry.kind === 'app' && entry.icon ? <img src={entry.icon} alt="" width={22} height={22} className="max-w-none shrink-0" /> : entry.kind === 'model' && entry.brand ? <ModelBrandIcon brand={entry.brand} /> : entry.kind === 'file' ? <FileTypeIcon name={entry.name} /> : entry.kind === 'skill' ? <SkillIcon icon={entry.icon} color={entry.color} size={15} fallback={<Icon size={15} className={entry.color ? undefined : 'text-subtle'} />} /> : <Icon size={15} className="text-subtle" />}</span>
                   <span className="flex min-w-0 flex-1 items-baseline gap-2.5">
                     <span className="max-w-[60%] shrink-0 truncate text-[13px] text-fg">{entry.displayName ?? entry.name}</span>
                     <span className="min-w-0 truncate text-[11.5px] text-subtle">{entry.detail}</span>
@@ -1002,9 +1059,12 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         )}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 px-3.5 pt-3.5">
-            {attachments.map((file) => (
-              <AttachmentChip key={file.id} file={file} onRemove={() => setAttachments(key, attachments.filter((f) => f.id !== file.id))} />
-            ))}
+            {attachments.map((file) => {
+              const remove = (): void => setAttachments(key, attachments.filter((entry) => entry.id !== file.id))
+              return file.appContext
+                ? <AppContextCard key={file.id} file={file} onOpen={(entry) => useStore.getState().openAttachment(entry)} onRemove={remove} />
+                : <AttachmentChip key={file.id} file={file} onRemove={remove} />
+            })}
           </div>
         )}
         <div className="composer-input relative">
@@ -1202,6 +1262,9 @@ function ChatError({ message, onDismiss }: { message: string; onDismiss: () => v
 }
 
 /** Round chips above the box mid-chat: Continue after a stopped turn, and Commit while the folder has uncommitted changes. */
+/** The suggestion bubbles above the message box. */
+const SUGGESTION_CHIP = 'flex h-7.5 min-w-0 items-center gap-1.5 rounded-full bg-elev px-3 text-[12.5px] text-fg shadow-composer transition-colors hover:bg-hover'
+
 function ChatChips({ chat, items }: { chat: Chat; items: Item[] | undefined }): ReactNode {
   const cwd = useStore((s) => chat.worktree?.path ?? s.projects.find((entry) => entry.id === chat.projectId)?.path)
   const [git, setGit] = useState<{ dirty: boolean; hasRemote: boolean } | null>(null)
@@ -1220,7 +1283,7 @@ function ChatChips({ chat, items }: { chat: Chat; items: Item[] | undefined }): 
   const stopped = chat.status === 'error' || last?.kind === 'turn' && !!last.interrupted
   const commands: GitCommand[] = !git?.dirty ? [] : git.hasRemote ? ['commit', 'commit-push'] : ['commit']
   if (!stopped && !commands.length) return null
-  const chip = 'flex h-7.5 items-center gap-1.5 rounded-full bg-elev px-3 text-[12.5px] text-fg shadow-composer transition-colors hover:bg-hover'
+  const chip = SUGGESTION_CHIP
   return (
     <div className="mb-2 flex items-center gap-2">
       {stopped && (
@@ -1277,6 +1340,23 @@ function CurrentTask({ chat, items }: { chat: Chat; items: Item[] | undefined })
 }
 
 const MENU_HEADINGS: Record<MentionKind, string> = { model: 'Models', mode: 'Modes', command: 'Commands', upload: 'Attachments', skill: 'Skills', git: 'Tools', browser: 'Tools', computer: 'Tools', app: 'Apps', mcp: 'MCP servers', terminal: 'Terminals', chat: 'Recent chats', file: 'Files' }
+
+/** Usage in one line, for what the chat runs on: a plan's limits for an account, or the OpenRouter credits for Default. */
+function usageSummary(report: UsageReport, model: ResolvedModel | null, byok: boolean): string {
+  const account = (SUBSCRIPTION_ACCOUNT as Record<string, string | undefined>)[model?.subscription ?? '']
+  if (account === 'claude' || account === 'codex') {
+    const plan = report[account]
+    return plan?.windows.map((window) => `${Math.round(window.usedPercent)}% of ${window.label}`).join(' · ') || plan?.error || 'No usage to show'
+  }
+  if (model?.subscription !== 'Default') return 'No usage to show for this model'
+  if (model.id === AUTO_MODEL.id) return 'Auto is free'
+  if (byok) return 'Billed to your provider key'
+  const { openrouter } = report
+  if (!openrouter) return 'No OpenRouter key'
+  return 'total' in openrouter ? `$${Math.max(0, openrouter.total - openrouter.used).toFixed(2)} credits left` : openrouter.error
+}
+
+const COMMAND_ICON: Record<string, typeof Globe> = { 'command:usage': Gauge, 'command:compact': FoldVertical }
 
 const CHIP_ICON: Record<MentionKind, typeof Globe> = { model: Sparkles, mode: FileText, command: MessagesSquare, upload: Paperclip, skill: Package, file: FileText, chat: MessageCircle, browser: Globe, computer: Monitor, app: AppWindow, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
 

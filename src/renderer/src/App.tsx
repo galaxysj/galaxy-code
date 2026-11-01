@@ -1,5 +1,5 @@
 import { CircleAlert, PanelLeft, PanelRight, SquarePen } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { hasModelKey } from '@shared/catalog'
 import type { Chat } from '@shared/types'
 import { cn, formatTokens, tildify } from './lib/utils'
@@ -9,6 +9,8 @@ import { SettingsPage } from './components/Settings'
 import { AntigravityConsent } from './components/AntigravityConsent'
 import { AttachmentPreview } from './components/AttachmentPreview'
 import { ComputerPip } from './components/ComputerPip'
+import { Resizer, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from './components/Resizer'
+import { CHAT_COLUMN_WIDTH, OverviewButton, OverviewCard, OVERVIEW_WIDTH } from './components/SessionCard'
 import { Sidebar } from './components/Sidebar'
 import { SidePanel } from './components/SidePanel'
 import { ErrorDialog, Timeline } from './components/timeline/Timeline'
@@ -26,79 +28,6 @@ function useTheme(): void {
     media.addEventListener('change', apply)
     return () => media.removeEventListener('change', apply)
   }, [theme])
-}
-
-/** A drag handle on a pane edge. `direction` is which way a rightward drag grows the pane. */
-function Resizer({ width, min, max, direction, onChange, onCommit, onStart, onEnd, onCollapse, onExpand }: { width: number; min: number; max: number; direction: 1 | -1; onChange(width: number): void; onCommit(width: number): void; onStart?(): void; onEnd?(): void; onCollapse?(): void; onExpand?(): void }): ReactNode {
-  const cleanup = useRef<(() => void) | null>(null)
-  const latest = useRef(width)
-  useEffect(() => () => cleanup.current?.(), [])
-  const onDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0) return
-    event.preventDefault()
-    cleanup.current?.()
-    const pointerId = event.pointerId
-    const startX = event.clientX
-    // Capture on a persistent element: the pane becomes inert when it collapses.
-    const capture = document.documentElement
-    let collapsed = false
-    let finished = false
-    latest.current = width
-    const finish = (commit = true): void => {
-      if (finished) return
-      finished = true
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', end)
-      window.removeEventListener('pointercancel', end)
-      capture.removeEventListener('lostpointercapture', end)
-      cleanup.current = null
-      if (capture.hasPointerCapture(pointerId)) capture.releasePointerCapture(pointerId)
-      document.body.style.cursor = ''
-      capture.style.cursor = ''
-      if (commit) {
-        onCommit(latest.current)
-        onEnd?.()
-      }
-    }
-    const move = (pointer: PointerEvent): void => {
-      if (pointer.pointerId !== pointerId) return
-      const requested = width + (pointer.clientX - startX) * direction
-      if (requested < min && onCollapse) {
-        if (!collapsed) {
-          collapsed = true
-          latest.current = min
-          onChange(min)
-          onCollapse()
-        }
-        return
-      }
-      const next = Math.max(min, Math.min(max, requested))
-      if (!collapsed) onStart?.()
-      latest.current = next
-      onChange(next)
-      if (collapsed) {
-        collapsed = false
-        onExpand?.()
-      }
-    }
-    const end = (pointer: PointerEvent): void => { if (pointer.pointerId === pointerId) finish() }
-    cleanup.current = () => finish(false)
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', end)
-    window.addEventListener('pointercancel', end)
-    capture.addEventListener('lostpointercapture', end)
-    capture.setPointerCapture(pointerId)
-    onStart?.()
-    document.body.style.cursor = 'col-resize'
-    capture.style.cursor = 'col-resize'
-  }
-  return (
-    <div
-      onPointerDown={onDown}
-      className="no-drag absolute inset-y-3 z-20 w-[9px] cursor-col-resize touch-none"
-      style={direction === 1 ? { right: 0 } : { left: 0 }}
-    />
-  )
 }
 
 function ChatHeader({ chat, sidebarOpen }: { chat: Chat | null; sidebarOpen: boolean }): ReactNode {
@@ -172,6 +101,7 @@ function ChatHeader({ chat, sidebarOpen }: { chat: Chat | null; sidebarOpen: boo
           {chat.usage.cost > 0 ? ` · $${chat.usage.cost.toFixed(chat.usage.cost < 1 ? 3 : 2)}` : ''}
         </span>
       )}
+      {chat && <OverviewButton />}
       <IconButton label={panelOpen ? 'Hide side panel' : 'Show side panel'} active={panelOpen} onClick={() => setPanel(!panelOpen)}>
         <PanelRight size={15} />
       </IconButton>
@@ -234,6 +164,7 @@ export function App(): ReactNode {
   const savedSidebar = useStore((s) => s.settings.sidebarWidth)
   const savedPanel = useStore((s) => s.settings.panelWidth)
   const chat = useActiveChat()
+  const overviewOpen = useStore((s) => s.overviewOpen) && !!chat
   const items = useStore((s) => (s.activeChatId ? s.items[s.activeChatId] : undefined))
   const project = useStore((s) => s.projects.find((p) => p.id === (chat ? chat.projectId : s.draft.projectId)))
   const [sidebarWidth, setSidebarWidth] = useState(272)
@@ -280,6 +211,11 @@ export function App(): ReactNode {
   }, [])
 
   const maxPanel = useCallback(() => Math.max(MIN_PANEL_WIDTH, availablePanelWidth), [availablePanelWidth])
+  const panelSpace = panelOpen ? Math.min(panelWidth, maxPanel()) : 0
+  // The chat keeps its width and only slides left, so the card needs that much room beside the column.
+  const besideColumn = viewport.width - (sidebarOpen ? sidebarWidth : 0) - panelSpace - CHAT_COLUMN_WIDTH
+  const overviewDocked = overviewOpen && besideColumn >= OVERVIEW_WIDTH
+  const chatShift = overviewDocked ? Math.max(0, OVERVIEW_WIDTH - besideColumn / 2) : 0
 
   if (!ready) {
     return (
@@ -292,21 +228,21 @@ export function App(): ReactNode {
   const root = chat?.worktree?.path ?? project?.path ?? null
 
   return (
-    <div className="app-shell flex h-full text-fg">
-      <aside aria-hidden={!sidebarOpen} inert={!sidebarOpen} className={cn('sidebar-surface animated-pane relative shrink-0 overflow-hidden', resizing === 'sidebar' && 'pane-resizing')} style={{ width: sidebarOpen ? sidebarWidth : 0, opacity: sidebarOpen ? 1 : 0, pointerEvents: sidebarOpen ? 'auto' : 'none' }}>
+    <div className="app-shell relative flex h-full text-fg">
+      <aside aria-hidden={!sidebarOpen} inert={!sidebarOpen} className={cn('sidebar-surface animated-pane relative shrink-0 overflow-hidden', resizing === 'sidebar' && 'pane-resizing', settingsOpen && 'invisible')} style={{ width: sidebarOpen ? sidebarWidth : 0, opacity: sidebarOpen ? 1 : 0, pointerEvents: sidebarOpen ? 'auto' : 'none' }}>
         <div className="animated-pane-content absolute inset-y-0 left-0" style={{ width: sidebarWidth, transform: sidebarOpen ? 'translateX(0)' : 'translateX(-16px)' }}>
           <Sidebar />
         </div>
-        <Resizer width={sidebarWidth} min={210} max={420} direction={1} onChange={setSidebarWidth} onStart={() => setResizing('sidebar')} onEnd={() => setResizing(null)} onCommit={(width) => void updateSettings({ sidebarWidth: Math.round(width) })} />
       </aside>
-      <div className="workspace-surface flex min-w-0 flex-1 overflow-hidden">
+      {sidebarOpen && !settingsOpen && <Resizer gutter={sidebarWidth} width={sidebarWidth} min={SIDEBAR_MIN_WIDTH} max={SIDEBAR_MAX_WIDTH} direction={1} onChange={setSidebarWidth} onStart={() => setResizing('sidebar')} onEnd={() => setResizing(null)} onCommit={(width) => void updateSettings({ sidebarWidth: Math.round(width) })} />}
+      <div className={cn('workspace-surface flex min-w-0 flex-1 overflow-hidden', settingsOpen && 'invisible')}>
         <main className={cn('chat-surface flex min-w-[380px] flex-1 flex-col overflow-hidden', (sidebarOpen || panelOpen) && 'm-1.5 rounded-xl shadow-[0_0_0_1px_var(--border)]')}>
           <ChatHeader chat={chat} sidebarOpen={sidebarOpen} />
           {chat ? (
-            <>
+            <div className="flex min-h-0 flex-1 flex-col" style={{ '--chat-shift': `${chatShift}px` } as CSSProperties}>
               <Timeline chat={chat} items={items ?? EMPTY_ITEMS} root={root} />
               <Composer />
-            </>
+            </div>
           ) : (
             <Welcome />
           )}
@@ -324,6 +260,7 @@ export function App(): ReactNode {
       {antigravityConsent && <AntigravityConsent requestId={antigravityConsent} />}
       {attachmentPreview && <AttachmentPreview key={attachmentPreview.id} file={attachmentPreview} />}
       <ComputerPip />
+      {chat && overviewOpen && <OverviewCard chat={chat} right={panelSpace + 14} docked={overviewDocked} />}
       {toast && (
         <div
           key={toast.id}

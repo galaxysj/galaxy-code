@@ -79,6 +79,8 @@ function defaultSettings(): Settings {
     browserBlockPopups: false,
     browserAgentControl: true,
     computerUse: false,
+    appContext: true,
+    appContextShortcut: 'CommandOrControl+Shift+7',
     computerMode: 'background',
     sidebarWidth: 272,
     panelWidth: 560,

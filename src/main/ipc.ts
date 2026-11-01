@@ -33,13 +33,13 @@ import { copyProjectEntries, createProjectEntry, listProjectFiles, renameProject
 import { gitInfo, gitState, instantCommit, pushBranch } from './services/git'
 import { disposeAccountWorkers } from './services/accountWorkers'
 import { mcp } from './services/mcp'
-import { signInWithOpenRouter, testKey, testProviderKey } from './services/openrouter'
+import { creditsLocked, onCreditLock, signInWithOpenRouter, testKey, testProviderKey } from './services/openrouter'
 import { analyticsRows } from './services/analytics'
 import { cancelInlineEdit, completeCode, inlineEdit, saveFile, suggestEdit, terminalCommand, type CompletionRequest, type EditSuggestionRequest, type InlineEditRequest, type TerminalCommandRequest } from './services/editor'
 import { usageReport } from './services/usage'
 import { ensureSkillsDir, listSkills, projectSkillsDir, userSkillsDir } from './services/skills'
 import { store } from './store'
-import { exists, expandHome, isImagePath, looksBinary, mimeOf, newId, run } from './util'
+import { errorMessage, exists, expandHome, isImagePath, looksBinary, mimeOf, newId, run } from './util'
 
 type Handler = (...args: never[]) => unknown
 
@@ -130,7 +130,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     }
   }
   const emitUi = (event: UiEvent): void => {
-    if (event.type === 'computer-window' || event.type === 'computer-cursor' || event.type === 'computer-frame' || event.type === 'settings' || event.type === 'projects' || event.type === 'mcp-status' || event.type === 'inline-edit-delta') {
+    if (event.type === 'credits-locked' || event.type === 'computer-window' || event.type === 'computer-cursor' || event.type === 'computer-frame' || event.type === 'settings' || event.type === 'projects' || event.type === 'mcp-status' || event.type === 'inline-edit-delta') {
       for (const win of getWindows()) sendUi(win, event)
       return
     }
@@ -168,6 +168,30 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
   computer.onWindow = (chatId, window) => emitUi({ type: 'computer-window', chatId, window })
   computer.onCursor = (cursor) => emitUi({ type: 'computer-cursor', cursor })
   computer.onFrame = (windowId, jpeg) => emitUi({ type: 'computer-frame', windowId, jpeg })
+  onCreditLock((locked) => emitUi({ type: 'credits-locked', locked }))
+  const captureAppContext = async (): Promise<void> => {
+    try {
+      const { app: name, icon, tree, file } = await computer.captureFrontApp()
+      const attachment = await attachmentFor(file)
+      emitUi({ type: 'app-context', attachments: attachment ? [{ ...attachment, appContext: { app: name, icon, tree } }] : [] })
+    } catch (error) {
+      emitUi({ type: 'app-context', attachments: [], error: errorMessage(error) })
+    }
+    // Galaxy Code comes forward after the capture, so that the capture shows the app the user was in.
+    const win = getWindow()
+    if (win) {
+      win.show()
+      app.focus({ steal: true })
+      win.focus()
+    }
+  }
+  const applyAppContext = (): void => {
+    const { appContext, appContextShortcut } = store.settings
+    if (!computer.setAppContextShortcut(appContext ? appContextShortcut : null, () => void captureAppContext())) {
+      emitUi({ type: 'app-context', attachments: [], error: 'That shortcut is taken by another app. Choose a different one in Settings > Computer Use.' })
+    }
+  }
+  applyAppContext()
 
   const handlers: Record<string, Handler> = {
     'windows.create': createWindow,
@@ -211,11 +235,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
       if (patch.mcpServers) void mcp.sync()
       // Warm utility CLIs pick up a changed account or binary path on their next start.
       if (patch.accounts) disposeAccountWorkers()
+      if (patch.appContext !== undefined || patch.appContextShortcut !== undefined) applyAppContext()
+      if (patch.creditLimit !== undefined) void creditsLocked(true)
       emitSettings()
       return settings
     },
+    'settings.creditsLocked': () => creditsLocked(),
     'settings.setOpenRouterKey': (key: string | null) => {
       store.setOpenRouterKey(key)
+      void creditsLocked(true)
       emitSettings()
     },
     'settings.testOpenRouterKey': () => testKey(),

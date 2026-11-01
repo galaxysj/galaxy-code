@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react'
 import { create } from 'zustand'
-import { availableSubscriptions, canUseChatSubscription, defaultModel, findModel, normalizeEffort, resolveImageModels, resolveModels } from '@shared/catalog'
+import { AUTO_MODEL, availableSubscriptions, canUseChatSubscription, defaultModel, findModel, needsCredits, normalizeEffort, resolveImageModels, resolveModels } from '@shared/catalog'
 import {
   acpAgentFor,
   applyCustomAcpAgents,
@@ -28,8 +28,9 @@ import {
   type UiEvent,
   type WorkspaceMode
 } from '@shared/types'
+import { pageHost } from './lib/utils'
 
-export type SettingsSection = 'general' | 'models' | 'providers' | 'subscriptions' | 'usage' | 'customize' | 'browser' | 'computer'
+export type SettingsSection = 'general' | 'models' | 'providers' | 'subscriptions' | 'usage' | 'customize' | 'browser' | 'computer' | 'appContext'
 
 export interface Draft {
   projectId: string | null
@@ -113,6 +114,26 @@ interface Prefs {
 
 const PREFS_KEY = 'galaxy.prefs'
 
+const FAVICONS_KEY = 'galaxy.pageFavicons'
+/** Local storage is small, so very large icons stay in memory and only the latest sites are kept. */
+const MAX_SAVED_FAVICON = 16_000
+const MAX_SAVED_SITES = 150
+
+function loadFavicons(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(FAVICONS_KEY) ?? '{}') as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+
+function saveFavicons(favicons: Record<string, string>): void {
+  try {
+    const small = Object.entries(favicons).filter(([, favicon]) => favicon.length <= MAX_SAVED_FAVICON)
+    localStorage.setItem(FAVICONS_KEY, JSON.stringify(Object.fromEntries(small.slice(-MAX_SAVED_SITES))))
+  } catch { /* The icons are only a convenience, so a full store loses nothing that matters. */ }
+}
+
 function loadPrefs(): Prefs {
   try {
     return { models: {}, efforts: {}, ultra: {}, fast: {}, ultrafast: {}, acp: {}, lastProjectId: null, modes: {}, context: {}, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') }
@@ -170,6 +191,10 @@ interface State {
   accountsLoading: boolean
   acpProbes: Record<string, AcpProbe>
   antigravityConsent: string | null
+  /** OpenRouter has nothing left to spend, so models that need credits are locked to Auto. */
+  creditsLocked: boolean
+  /** The favicon of each site seen in the browser, by host, kept between runs. */
+  pageFavicons: Record<string, string>
   /** The windows each chat's agent has worked in during its run, the latest last, for the live view. */
   computerWindows: Record<string, ComputerWindow[]>
   computerCursor: ComputerCursor | null
@@ -191,6 +216,8 @@ interface State {
   activityCollapsed: Record<string, boolean>
 
   sidebarOpen: boolean
+  /** The chat overview beside the chat. */
+  overviewOpen: boolean
   panelOpen: boolean
   panelTab: string
   panelTabs: PanelTab[]
@@ -396,6 +423,17 @@ export const useStore = create<State>((set, get) => {
         set({ computerWindows: window ? { ...others, [event.chatId]: [...previous.filter(({ id }) => id !== window.id), window] } : others })
         break
       }
+      case 'app-context':
+        if (event.error) get().notify(event.error, 'error')
+        if (event.attachments.length) {
+          const key = get().activeChatId ?? 'new'
+          const current = get().composerAttachments[key] ?? []
+          get().setComposerAttachments(key, [...current, ...event.attachments])
+        }
+        break
+      case 'credits-locked':
+        set({ creditsLocked: event.locked })
+        break
       case 'computer-cursor':
         set({ computerCursor: event.cursor })
         break
@@ -415,7 +453,16 @@ export const useStore = create<State>((set, get) => {
         set({ mcp: event.statuses })
         break
       case 'browser-state':
-        set((s) => ({ browser: event.state, browserStates: { ...s.browserStates, [event.tabId ?? 'browser']: event.state } }))
+        set((s) => {
+          const { favicon, url } = event.state
+          const host = favicon ? pageHost(url) : ''
+          const changed = !!host && favicon !== s.pageFavicons[host]
+          const { [host]: _old, ...others } = s.pageFavicons
+          // The site goes last, so the ones dropped when saving are the oldest.
+          const pageFavicons = changed ? { ...others, [host]: favicon as string } : s.pageFavicons
+          if (changed) saveFavicons(pageFavicons)
+          return { browser: event.state, browserStates: { ...s.browserStates, [event.tabId ?? 'browser']: event.state }, pageFavicons }
+        })
         break
       case 'terminal-output':
         set((s) => ({ terminalOutput: { ...s.terminalOutput, [event.tabId]: { text: ((s.terminalOutput[event.tabId]?.text ?? '') + event.text).slice(-200_000), exited: event.exited ?? s.terminalOutput[event.tabId]?.exited ?? false } } }))
@@ -476,6 +523,8 @@ export const useStore = create<State>((set, get) => {
     acpProbes: {},
     antigravityConsent: null,
     computerWindows: {},
+    creditsLocked: false,
+    pageFavicons: loadFavicons(),
     computerCursor: null,
     attachmentPreview: null,
     imageModels: resolveImageModels(),
@@ -492,6 +541,7 @@ export const useStore = create<State>((set, get) => {
     activityCollapsed: {},
 
     sidebarOpen: true,
+    overviewOpen: false,
     panelOpen: false,
     panelTab: '',
     panelTabs: [],
@@ -533,6 +583,10 @@ export const useStore = create<State>((set, get) => {
         })
         window.galaxy.onChatEvent(applyChatEvent)
         window.galaxy.onUiEvent(applyUiEvent)
+        // Credits can be bought in the browser, so look again when the user comes back.
+        const refreshCredits = (): void => void window.galaxy.settings.creditsLocked().then((creditsLocked) => set({ creditsLocked })).catch(() => {})
+        refreshCredits()
+        window.addEventListener('focus', refreshCredits)
         await window.galaxy.windows.ready()
         void window.galaxy.browser.state().then((browser) => set({ browser }))
         void get().refreshAccounts()
@@ -928,9 +982,10 @@ export const useStore = create<State>((set, get) => {
 
     setPanel(open, tab) {
       if (open && !get().panelOpen && !tab) {
-        const blank = get().panelTabs.find((entry) => entry.type === 'browser' && entry.title === 'New tab' && !get().browserStates[entry.id]?.url)
-        set({ panelOpen: true, panelTab: blank?.id ?? get().panelTab })
-        if (!blank && !openingNewTab) {
+        const { panelTabs, panelTab } = get()
+        // The panel opens on what is already there. Only an empty panel gets a new tab.
+        set({ panelOpen: true, panelTab: panelTabs.some((entry) => entry.id === panelTab) ? panelTab : panelTabs[panelTabs.length - 1]?.id ?? '' })
+        if (!panelTabs.length && !openingNewTab) {
           openingNewTab = get().createPanelTab('browser', null).finally(() => { openingNewTab = null })
         }
         return
@@ -1001,7 +1056,11 @@ export function useRunConfig(): {
   const settings = useStore((s) => s.settings)
   const statuses = useStore((s) => s.accountStatuses)
   const source = chat ?? draft
-  const selected = findModel(models, source.modelKey)
+  const secrets = useStore((s) => s.secrets)
+  const creditsLocked = useStore((s) => s.creditsLocked)
+  const picked = findModel(models, source.modelKey)
+  // The choice stays saved, and comes back once there are credits again.
+  const selected = creditsLocked && picked && needsCredits(picked, secrets, settings) ? AUTO_MODEL : picked
   const subscription = selected && availableSubscriptions(settings, statuses).includes(selected.subscription) ? selected.subscription : selected ? null : 'Default'
   const model = subscription ? selected : null
   const agentId = acpAgentFor(model?.subscription)

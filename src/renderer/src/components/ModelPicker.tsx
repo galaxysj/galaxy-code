@@ -1,5 +1,5 @@
 import { Check, ChevronDown, ChevronLeft, ChevronRight, RotateCcw, Search, Settings2, Sparkles, Zap } from 'lucide-react'
-import { AUTO_MODEL, PREMIUM_MODEL, type ProviderId } from '@shared/catalog'
+import { AUTO_MODEL, needsCredits, PREMIUM_MODEL, type ProviderId } from '@shared/catalog'
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { AcpAgents } from '@shared/acp-registry'
 import { EFFORT_LABELS, type Effort, type ResolvedModel, type Subscription } from '@shared/types'
@@ -7,11 +7,11 @@ import { cn } from '../lib/utils'
 import { rememberedRunOptions, useChatId, useRunConfig, useStore } from '../store'
 import { Popover, Switch } from './ui'
 
-function FastIcon({ size = 12 }: { size?: number }): ReactNode {
+export function FastIcon({ size = 12 }: { size?: number }): ReactNode {
   return <Zap size={size} fill="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-fg" />
 }
 
-function UltrafastIcon({ size = 12 }: { size?: number }): ReactNode {
+export function UltrafastIcon({ size = 12 }: { size?: number }): ReactNode {
   return <Zap size={size} fill="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-[#4a7cf6]" />
 }
 
@@ -120,16 +120,27 @@ function EffortSlider({ model, effort, ultra, allowUltra, onChange }: EffortSlid
   )
 }
 
+/** Models that cannot run while OpenRouter has nothing left to spend. */
+function useCreditLock(): { locked: boolean; isLocked(model: ResolvedModel): boolean } {
+  const locked = useStore((s) => s.creditsLocked)
+  const secrets = useStore((s) => s.secrets)
+  const settings = useStore((s) => s.settings)
+  return { locked, isLocked: (model) => locked && needsCredits(model, secrets, settings) }
+}
+
+const CREDIT_LOCK_NOTE = "You've used all your credits. Add a BYOK key or credits to keep using other models."
+
 function ModelList({ current, subscription, allowUltra, onPick, onBack, onClose }: { current: ResolvedModel | null; subscription: Subscription | null; allowUltra: boolean; onPick(key: string): void; onBack(): void; onClose(): void }): ReactNode {
   const models = useStore((s) => s.models)
+  const { locked, isLocked } = useCreditLock()
   const hasKey = useStore((s) => s.secrets.openRouterKey || s.settings.customProviders.length > 0 || Object.keys(s.secrets.providerKeys).some((id) => !s.settings.disabledProviders.includes(id as ProviderId)))
   const [query, setQuery] = useState('')
 
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    const visible = models.filter((m) => m.enabled && !m.auto && m.subscription === subscription && (!needle || m.name.toLowerCase().includes(needle) || m.id.toLowerCase().includes(needle)))
+    const visible = models.filter((m) => m.enabled && !m.auto && !isLocked(m) && m.subscription === subscription && (!needle || m.name.toLowerCase().includes(needle) || m.id.toLowerCase().includes(needle)))
     return subscription && visible.length > 0 ? [{ subscription, models: visible }] : []
-  }, [models, query, subscription])
+  }, [models, query, subscription, isLocked])
 
   return (
     <div className="picker-view">
@@ -150,6 +161,7 @@ function ModelList({ current, subscription, allowUltra, onPick, onBack, onClose 
         />
       </div>
       <div className="max-h-[300px] overflow-y-auto p-1">
+        {locked && <p className="px-2 pb-2 pt-1 text-[11.5px] leading-snug text-subtle">{CREDIT_LOCK_NOTE}</p>}
         {subscription === 'Default' && !query.trim() && (
           <button
             type="button"
@@ -284,8 +296,10 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
   const auto = !!model?.auto
   // Effort and speed in words, such as "High Fast", instead of the slider style's icons.
   const label = !model || auto ? '' : optionSummary(model, { effort, ultra, fast, ultrafast, context }, !noUltra)
-  const needle = query.trim().toLowerCase()
-  const visible = models.filter((m) => m.enabled && !m.auto && m.subscription === subscription && (!needle || m.name.toLowerCase().includes(needle) || m.id.toLowerCase().includes(needle)))
+  // With Auto on there is no search box, so a search left from before must not keep the list open.
+  const needle = auto ? '' : query.trim().toLowerCase()
+  const { locked, isLocked } = useCreditLock()
+  const visible = models.filter((m) => m.enabled && !m.auto && !isLocked(m) && m.subscription === subscription && (!needle || m.name.toLowerCase().includes(needle) || m.id.toLowerCase().includes(needle)))
   const current = { effort, ultra, fast, ultrafast }
   // Open the options around the Edit row, kept within the list's height.
   useLayoutEffect(() => {
@@ -319,7 +333,7 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
       </button>
       <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} placement="bottom-end" offset={8} className="flex! items-start gap-1.5 bg-transparent! shadow-none!">
         <div ref={listBox} className="picker-scroll flex w-[228px] shrink-0 flex-col overflow-y-auto overscroll-contain rounded-lg bg-elev shadow-pop" style={{ maxHeight: listHeight + 64 + 37 }}>
-          <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search models" className="h-8 shrink-0 bg-transparent px-3 text-[12px] placeholder:text-subtle" />
+          {!auto && <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search models" className="h-8 shrink-0 bg-transparent px-3 text-[12px] placeholder:text-subtle" />}
           {subscription === 'Default' && !needle && (
             <div className="shrink-0 border-b border-line px-3 text-[12px]">
               <div className="flex h-8 items-center justify-between">
@@ -328,8 +342,8 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
               </div>
               {/* With Auto on, Premium swaps the free router for OpenRouter's Auto Router. */}
               {auto && <>
-                <PremiumRow checked={model?.key === PREMIUM_MODEL.key} onChange={(on) => pickModel(on ? PREMIUM_MODEL.key : AUTO_MODEL.key, chatId)} className="-mx-2 w-[calc(100%+1rem)]" />
-                <p className="pb-2 pt-1 text-[11.5px] leading-snug text-subtle">{model?.description}</p>
+                {!locked && <PremiumRow checked={model?.key === PREMIUM_MODEL.key} onChange={(on) => pickModel(on ? PREMIUM_MODEL.key : AUTO_MODEL.key, chatId)} className="-mx-2 w-[calc(100%+1rem)]" />}
+                <p className="pb-2 pt-1 text-[11.5px] leading-snug text-subtle">{locked ? CREDIT_LOCK_NOTE : model?.description}</p>
               </>}
             </div>
           )}
@@ -407,6 +421,7 @@ export function ModelPicker({ noUltra = false }: { noUltra?: boolean }): ReactNo
 
 /** The Slider style: one model, with an effort slider. */
 function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
+  const creditsLocked = useStore((s) => s.creditsLocked)
   const anchor = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const [listing, setListing] = useState(false)
@@ -518,8 +533,8 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
                 <RotateCcw size={13} />
               </button>
             </div>
-            {auto && <PremiumRow checked={model.key === PREMIUM_MODEL.key} onChange={(on) => pickModel(on ? PREMIUM_MODEL.key : AUTO_MODEL.key, chatId)} className="mt-2 w-full" />}
-            {model.description && <p className="mt-2 px-1 text-center text-[11.5px] leading-snug text-subtle">{model.description}</p>}
+            {auto && !creditsLocked && <PremiumRow checked={model.key === PREMIUM_MODEL.key} onChange={(on) => pickModel(on ? PREMIUM_MODEL.key : AUTO_MODEL.key, chatId)} className="mt-2 w-full" />}
+            {(creditsLocked || model.description) && <p className="mt-2 px-1 text-center text-[11.5px] leading-snug text-subtle">{creditsLocked ? CREDIT_LOCK_NOTE : model.description}</p>}
             {hasEffort && (
               <div className="mt-2.5" title={ultra ? `Ultra orchestrates parallel subagents at ${EFFORT_LABELS[model.ultraEffort as Effort].toLowerCase()} effort` : undefined}>
                 <EffortSlider model={model} effort={effort} ultra={ultra} allowUltra={!noUltra} onChange={(next) => setRunOptions(next, chatId)} />

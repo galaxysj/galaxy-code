@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Copy, Loader2 } from 'lucide-react'
+import { Check, ChevronDown, Copy, Globe, Loader2 } from 'lucide-react'
 import {
   useCallback,
   useEffect,
@@ -12,6 +12,13 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { cn, copyText } from '../lib/utils'
+
+/** A page's favicon, or a globe when it has none. */
+export function TabFavicon({ src }: { src?: string }): ReactNode {
+  const [failed, setFailed] = useState(false)
+  useEffect(() => setFailed(false), [src])
+  return src && !failed ? <img src={src} alt="" draggable={false} onError={() => setFailed(true)} className="h-4 w-4 shrink-0 object-contain" /> : <Globe size={14} className="shrink-0" />
+}
 
 export function Spinner({ size = 14, className }: { size?: number; className?: string }): ReactNode {
   return <Loader2 size={size} className={cn('spin shrink-0', className)} />

@@ -68,6 +68,8 @@ export interface GalaxyApi {
     testOpenRouterKey(): Promise<{ ok: boolean; message: string }>
     setProviderKey(id: ProviderId, key: string | null): Promise<void>
     testProviderKey(id: ProviderId): Promise<{ ok: boolean; message: string }>
+    /** Whether OpenRouter has nothing left to spend, so only Auto and models paid elsewhere can run. */
+    creditsLocked(): Promise<boolean>
     /** OpenRouter credits and Claude / Codex plan limits. */
     usage(): Promise<UsageReport>
     analytics(): Promise<AnalyticsRow[]>

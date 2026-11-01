@@ -93,8 +93,8 @@ export function ComputerPip(): ReactNode {
   const windows = useStore((s) => (s.activeChatId ? s.computerWindows[s.activeChatId] : undefined)) ?? NO_WINDOWS
   const [closed, setClosed] = useState<number[]>([])
   const [chosen, setChosen] = useState<{ id: number; latest: number } | null>(null)
-  // Pixels from the bottom right corner, so the stack stays in the window when it is resized.
-  const [offset, setOffset] = useState({ right: 20, bottom: 20 })
+  // Pixels from the top right corner, below the header, so the stack stays in the window when it is resized.
+  const [offset, setOffset] = useState({ right: 20, top: 56 })
   // Every shown window streams all the time, so a switch has its latest picture ready. Only the one in front redraws.
   const frames = useRef(new Map<number, string>())
   const frontId = useRef<number | null>(null)
@@ -134,7 +134,7 @@ export function ComputerPip(): ReactNode {
     const start = { x: event.clientX, y: event.clientY, ...offset }
     const handle = event.currentTarget
     handle.setPointerCapture(event.pointerId)
-    const move = (next: PointerEvent): void => setOffset({ right: Math.max(0, start.right + start.x - next.clientX), bottom: Math.max(0, start.bottom + start.y - next.clientY) })
+    const move = (next: PointerEvent): void => setOffset({ right: Math.max(0, start.right + start.x - next.clientX), top: Math.max(0, start.top + next.clientY - start.y) })
     const end = (): void => {
       handle.removeEventListener('pointermove', move)
       handle.removeEventListener('pointerup', end)

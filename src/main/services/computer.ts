@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
-import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -225,6 +225,8 @@ class ComputerService {
   onFrame: (windowId: number, jpeg: Uint8Array) => void = () => {}
   /** The apps found on this computer, and when. */
   private installed: { at: number; apps: InstalledApp[] } | null = null
+  /** The App Context shortcut now registered. */
+  private contextShortcut: string | null = null
   /** Installed apps' icons as data URLs, by path. */
   private fileIcons = new Map<string, string>()
   /** App icons as data URLs, by process. */
@@ -782,6 +784,49 @@ class ComputerService {
       missing.forEach((path, index) => { if (icons[index]) this.fileIcons.set(path, `data:image/png;base64,${icons[index]}`) })
     }
     return matches.map((entry) => ({ ...entry, icon: this.fileIcons.get(entry.path) }))
+  }
+
+  /** Sets the global App Context shortcut, or removes it with null. Says whether the system let the app have it. */
+  setAppContextShortcut(accelerator: string | null, capture: () => void): boolean {
+    if (this.contextShortcut) globalShortcut.unregister(this.contextShortcut)
+    this.contextShortcut = null
+    if (!accelerator || process.platform !== 'darwin') return true
+    try {
+      if (!globalShortcut.register(accelerator, capture)) return false
+    } catch {
+      return false
+    }
+    this.contextShortcut = accelerator
+    return true
+  }
+
+  /** Captures the frontmost app's window, skipping Galaxy Code's own: its screenshot, or its tree as a file when there is none, and the tree as text. */
+  async captureFrontApp(): Promise<{ app: string; icon?: string; tree?: string; file: string }> {
+    const { accessibility, screen: recording } = this.permissions()
+    if (!accessibility && !recording) throw new Error('App Context needs the Accessibility and Screen Recording permissions. Grant them in Settings > Computer Use.')
+    const window = (await listWindows()).find(({ layer }) => layer === 0)
+    if (!window) throw new Error('No app window is open.')
+    const dir = join(tmpdir(), 'galaxy-code', 'app-context', newId())
+    await mkdir(dir, { recursive: true })
+    const name = window.app.replace(/[/\\:]/g, '-')
+    let file: string | undefined
+    if (recording) {
+      const shot = join(dir, `${name}.png`)
+      await run('screencapture', ['-x', '-o', `-l${window.id}`, '-t', 'png', shot], { timeout: 15_000 }).then(() => { file = shot }, () => {})
+    }
+    let tree: string | undefined
+    if (accessibility) {
+      const { id: windowId, pid, x, y, width, height } = window
+      const reply = await helper<{ nodes: TreeNode[]; truncated: boolean }>({ op: 'tree', windowId, pid, x, y, width, height, menu: false }).catch(() => null)
+      if (reply) tree = `Window: ${window.title}\n\n${reply.nodes.map(nodeLine).join('\n')}${reply.truncated ? '\n\nThe tree is cut here.' : ''}`
+    }
+    if (!file && tree) {
+      file = join(dir, `${name} tree.txt`)
+      await writeFile(file, tree)
+    }
+    if (!file) throw new Error(`The ${window.app} window could not be captured.`)
+    const icon = await helper<{ icon: string }>({ op: 'icon', pid: window.pid }).then((reply) => `data:image/png;base64,${reply.icon}`, () => undefined)
+    return { app: window.app, icon, tree, file }
   }
 
   /** The name and icon of the app a chat is working in, for its timeline. */

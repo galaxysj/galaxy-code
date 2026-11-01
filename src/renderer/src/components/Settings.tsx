@@ -1,4 +1,5 @@
 import {
+  AppWindow,
   ArrowLeft,
   Box,
   Gauge,
@@ -56,6 +57,7 @@ import { useStore, type SettingsSection } from '../store'
 import { LiveMarkdown } from './LiveMarkdown'
 import { Markdown } from './Markdown'
 import { SUBSCRIPTION_LABELS } from './ModelPicker'
+import { Resizer, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from './Resizer'
 import { Button, Dropdown, IconButton, Modal, Segmented, Spinner, Switch, TextInput, type DropdownOption } from './ui'
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu; dividerBefore?: boolean; beta?: boolean }[] = [
@@ -64,9 +66,10 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu; dividerB
   { id: 'providers', label: 'Providers', icon: KeyRound },
   { id: 'subscriptions', label: 'Subscriptions', icon: UserRound },
   { id: 'usage', label: 'Usage', icon: Gauge },
-  { id: 'customize', label: 'Customize', icon: Plug },
   { id: 'browser', label: 'Browser', icon: Globe, dividerBefore: true },
-  { id: 'computer', label: 'Computer Use', icon: Monitor, beta: true }
+  { id: 'computer', label: 'Computer Use', icon: Monitor, beta: true },
+  { id: 'appContext', label: 'App Context', icon: AppWindow },
+  { id: 'customize', label: 'Customize', icon: Plug }
 ]
 
 function BetaBadge(): ReactNode {
@@ -1869,6 +1872,55 @@ function BrowserSection(): ReactNode {
 
 // Computer Use
 
+const KEY_SYMBOLS: Record<string, string> = { CommandOrControl: '⌘', Command: '⌘', Control: '⌃', Alt: '⌥', Shift: '⇧' }
+
+/** Reads one key combination for an Electron accelerator. A combination needs a modifier, or it would take over typing. */
+function ShortcutField({ value, onChange }: { value: string; onChange: (accelerator: string) => void }): ReactNode {
+  const [recording, setRecording] = useState(false)
+
+  useEffect(() => {
+    if (!recording) return
+    const onKey = (event: KeyboardEvent): void => {
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.key === 'Escape') { setRecording(false); return }
+      // The code, because Shift turns the 7 key into &, which is not what the accelerator means.
+      const key = /^Key[A-Z]$/.test(event.code) ? event.code.slice(3) : /^Digit\d$/.test(event.code) ? event.code.slice(5) : /^F\d+$/.test(event.code) ? event.code : event.code === 'Space' ? 'Space' : null
+      const modifiers = [event.metaKey && 'CommandOrControl', event.ctrlKey && 'Control', event.altKey && 'Alt', event.shiftKey && 'Shift'].filter((name): name is string => !!name)
+      if (!key || !modifiers.length) return
+      setRecording(false)
+      onChange([...modifiers, key].join('+'))
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [recording, onChange])
+
+  return (
+    <Button size="sm" onClick={() => setRecording(!recording)}>
+      {recording ? 'Press keys…' : value.split('+').map((part) => KEY_SYMBOLS[part] ?? part).join('')}
+    </Button>
+  )
+}
+
+function AppContextSection(): ReactNode {
+  const settings = useStore((s) => s.settings)
+  const update = useStore((s) => s.updateSettings)
+  return (
+    <Section title="App Context" description="Attach the app you are in to your message: a screenshot of its window and its accessibility tree.">
+      <Card>
+        <RowItem label="App Context" hint="Works from any app. It needs the permissions in Computer Use.">
+          <Switch checked={settings.appContext} onChange={(appContext) => void update({ appContext })} label="App Context" />
+        </RowItem>
+        {settings.appContext && (
+          <RowItem label="Shortcut" hint="Click, then press the keys.">
+            <ShortcutField value={settings.appContextShortcut} onChange={(appContextShortcut) => void update({ appContextShortcut })} />
+          </RowItem>
+        )}
+      </Card>
+    </Section>
+  )
+}
+
 function ComputerSection(): ReactNode {
   const settings = useStore((s) => s.settings)
   const update = useStore((s) => s.updateSettings)
@@ -1900,7 +1952,7 @@ function ComputerSection(): ReactNode {
 
   return (
     <>
-      <Section title="Agents" description="An app comes to the front when an agent starts working in it, then the work goes on in the background with a cursor of its own. To draw or drag they ask you first, then have the whole screen until the turn ends. Press Esc to take it back.">
+      <Section title="Agents" description="Agents work in other apps in the background with a cursor of their own. To draw or drag they ask you first, then have the whole screen until the turn ends. Press Esc to take it back.">
         <Card>
           <RowItem label="Computer control" hint="Each chat asks first, unless it runs with Full Access. Stop the chat to stop the agent.">
             <Switch checked={settings.computerUse} onChange={(computerUse) => void update({ computerUse })} label="Computer control" />
@@ -1932,6 +1984,10 @@ function ComputerSection(): ReactNode {
 export function SettingsPage(): ReactNode {
   const section = useStore((s) => s.settingsOpen)
   const platform = useStore((s) => s.platform)
+  const savedWidth = useStore((s) => s.settings.sidebarWidth)
+  const updateSettings = useStore((s) => s.updateSettings)
+  const [width, setWidth] = useState(savedWidth)
+  useEffect(() => setWidth(savedWidth), [savedWidth])
   const close = useCallback(() => useStore.setState({ settingsOpen: null }), [])
   useEffect(() => {
     if (!section) return
@@ -1943,8 +1999,9 @@ export function SettingsPage(): ReactNode {
   }, [section, close])
   if (!section) return null
   return (
-    <div className="fixed inset-0 z-30 flex bg-sidebar text-fg">
-      <nav className="flex w-[232px] shrink-0 flex-col gap-0.5 px-2.5 pb-3">
+    // No background of its own: the app behind hides, so the window's see-through tint carries through here too.
+    <div className="fixed inset-0 z-30 flex text-fg">
+      <nav className="flex shrink-0 flex-col gap-0.5 px-2.5 pb-3" style={{ width }}>
         <div className={cn('drag h-[46px] shrink-0', platform === 'darwin' && 'ml-[74px]')} />
         <button
           type="button"
@@ -1975,7 +2032,8 @@ export function SettingsPage(): ReactNode {
           )
         })}
       </nav>
-      <main className="my-1.5 mr-1.5 min-w-0 flex-1 overflow-hidden rounded-xl bg-bg shadow-[0_0_0_1px_var(--border)]">
+      <Resizer gutter={width} width={width} min={SIDEBAR_MIN_WIDTH} max={SIDEBAR_MAX_WIDTH} direction={1} onChange={setWidth} onCommit={(next) => void updateSettings({ sidebarWidth: Math.round(next) })} />
+      <main className="m-1.5 min-w-0 flex-1 overflow-hidden rounded-xl bg-bg shadow-[0_0_0_1px_var(--border)]">
         <div className="h-full overflow-y-auto">
           <div className="mx-auto w-full max-w-[720px] px-8 pb-12 pt-10">
             <h2 className="mb-6 flex items-center gap-2 text-[19px] font-semibold text-fg">
@@ -2000,6 +2058,7 @@ export function SettingsPage(): ReactNode {
             )}
             {section === 'browser' && <BrowserSection />}
             {section === 'computer' && <ComputerSection />}
+            {section === 'appContext' && <AppContextSection />}
           </div>
         </div>
       </main>

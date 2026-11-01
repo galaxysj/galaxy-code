@@ -11,6 +11,7 @@ import { Markdown } from '../Markdown'
 import { FileIcon as FileTypeIcon } from '../ProjectFiles'
 import { cleanError } from '../Settings'
 import { Button, CopyButton, IconButton, Modal, SkillIcon } from '../ui'
+import { AppContextCard } from '../AppContextCard'
 import { ExploreGroup, RollingText, computerApp, isBrowsing, isCompactable, isExplore, isHiddenAgentMessage, PresentTool, ToolBlock, type TimelineContext } from './Tools'
 
 const CHIP_ICON = { skill: Package, file: FileText, chat: MessageCircle, browser: Globe, computer: Monitor, app: AppWindow, mcp: Plug, terminal: SquareTerminal, git: GitCommitHorizontal }
@@ -58,8 +59,9 @@ const UserMessage = memo(function UserMessage({ item, chatId }: { item: UserItem
     <div className="group/user flex flex-col items-end pb-1 pt-5 first:pt-0">
       {item.attachments.length > 0 && (
         <div className="mb-1.5 flex max-w-[85%] flex-wrap justify-end gap-1.5">
-          {item.attachments.map((file) =>
-            file.preview ? (
+          {item.attachments.map((file) => {
+            if (file.appContext) return <AppContextCard key={file.id} file={file} small onOpen={openAttachment} />
+            return file.preview ? (
               <button key={file.id} type="button" onClick={() => openAttachment(file)} className="h-16 w-16 cursor-zoom-in overflow-hidden rounded-lg border border-line" title={file.name}>
                 <img src={file.preview} alt="" className="h-full w-full object-cover" draggable={false} />
               </button>
@@ -70,7 +72,7 @@ const UserMessage = memo(function UserMessage({ item, chatId }: { item: UserItem
                 <span className="text-subtle">{formatBytes(file.size)}</span>
               </button>
             )
-          )}
+          })}
         </div>
       )}
       {item.mode && <div className="mb-1 text-[11.5px] font-medium text-subtle">{item.mode === 'plan' ? 'Plan mode' : item.mode === 'multitask' ? 'Multitask mode' : 'Ask mode'}</div>}
@@ -530,7 +532,7 @@ export function Timeline({ chat, items, root }: TimelineProps): ReactNode {
   return (
     <div className="relative min-h-0 flex-1">
       <div ref={scroller} onScroll={onScroll} className="h-full overflow-y-auto">
-        <div className="mx-auto w-full max-w-[780px] px-6 pb-10 pt-4">
+        <div className="chat-column mx-auto w-full max-w-[780px] px-6 pb-10 pt-4">
           <Blocks blocks={blocks} ctx={ctx} running={chat.status === 'running'} stickyMessages />
           {chat.resumeAfter && chat.status !== 'running' && (
             <div className="flex items-center gap-3 py-4 text-[12px] text-subtle">

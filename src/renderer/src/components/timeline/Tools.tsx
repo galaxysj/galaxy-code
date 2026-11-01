@@ -33,13 +33,13 @@ import {
 } from 'lucide-react'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { EXPLORE_KINDS, type AskQuestion, type FileDiff, type Item, type ReasoningItem, type TaskEntry, type ToolItem, type ToolKind } from '@shared/types'
-import { basename, cn, formatBytes, formatDuration, plural, relativeTo } from '../../lib/utils'
+import { basename, cn, formatBytes, formatDuration, pageHost, plural, relativeTo } from '../../lib/utils'
 import { attemptedTitle, isNoChange, isTerminalRead, isToolOutputRead, readPath, thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
 import { useStore } from '../../store'
 import { DiffStat, DiffView } from '../DiffView'
 import { Markdown } from '../Markdown'
 import { FileIcon as FileTypeIcon } from '../ProjectFiles'
-import { Button, Spinner } from '../ui'
+import { Button, Spinner, TabFavicon } from '../ui'
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
 import { openLink } from '../../lib/openLink'
@@ -334,6 +334,17 @@ function browsingPages(items: ToolItem[]): string[] {
   return [...urls]
 }
 
+/** The title a browser call saw for a page, from the "URL:" and "Title:" lines of its output. */
+function pageTitle(items: ToolItem[], url: string): string {
+  const wanted = url.replace(/#.*$/, '')
+  for (const item of [...items].reverse()) {
+    const seen = [...(item.output ?? '').matchAll(/^URL:\s*(\S+)\s*\nTitle:[ \t]*(.*)$/gm)].reverse()
+    const match = seen.find(([, page, title]) => title.trim() && page.replace(/#.*$/, '') === wanted)
+    if (match) return match[2].trim()
+  }
+  return ''
+}
+
 /** "Browsed 3 pages", or the page itself when there is only one. */
 function browsingTitle(verb: string, items: ToolItem[]): ReactNode {
   const pages = browsingPages(items)
@@ -342,7 +353,7 @@ function browsingTitle(verb: string, items: ToolItem[]): ReactNode {
     return count === 1 ? `${verb} a page` : `${verb} ${plural(count, 'page')}`
   }
   const [url] = pages
-  const label = pageLabel(url)
+  const label = pageTitle(items, url) || pageLabel(url)
   if (!/^https?:/i.test(url)) return <><span className="text-fg">{verb}</span> {label}</>
   // The row is a button, so the link is a span that keeps its click from toggling the row.
   return <><span className="text-fg">{verb}</span> <span title={url} onClick={(event) => { event.stopPropagation(); void openLink(url, event) }} className="hover:text-fg hover:underline">{label}</span></>
@@ -357,8 +368,16 @@ export function computerApp(item: ToolItem): string | undefined {
   return named[named.length - 1]?.app as string | undefined
 }
 
-/** A tool's icon, or the icon of the app a Computer call worked in. */
+/** The favicon of the latest page these tools visited whose site has been seen in the browser. */
+function PageIcon({ items }: { items: ToolItem[] }): ReactNode {
+  const favicons = useStore((s) => s.pageFavicons)
+  const pages = browsingPages(items).reverse()
+  return <span className="text-subtle"><TabFavicon src={pages.map((url) => favicons[pageHost(url)]).find(Boolean)} /></span>
+}
+
+/** A tool's icon: for Computer the app it worked in, and for a page the site's favicon. */
 function ToolIcon({ item, icon: Icon }: { item: ToolItem; icon: typeof Monitor }): ReactNode {
+  if (item.tool === 'browser' || item.tool === 'webfetch') return <PageIcon items={[item]} />
   const { appIcon } = item.meta ?? {}
   return appIcon ? <img src={appIcon} alt="" width={20} height={20} className="max-w-none shrink-0" /> : <Icon size={13.5} className="text-subtle" />
 }
@@ -458,7 +477,7 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
   return (
     <div className="explore-group" title={failures.length && failures.length === tools.length ? failures.map((tool) => `${toolActivityTitle({ ...tool, status: 'done' })}: ${failureReason(tool)}`).join('\n') : undefined}>
       <Row
-        icon={computer ? <ToolIcon item={appTool ?? tools[0]} icon={Monitor} /> : browsing ? <Globe size={13.5} className="text-subtle" /> : thinkingOnly ? <Lightbulb size={13.5} className="text-subtle" /> : <Search size={13.5} className="text-subtle" />}
+        icon={computer ? <ToolIcon item={appTool ?? tools[0]} icon={Monitor} /> : browsing ? <PageIcon items={tools} /> : thinkingOnly ? <Lightbulb size={13.5} className="text-subtle" /> : <Search size={13.5} className="text-subtle" />}
         title={title}
         live={live}
         open={open}

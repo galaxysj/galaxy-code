@@ -1,5 +1,6 @@
 import { ChevronRight, ClipboardPaste, Code, Copy, ExternalLink, FileImage, FilePlus, FileText, Folder, FolderOpen, FolderPlus, PanelRight, Pencil, Search, RotateCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { ProjectFileEntry } from '@shared/types'
 import { basename, cn } from '../lib/utils'
 import type { OpenFile, PanelTab } from '../store'
@@ -291,7 +292,8 @@ export function ProjectFilesPane({ tab, available, renderFile }: { tab: Extract<
         <div tabIndex={-1} onKeyDown={onTreeKey} className="min-h-0 flex-1 overflow-y-auto px-1 pb-3 outline-none" onContextMenu={(event) => { event.preventDefault(); setMenu({ entry: null, x: event.clientX, y: event.clientY }) }}>{error && <div className="p-2 text-[11.5px] text-danger">{error}</div>}{loading.has('') || searching ? <div className="p-2"><Spinner size={13} className="text-subtle" /></div> : <>{createRow('', 0)}{rows(filter.trim() ? results : folders[''] ?? [])}</>}{filter.trim() && !searching && !results.length && <div className="p-2 text-[11.5px] text-subtle">No matching files.</div>}</div>
       </div>
     </div>
-    <div ref={menuAnchor} className="no-drag pointer-events-none fixed h-px w-px" style={{ left: menu?.x ?? 0, top: menu?.y ?? 0 }} />
+    {/* In the body, since the transform of the sliding pane would make `fixed` count from the pane and not the window. */}
+    {createPortal(<div ref={menuAnchor} className="no-drag pointer-events-none fixed h-px w-px" style={{ left: menu?.x ?? 0, top: menu?.y ?? 0 }} />, document.body)}
     <Popover open={!!menu} onClose={() => setMenu(null)} anchor={menuAnchor} placement="bottom-start" offset={0} className="w-56 p-1">
       {menu && (() => {
         const entry = menu.entry
