@@ -1,8 +1,8 @@
 # Galaxy Code
-One IDE. Every Agent. Endless Possibilities.
+Your coding agents. One clear workspace.
 
-<img width="1472" height="957" alt="image" src="https://github.com/user-attachments/assets/4a943c3c-f906-47d8-b350-946efe512d05" />
 
+<img width="1582" height="957" alt="스크린샷 2026-11-01 오후 1 48 40" src="https://github.com/user-attachments/assets/47f430a6-275d-450e-a4d8-f53ccc027d34" />
 
 **Galaxy Code** is an all-in-one AI-powered development environment inspired by [Cursor](https://cursor.com), [Codex](https://chatgpt.com/codex), and [Claude Code](https://claude.dev), powered by [OpenRouter](https://openrouter.ai).
 
