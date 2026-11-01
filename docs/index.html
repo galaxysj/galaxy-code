@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Galaxy Code — one workspace for your coding agents</title>
+  <meta name="description" content="Run coding agents, review changes, and work across your projects and apps in one open-source macOS workspace.">
+  <meta property="og:title" content="Galaxy Code — one workspace for your coding agents">
+  <meta property="og:description" content="Run coding agents, review changes, and work across your projects and apps in one open-source macOS workspace.">
+  <meta property="og:image" content="icon.png">
+  <link rel="icon" type="image/png" href="icon.png">
+  <script>
+    try {
+      var saved = localStorage.getItem('theme')
+      if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved
+    } catch (error) {}
+  </script>
+  <style>
+    /* Tokens mirror src/renderer/src/styles.css (dark theme). */
+    :root {
+      --bg: #161616;
+      --bg-sidebar: #111111;
+      --bg-elev: #1e1e1e;
+      --bg-inset: #101010;
+      --bg-hover: rgba(255, 255, 255, 0.055);
+      --bg-active: rgba(255, 255, 255, 0.09);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.15);
+      --fg: #e7e7e5;
+      --fg-muted: #9b9b97;
+      --fg-subtle: #6a6a67;
+      --accent: #ededeb;
+      --on-accent: #141414;
+      --green: #4cc38a;
+      --red: #f2766b;
+      --amber: #e2a336;
+      --orange: #f0883e;
+      --blue: #78aef5;
+      --purple: #a78bfa;
+      --diff-add: rgba(76, 195, 138, 0.13);
+      --diff-add-gutter: rgba(76, 195, 138, 0.3);
+      --diff-del: rgba(242, 118, 107, 0.13);
+      --diff-del-gutter: rgba(242, 118, 107, 0.3);
+      --shadow-popover: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+      --shadow-input: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 8px 24px rgba(0, 0, 0, 0.22);
+      --hl-keyword: #c792ea;
+      --hl-string: #9ece8a;
+      --hl-function: #79b8ff;
+      --chat: #000000;
+      --explore-fg: #d4d4d4;
+      --explore-muted: #b3b3b3;
+      --explore-subtle: #999999;
+      --nav-bg: rgba(22, 22, 22, 0.8);
+      --window-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 40px 120px -30px rgba(0, 0, 0, 0.95);
+      color-scheme: dark;
+      --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+      --font-mono: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, Monaco, Consolas, monospace;
+      --max: 1120px;
+    }
+
+    /* Light tokens mirror :root[data-theme='light'] in the app. */
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) {
+        --bg: #fbfbf9;
+        --bg-sidebar: #f2f1ed;
+        --bg-elev: #ffffff;
+        --bg-inset: #f4f3ef;
+        --bg-hover: rgba(38, 37, 30, 0.055);
+        --bg-active: rgba(38, 37, 30, 0.09);
+        --border: rgba(38, 37, 30, 0.1);
+        --border-strong: rgba(38, 37, 30, 0.2);
+        --fg: #26251e;
+        --fg-muted: #6c6b63;
+        --fg-subtle: #9c9b93;
+        --accent: #26251e;
+        --on-accent: #fbfbf9;
+        --green: #1f8a52;
+        --red: #c9382c;
+        --amber: #a86a06;
+        --orange: #c4560f;
+        --blue: #1f65c1;
+        --purple: #7c4ddb;
+        --diff-add: rgba(31, 138, 82, 0.1);
+        --diff-add-gutter: rgba(31, 138, 82, 0.28);
+        --diff-del: rgba(201, 56, 44, 0.09);
+        --diff-del-gutter: rgba(201, 56, 44, 0.26);
+        --shadow-popover: 0 0 0 1px rgba(38, 37, 30, 0.1), 0 12px 32px rgba(38, 37, 30, 0.14), 0 2px 6px rgba(38, 37, 30, 0.06);
+        --shadow-input: 0 0 0 1px rgba(38, 37, 30, 0.11), 0 6px 20px rgba(38, 37, 30, 0.07);
+        --hl-keyword: #8b3fc7;
+        --hl-string: #2f7d3b;
+        --hl-function: #1f65c1;
+        --chat: #ffffff;
+        --explore-fg: #3d3d3d;
+        --explore-muted: #616161;
+        --explore-subtle: #808080;
+        --nav-bg: rgba(251, 251, 249, 0.8);
+        --window-shadow: 0 0 0 1px rgba(38, 37, 30, 0.12), 0 40px 100px -30px rgba(38, 37, 30, 0.35);
+        color-scheme: light;
+      }
+    }
+    :root[data-theme="light"] {
+      --bg: #fbfbf9;
+      --bg-sidebar: #f2f1ed;
+      --bg-elev: #ffffff;
+      --bg-inset: #f4f3ef;
+      --bg-hover: rgba(38, 37, 30, 0.055);
+      --bg-active: rgba(38, 37, 30, 0.09);
+      --border: rgba(38, 37, 30, 0.1);
+      --border-strong: rgba(38, 37, 30, 0.2);
+      --fg: #26251e;
+      --fg-muted: #6c6b63;
+      --fg-subtle: #9c9b93;
+      --accent: #26251e;
+      --on-accent: #fbfbf9;
+      --green: #1f8a52;
+      --red: #c9382c;
+      --amber: #a86a06;
+      --orange: #c4560f;
+      --blue: #1f65c1;
+      --purple: #7c4ddb;
+      --diff-add: rgba(31, 138, 82, 0.1);
+      --diff-add-gutter: rgba(31, 138, 82, 0.28);
+      --diff-del: rgba(201, 56, 44, 0.09);
+      --diff-del-gutter: rgba(201, 56, 44, 0.26);
+      --shadow-popover: 0 0 0 1px rgba(38, 37, 30, 0.1), 0 12px 32px rgba(38, 37, 30, 0.14), 0 2px 6px rgba(38, 37, 30, 0.06);
+      --shadow-input: 0 0 0 1px rgba(38, 37, 30, 0.11), 0 6px 20px rgba(38, 37, 30, 0.07);
+      --hl-keyword: #8b3fc7;
+      --hl-string: #2f7d3b;
+      --hl-function: #1f65c1;
+      --chat: #ffffff;
+      --explore-fg: #3d3d3d;
+      --explore-muted: #616161;
+      --explore-subtle: #808080;
+      --nav-bg: rgba(251, 251, 249, 0.8);
+      --window-shadow: 0 0 0 1px rgba(38, 37, 30, 0.12), 0 40px 100px -30px rgba(38, 37, 30, 0.35);
+      color-scheme: light;
+    }
+
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    /* Keep section headings clear of the sticky nav when jumped to. */
+    section[id] { scroll-margin-top: 60px; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--font-sans);
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+    code { font-family: var(--font-mono); font-size: 0.9em; }
+    svg.i { width: 1em; height: 1em; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    .wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+
+    /* Nav */
+    .nav {
+      position: sticky; top: 0; z-index: 10;
+      background: var(--nav-bg);
+      backdrop-filter: saturate(160%) blur(12px);
+      -webkit-backdrop-filter: saturate(160%) blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -0.01em; }
+    .brand img { width: 26px; height: 26px; border-radius: 6px; }
+    .nav-links { display: flex; align-items: center; gap: 24px; font-size: 14px; color: var(--fg-muted); }
+    .nav-links a:hover { color: var(--fg); }
+
+    .theme {
+      width: 32px; height: 32px; display: grid; place-items: center;
+      border: 1px solid var(--border-strong); border-radius: 8px; background: none;
+      color: var(--fg-muted); font-size: 15px; cursor: pointer;
+    }
+    .theme:hover { color: var(--fg); background: var(--bg-hover); }
+    .theme .sun { display: none; }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) .theme .sun { display: block; }
+      :root:not([data-theme="dark"]) .theme .moon { display: none; }
+    }
+    :root[data-theme="light"] .theme .sun { display: block; }
+    :root[data-theme="light"] .theme .moon { display: none; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      height: 40px; padding: 0 18px;
+      border-radius: 10px; border: 1px solid var(--border-strong);
+      font-size: 14px; font-weight: 500;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn:hover { background: var(--bg-hover); }
+    .btn-primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+    .btn-primary:hover { opacity: 0.88; }
+    .btn-sm { height: 32px; padding: 0 12px; font-size: 13px; border-radius: 8px; }
+    .btn svg { width: 16px; height: 16px; }
+
+    /* Hero */
+    .hero { position: relative; isolation: isolate; overflow: hidden; padding: 108px 0 72px; text-align: center; }
+    .hero::before {
+      content: ''; position: absolute; z-index: -1; top: clamp(-260px, -18vw, -120px); left: 50%;
+      width: 100vw; height: clamp(440px, 58vw, 1000px); transform: translateX(-50%);
+      background: radial-gradient(ellipse 48% 58% at 25% 45%, color-mix(in srgb, var(--blue) 13%, transparent), transparent 72%), radial-gradient(ellipse 48% 58% at 75% 40%, color-mix(in srgb, var(--purple) 12%, transparent), transparent 72%);
+      pointer-events: none;
+    }
+    .pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 5px 12px; border-radius: 999px;
+      border: 1px solid var(--border-strong); background: var(--bg-elev);
+      font-size: 12px; font-weight: 550; letter-spacing: 0.02em; color: var(--fg-muted);
+    }
+    .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+    h1 {
+      margin: 26px auto 0; max-width: 900px;
+      font-size: clamp(42px, 6.4vw, 76px);
+      line-height: 1.04; letter-spacing: -0.05em; font-weight: 650;
+    }
+    h1 .dim { color: var(--fg-subtle); }
+    .lede { margin: 24px auto 0; max-width: 650px; font-size: 18px; color: var(--fg-muted); }
+    .cta { margin-top: 32px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .hint { margin-top: 14px; font-size: 13px; color: var(--fg-subtle); }
+
+    /* The live demo uses the application's actual React renderer. */
+    .shot { padding: 0 0 96px; }
+    .shot .wrap { max-width: 1410px; }
+    .demo-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; color: var(--fg-muted); font-size: 12px; }
+    .demo-tools > span { display: flex; align-items: center; gap: 8px; }
+    .demo-tools .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+    .demo-tools button { border: 1px solid var(--border-strong); border-radius: 7px; background: transparent; color: var(--fg-muted); padding: 5px 10px; font: inherit; cursor: pointer; }
+    .demo-tools button:hover { background: var(--bg-hover); color: var(--fg); }
+    .demo-frame { position: relative; width: 100%; aspect-ratio: 1360 / 880; overflow: hidden; border-radius: 12px; background: var(--bg-sidebar); box-shadow: var(--window-shadow); }
+    .demo-frame iframe { position: absolute; top: 0; left: 0; width: 1360px; height: 880px; border: 0; transform-origin: 0 0; }
+    body.demo-open { overflow: hidden; }
+    body.demo-open::after { content: ''; position: fixed; inset: 0; z-index: 999; background: var(--bg); }
+    body.demo-open .demo-tools { position: fixed; top: 16px; left: 20px; right: 20px; z-index: 1001; }
+    .demo-frame.expanded { position: fixed; z-index: 1000; top: 60px; left: 16px; width: calc(100vw - 32px); height: calc(100vh - 76px); aspect-ratio: auto; }
+
+    /* Standalone component replicas */
+    .approval { border-radius: 16px; background: var(--bg-elev); padding: 14px 16px; box-shadow: var(--shadow-input); font-size: 13px; line-height: 1.5; text-align: left; }
+    .approval .top { display: flex; gap: 10px; align-items: flex-start; }
+    .approval .top > svg { font-size: 17px; color: var(--amber); margin-top: 2px; }
+    .approval .q { font-size: 13.5px; font-weight: 500; }
+    .approval .what { margin-top: 4px; font-size: 13px; }
+    .approval .why { margin: 4px 0 0; font-size: 12px; line-height: 1.4; color: var(--fg-muted); }
+    .approval .det { margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-inset); display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; color: var(--fg-muted); }
+    .approval .det span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .approval .btns { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+    .ub { height: 26px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 500; }
+    .ub.ghost { color: var(--fg-muted); margin-right: auto; }
+    .ub.sec { border: 1px solid var(--border-strong); background: var(--bg-elev); }
+    .ub.pri { background: var(--accent); color: var(--on-accent); }
+    .ub kbd { font-family: var(--font-sans); font-size: 10.5px; opacity: 0.6; }
+    .pop { border-radius: 10px; background: var(--bg-elev); box-shadow: var(--shadow-popover); padding: 4px; text-align: left; }
+    .opt { display: flex; gap: 10px; padding: 8px 10px; border-radius: 6px; }
+    .opt.on { background: var(--bg-hover); }
+    .opt .name { font-size: 12.5px; color: var(--fg); }
+    .opt .desc { font-size: 11.5px; line-height: 1.45; color: var(--fg-subtle); margin-top: 1px; }
+    .opt .chk { width: 14px; flex: none; padding-top: 3px; font-size: 13px; color: var(--fg); }
+    .opt.full .name { color: var(--amber); }
+
+    /* Sections */
+    section.block { padding: 88px 0; border-top: 1px solid var(--border); }
+    .eyebrow { font-size: 13px; color: var(--fg-subtle); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500; }
+    h2 { margin: 10px 0 0; font-size: clamp(28px, 4vw, 40px); line-height: 1.15; letter-spacing: -0.025em; font-weight: 620; max-width: 640px; }
+    .sub { margin: 14px 0 0; color: var(--fg-muted); max-width: 600px; }
+
+    .grid { margin-top: 48px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+    .feat { background: var(--bg); padding: 28px; }
+    .feat svg { font-size: 20px; color: var(--fg-muted); }
+    .feat h3 { margin: 16px 0 6px; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+    .feat p { margin: 0; color: var(--fg-muted); font-size: 14.5px; }
+
+    .new-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 42px; }
+    .new-card { position: relative; min-height: 240px; display: flex; flex-direction: column; overflow: hidden; padding: 28px; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--bg-elev); }
+    .new-card::before { content: ''; position: absolute; top: 0; left: 28px; right: 28px; height: 1px; background: linear-gradient(90deg, transparent, var(--card-color), transparent); opacity: 0.8; }
+    .new-card .icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 10px; background: color-mix(in srgb, var(--card-color) 13%, transparent); color: var(--card-color); font-size: 20px; }
+    .new-card .label { margin-top: 26px; font-size: 11px; font-weight: 650; letter-spacing: 0.1em; text-transform: uppercase; color: var(--card-color); }
+    .new-card h3 { margin: 6px 0 8px; font-size: 19px; line-height: 1.25; letter-spacing: -0.02em; }
+    .new-card p { margin: 0; color: var(--fg-muted); font-size: 14px; }
+
+    .agents { margin-top: 40px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .agent { border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; background: var(--bg-elev); }
+    .agent .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .agent h4 { margin: 0; font-size: 15px; font-weight: 600; }
+    .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--fg-muted); white-space: nowrap; }
+    .tag.def { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, transparent); }
+    .tag.warn { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
+    .agent p { margin: 8px 0 0; color: var(--fg-muted); font-size: 14px; }
+
+    .perm { margin-top: 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+    .perm .label { font-size: 12px; color: var(--fg-subtle); margin-bottom: 10px; }
+    .note { margin-top: 18px; font-size: 13px; color: var(--fg-subtle); }
+
+    .start { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
+    .term { border: 1px solid var(--border-strong); border-radius: 12px; background: var(--bg-inset); overflow: hidden; }
+    .term .bar { padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--fg-subtle); display: flex; justify-content: space-between; align-items: center; }
+    .term pre { margin: 0; padding: 18px; font-family: var(--font-mono); font-size: 13.5px; line-height: 1.8; overflow-x: auto; }
+    .term .c { color: var(--fg-subtle); }
+    .term .p { color: var(--fg-subtle); user-select: none; }
+    .copy { background: none; border: 1px solid var(--border-strong); color: var(--fg-muted); border-radius: 6px; font: inherit; font-size: 12px; padding: 2px 8px; cursor: pointer; }
+    .copy:hover { color: var(--fg); }
+    ol.steps { list-style: none; padding: 0; margin: 28px 0 0; counter-reset: s; }
+    ol.steps li { counter-increment: s; position: relative; padding: 0 0 18px 40px; color: var(--fg-muted); }
+    ol.steps li::before {
+      content: counter(s); position: absolute; left: 0; top: 1px;
+      width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--border-strong);
+      display: grid; place-items: center; font-size: 12px; color: var(--fg);
+    }
+    ol.steps b { color: var(--fg); font-weight: 500; }
+
+    .final { text-align: center; }
+    .final h2, .final .sub { margin-left: auto; margin-right: auto; }
+
+    footer { border-top: 1px solid var(--border); padding: 28px 0 40px; color: var(--fg-subtle); font-size: 13px; }
+    footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    footer a:hover { color: var(--fg); }
+
+    /* The app closes the side panel when it runs out of width; the replica does the same. */
+    @media (max-width: 1180px) {
+    }
+    @media (max-width: 960px) {
+      .grid, .agents, .new-grid { grid-template-columns: 1fr 1fr; }
+      .perm, .start { grid-template-columns: 1fr; gap: 32px; }
+    }
+    @media (max-width: 760px) {
+    }
+    @media (max-width: 640px) {
+      .wrap, .shot .wrap { padding: 0 16px; }
+      .nav-links a.hide-sm { display: none; }
+      .hero { padding: 72px 0 48px; }
+      .hero::before {
+        top: -112px; width: 100vw; height: clamp(440px, 112vw, 540px);
+        background: radial-gradient(ellipse 68% 54% at 27% 40%, color-mix(in srgb, var(--blue) 13%, transparent), transparent 72%), radial-gradient(ellipse 68% 54% at 75% 40%, color-mix(in srgb, var(--purple) 12%, transparent), transparent 72%);
+      }
+      .lede { font-size: 16px; }
+      .grid, .agents, .new-grid { grid-template-columns: 1fr; }
+      .new-card { min-height: 0; }
+      section.block { padding: 64px 0; }
+      .shot { padding-bottom: 64px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Lucide icons, the set the app uses. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-panel-left" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></symbol>
+    <symbol id="i-panel-right" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></symbol>
+    <symbol id="i-square-pen" viewBox="0 0 24 24"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></symbol>
+    <symbol id="i-folder-git" viewBox="0 0 24 24"><path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5"/><circle cx="13" cy="12" r="2"/><path d="M18 19c-2.8 0-5-2.2-5-5v8"/><circle cx="20" cy="19" r="2"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-file-pen" viewBox="0 0 24 24"><path d="M12.5 22H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v9.5"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M13.378 15.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+    <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-shield-alert" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
+    <symbol id="i-git-compare" viewBox="0 0 24 24"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+    <symbol id="i-commit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M3 12h6"/><path d="M15 12h6"/></symbol>
+    <symbol id="i-msg-diff" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M10 15h4"/><path d="M10 9h4"/><path d="M12 7v4"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-layout-list" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 7h.01M12 7h5M8 12h.01M12 12h5M8 17h.01M12 17h5"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></symbol>
+  </svg>
+
+  <header class="nav">
+    <div class="wrap">
+      <a class="brand" href="#"><img src="icon.png" alt="">Galaxy Code</a>
+      <nav class="nav-links">
+        <a class="hide-sm" href="#whats-new">What's new</a>
+        <a class="hide-sm" href="#features">Features</a>
+        <a class="hide-sm" href="#agents">Agents</a>
+        <a class="hide-sm" href="#start">Get started</a>
+        <button class="theme" type="button" aria-label="Toggle color theme" title="Toggle color theme">
+          <svg class="i sun"><use href="#i-sun"/></svg><svg class="i moon"><use href="#i-moon"/></svg>
+        </button>
+        <a class="btn btn-sm" href="https://github.com/galaxysj/galaxy-code">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          GitHub
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="wrap">
+        <span class="pill"><span class="dot"></span>v1.0.0 &middot; macOS &middot; Open source</span>
+        <h1>Your coding agents.<br><span class="dim">One clear workspace.</span></h1>
+        <p class="lede">Run Galaxy, Claude Code, Codex, and ACP agents alongside your code. See their work as it happens, review every change, and stay in control of approvals.</p>
+        <div class="cta">
+          <a class="btn btn-primary" id="download" href="https://github.com/galaxysj/galaxy-code/releases">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></svg>
+            Download for macOS
+          </a>
+          <a class="btn" href="https://github.com/galaxysj/galaxy-code">View on GitHub</a>
+        </div>
+        <p class="hint" id="download-info">Latest available download on GitHub &middot; MIT licensed</p>
+      </div>
+    </section>
+
+    <section class="shot" aria-label="Interactive app demo">
+      <div class="wrap">
+        <div class="demo-tools">
+          <span><span class="dot"></span>Interactive demo &middot; v1.0.0 &middot; Sample data</span>
+          <div><button type="button" id="demo-reset">Reset</button> <button type="button" id="demo-expand">Expand demo</button></div>
+        </div>
+        <div class="demo-frame" id="demo-frame">
+          <iframe id="app-demo" src="demo/index.html" title="Interactive Galaxy Code v1.0.0 app" loading="lazy" allow="fullscreen"></iframe>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="whats-new">
+      <div class="wrap">
+        <div class="eyebrow">New in Galaxy Code</div>
+        <h2>Keep the whole task in view.</h2>
+        <p class="sub">Give an agent the right context, follow its progress across windows, and jump back into any part of the work.</p>
+        <div class="new-grid">
+          <article class="new-card" style="--card-color: var(--blue)">
+            <span class="icon"><svg class="i"><use href="#i-grid"/></svg></span>
+            <span class="label">App Context</span>
+            <h3>Show the app you're working in.</h3>
+            <p>Attach a window as context so the agent can see the screen you mean, along with your request.</p>
+          </article>
+          <article class="new-card" style="--card-color: var(--purple)">
+            <span class="icon"><svg class="i"><use href="#i-panel-right"/></svg></span>
+            <span class="label">Live activity</span>
+            <h3>Watch computer work unfold.</h3>
+            <p>On macOS, supported agents can work in other apps in the background. A live window view follows their activity.</p>
+          </article>
+          <article class="new-card" style="--card-color: var(--green)">
+            <span class="icon"><svg class="i"><use href="#i-msg-diff"/></svg></span>
+            <span class="label">Chat overview</span>
+            <h3>Find the moving pieces fast.</h3>
+            <p>Open the current chat's changes, browser tabs, terminals, and subagents from one compact overview.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="features">
+      <div class="wrap">
+        <div class="eyebrow">Features</div>
+        <h2>Everything a coding agent needs, in one window.</h2>
+        <p class="sub">Run agents against local folders or Git worktrees, watch what they do, and step in whenever you want.</p>
+        <div class="grid">
+          <div class="feat">
+            <svg class="i"><use href="#i-folder"/></svg>
+            <h3>Projects and conversations</h3>
+            <p>Work in local folders or Git worktrees, with separate windows and side chats.</p>
+          </div>
+          <div class="feat">
+            <svg class="i"><use href="#i-grid"/></svg>
+            <h3>Multiple agents</h3>
+            <p>Use the built-in Galaxy agent, Claude Code, Codex, and ACP agents from one place.</p>
+          </div>
+          <div class="feat">
+            <svg class="i"><use href="#i-git-compare"/></svg>
+            <h3>Editing and review</h3>
+            <p>Browse files, edit code, review diffs by turn or by Git state, and restore checkpoints.</p>
+          </div>
+          <div class="feat">
+            <svg class="i"><use href="#i-terminal"/></svg>
+            <h3>Terminal and browser</h3>
+            <p>Open terminals and browser tabs in the side panel, next to the chat.</p>
+          </div>
+          <div class="feat">
+            <svg class="i"><use href="#i-shield-alert"/></svg>
+            <h3>Execution controls</h3>
+            <p>Queue follow-ups mid-run, inspect tool activity, and manage approvals and permission modes.</p>
+          </div>
+          <div class="feat">
+            <svg class="i"><use href="#i-sliders"/></svg>
+            <h3>Model options</h3>
+            <p>Choose models, reasoning effort, and speed options where the agent supports them. Connect your own provider keys, too.</p>
+          </div>
+          <div class="feat">
+            <svg class="i"><use href="#i-file-pen"/></svg>
+            <h3>Live editing</h3>
+            <p>Edit code and Markdown beside the conversation, then review the result in the same workspace.</p>
+          </div>
+          <div class="feat">
+            <svg class="i"><use href="#i-grid"/></svg>
+            <h3>Reusable skills</h3>
+            <p>Choose built-in or project skills from the composer to guide repeated workflows.</p>
+          </div>
+          <div class="feat">
+            <svg class="i"><use href="#i-globe"/></svg>
+            <h3>Connected tools</h3>
+            <p>Bring browser tabs, files, terminals, and MCP servers into the task when the selected agent supports them.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="agents">
+      <div class="wrap">
+        <div class="eyebrow">Agents</div>
+        <h2>Bring the agents you already use.</h2>
+        <p class="sub">Use the built-in Galaxy agent with OpenRouter or a provider API key, or connect an installed CLI. Each chat stays with the agent it started with.</p>
+        <div class="agents">
+          <div class="agent">
+            <div class="top"><h4>Galaxy</h4><span class="tag def">Built in</span></div>
+            <p>Run models through OpenRouter, a supported provider's API key, or a custom endpoint. No separate agent CLI needed.</p>
+          </div>
+          <div class="agent">
+            <div class="top"><h4>Claude Code</h4><span class="tag">CLI</span></div>
+            <p>Install the <code>claude</code> CLI, then sign in through the app or reuse an existing login.</p>
+          </div>
+          <div class="agent">
+            <div class="top"><h4>Codex</h4><span class="tag">CLI</span></div>
+            <p>Install the <code>codex</code> CLI, then sign in through the app or reuse an existing login.</p>
+          </div>
+          <div class="agent">
+            <div class="top"><h4>OpenCode</h4><span class="tag">ACP</span></div>
+            <p>Install the <code>opencode</code> CLI and sign in if you need more models.</p>
+          </div>
+          <div class="agent">
+            <div class="top"><h4>Cursor / Grok</h4><span class="tag">ACP</span></div>
+            <p>Install the Cursor or Grok CLI, then sign in through the app or reuse an existing login.</p>
+          </div>
+          <div class="agent">
+            <div class="top"><h4>Antigravity</h4><span class="tag warn">Unofficial</span></div>
+            <p>Uses the <code>agy-acp</code> adapter. Third-party access may lead to account restrictions.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="permissions">
+      <div class="wrap">
+        <div class="eyebrow">Permissions</div>
+        <h2>You decide how much the agent can do.</h2>
+        <p class="sub">Pick a permission mode per chat. When an action needs you, the approval takes the composer's place until you answer.</p>
+        <div class="perm">
+          <div>
+            <div class="label">Permission mode</div>
+            <div class="pop" role="img" aria-label="Permission mode menu">
+              <div class="opt on"><span class="chk"><svg class="i"><use href="#i-check"/></svg></span><div><div class="name">Auto</div><div class="desc">A safety model approves routine work and asks you about risky actions.</div></div></div>
+              <div class="opt"><span class="chk"></span><div><div class="name">Ask for Approval</div><div class="desc">Commands, edits and browser actions wait for you.</div></div></div>
+              <div class="opt"><span class="chk"></span><div><div class="name">Accept Edits</div><div class="desc">File changes inside the working directory run automatically. Other actions ask for approval.</div></div></div>
+              <div class="opt full"><span class="chk"></span><div><div class="name">Full Access</div><div class="desc">Everything runs without asking. Use with care.</div></div></div>
+            </div>
+          </div>
+          <div>
+            <div class="label">Approval request</div>
+            <div class="approval" role="img" aria-label="Approval request for a terminal command">
+              <div class="top">
+                <svg class="i"><use href="#i-shield-alert"/></svg>
+                <div style="min-width:0;flex:1">
+                  <div class="q">Allow this action?</div>
+                  <div class="what">Run git push origin fix/checkout-flake</div>
+                  <p class="why">Pushing publishes commits to a shared remote.</p>
+                  <div class="det"><span>git push origin fix/checkout-flake</span><svg class="i" style="font-size:12px"><use href="#i-chevron-down"/></svg></div>
+                </div>
+              </div>
+              <div class="btns">
+                <span class="ub ghost">Decline with a note</span>
+                <span class="ub sec">Decline</span>
+                <span class="ub sec">Allow in this chat</span>
+                <span class="ub pri">Allow <kbd>&#8984;&#8629;</kbd></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note">Settings, projects, conversations, and checkpoints stay on your machine. Task context is sent only to the services you connect.</p>
+      </div>
+    </section>
+
+    <section class="block" id="start">
+      <div class="wrap start">
+        <div>
+          <div class="eyebrow">Get started</div>
+          <h2>Start with your project.</h2>
+          <ol class="steps">
+            <li><b>Add a project folder</b> in the app.</li>
+            <li><b>Connect an agent</b> in Settings &rarr; Providers or Subscriptions: sign in, or add an API key.</li>
+            <li><b>Enable models</b> in Settings &rarr; Models as needed.</li>
+            <li><b>Start a new chat</b>, pick a provider and model, and describe your task.</li>
+          </ol>
+          <p class="note">Building from source requires Node.js 22.12 or later. Distribution scripts currently target macOS.</p>
+        </div>
+        <div class="term">
+          <div class="bar"><span>Terminal</span><button class="copy" type="button" data-copy="git clone https://github.com/galaxysj/galaxy-code.git&#10;cd galaxy-code&#10;npm ci&#10;npm run dev">Copy</button></div>
+          <pre><span class="c"># Clone and run in development mode</span>
+<span class="p">$ </span>git clone https://github.com/galaxysj/galaxy-code.git
+<span class="p">$ </span>cd galaxy-code
+<span class="p">$ </span>npm ci
+<span class="p">$ </span>npm run dev
+
+<span class="c"># Or package a macOS app</span>
+<span class="p">$ </span>npm run dist:dmg</pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="block final">
+      <div class="wrap">
+        <h2>Stop switching between agent tools.</h2>
+        <p class="sub">Galaxy Code is under active development. Star the repo to follow along, or open an issue with what you need.</p>
+        <div class="cta">
+          <a class="btn btn-primary" href="https://github.com/galaxysj/galaxy-code">Star on GitHub</a>
+          <a class="btn" href="https://github.com/galaxysj/galaxy-code/issues">Open an issue</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <span>&copy; Galaxy Code &middot; MIT License</span>
+      <span><a href="https://github.com/galaxysj/galaxy-code">GitHub</a></span>
+    </div>
+  </footer>
+
+  <script>
+    var demo = document.getElementById('app-demo')
+    var demoFrame = document.getElementById('demo-frame')
+    function sizeDemo() {
+      var scale = Math.min(demoFrame.clientWidth / 1360, demoFrame.clientHeight / 880)
+      demo.style.transform = 'scale(' + scale + ')'
+      demo.style.left = (demoFrame.clientWidth - 1360 * scale) / 2 + 'px'
+      demo.style.top = (demoFrame.clientHeight - 880 * scale) / 2 + 'px'
+    }
+    function syncDemoTheme() {
+      var theme = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+      demo.contentWindow.postMessage({ type: 'galaxy-demo-theme', theme: theme }, '*')
+    }
+    new ResizeObserver(sizeDemo).observe(demoFrame)
+    demo.addEventListener('load', syncDemoTheme)
+    document.getElementById('demo-reset').addEventListener('click', function () { demo.src = 'demo/index.html' })
+    function expandDemo(open) {
+      demoFrame.classList.toggle('expanded', open)
+      document.body.classList.toggle('demo-open', open)
+      document.getElementById('demo-expand').textContent = open ? 'Collapse demo' : 'Expand demo'
+      sizeDemo()
+    }
+    document.getElementById('demo-expand').addEventListener('click', function () { expandDemo(!demoFrame.classList.contains('expanded')) })
+    document.addEventListener('keydown', function (event) { if (event.key === 'Escape') expandDemo(false) })
+    document.querySelector('.theme').addEventListener('click', function () {
+      var root = document.documentElement
+      var current = root.dataset.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+      var next = current === 'light' ? 'dark' : 'light'
+      root.dataset.theme = next
+      try { localStorage.setItem('theme', next) } catch (error) {}
+      syncDemoTheme()
+    })
+
+    // Scroll in script: hash links do nothing when the page is opened from a data: URL or a sandboxed preview.
+    document.querySelectorAll('a[href^="#"]').forEach(function (link) {
+      link.addEventListener('click', function (event) {
+        var id = link.getAttribute('href').slice(1)
+        var target = id ? document.getElementById(id) : null
+        if (id && !target) return
+        event.preventDefault()
+        if (target) target.scrollIntoView({ block: 'start' })
+        else window.scrollTo({ top: 0 })
+        try { history.replaceState(null, '', id ? '#' + id : location.pathname) } catch (error) {}
+      })
+    })
+
+    // Point the download button at the newest release's DMG. Pre-releases count, since
+    // /releases/latest skips them; the Releases page stays as the fallback link.
+    fetch('https://api.github.com/repos/galaxysj/galaxy-code/releases?per_page=10', { headers: { Accept: 'application/vnd.github+json' } })
+      .then(function (response) { return response.ok ? response.json() : [] })
+      .then(function (releases) {
+        var release = releases.find(function (entry) { return !entry.draft && entry.assets.some(isDmg) })
+        if (!release) return
+        var asset = release.assets.find(function (entry) { return isDmg(entry) && /arm64/.test(entry.name) }) || release.assets.find(isDmg)
+        document.getElementById('download').href = asset.browser_download_url
+        var arch = /arm64/.test(asset.name) ? 'Apple silicon' : /x64|intel/i.test(asset.name) ? 'Intel' : 'macOS'
+        var size = Math.round(asset.size / 1048576) + ' MB'
+        document.getElementById('download-info').textContent = ['Latest download: ' + release.tag_name, arch, size, release.prerelease ? 'Pre-release' : null].filter(Boolean).join(' \u00b7 ')
+      })
+      .catch(function () {})
+    function isDmg(asset) { return /\.dmg$/i.test(asset.name) }
+
+    document.querySelectorAll('.copy').forEach(function (button) {
+      button.addEventListener('click', function () {
+        if (!navigator.clipboard) return
+        navigator.clipboard.writeText(button.dataset.copy).then(function () {
+          button.textContent = 'Copied'
+          setTimeout(function () { button.textContent = 'Copy' }, 1500)
+        })
+      })
+    })
+  </script>
+</body>
+</html>

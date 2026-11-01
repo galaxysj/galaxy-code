@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Galaxy Code interactive demo</title>
+  <link rel="stylesheet" href="galaxy-code.css?v=fbfb524c1acc">
+  <style>
+    .demo-lights{position:fixed;left:16px;top:17px;display:flex;gap:8px;z-index:40;pointer-events:none}
+    .demo-lights i{width:12px;height:12px;border-radius:50%;background:#ff5f57}
+    .demo-lights i:nth-child(2){background:#febc2e}
+    .demo-lights i:nth-child(3){background:#28c840}
+    html.demo-terminal-active .app-shell>.workspace-surface>aside>.animated-pane-content{box-shadow:none!important}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <div class="demo-lights" aria-hidden="true"><i></i><i></i><i></i></div>
+  <script src="demo.js?v=fbfb524c1acc"></script>
+</body>
+</html>
