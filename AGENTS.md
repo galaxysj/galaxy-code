@@ -22,6 +22,7 @@ Use Node.js 22.12+ and npm.
 - `npm start`: preview the compiled application.
 - `npm run dist`: package a macOS app bundle.
 - `npm run dist:dmg`: generate a macOS DMG in `release/`.
+- `npm run dist:pkg`: generate a macOS installer in `release/`; `build/pkg-scripts/postinstall` runs after install.
 
 ## Coding Style & Naming Conventions
 

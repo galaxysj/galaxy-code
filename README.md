@@ -81,6 +81,7 @@ Settings, project lists, conversations, and checkpoints are stored in Electron's
 | `npm run icon` | Generate app icons |
 | `npm run dist` | Package a macOS app bundle |
 | `npm run dist:dmg` | Build a macOS DMG |
+| `npm run dist:pkg` | Build a macOS installer that clears quarantine attributes after install |
 
 Build output goes to `out/`; distribution artifacts go to `release/`. The current macOS packaging configuration does not specify a signing identity.
 
