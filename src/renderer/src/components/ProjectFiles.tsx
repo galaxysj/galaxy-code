@@ -1,48 +1,20 @@
-import { ChevronRight, ClipboardPaste, Code, Copy, ExternalLink, FileImage, FilePlus, FileText, Folder, FolderOpen, FolderPlus, PanelRight, Pencil, Search, RotateCw, Trash2 } from 'lucide-react'
+import { ChevronRight, ClipboardPaste, Copy, ExternalLink, FilePlus, FileText, FolderOpen, FolderPlus, PanelRight, Pencil, Search, RotateCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { ProjectFileEntry } from '@shared/types'
 import { basename, cn } from '../lib/utils'
 import type { OpenFile, PanelTab } from '../store'
 import { useStore } from '../store'
+import { fileIconUrl, folderIconUrl } from '../lib/fileIcons'
 import { cleanError } from './Settings'
 import { IconButton, MenuItem, MenuSeparator, Popover, Spinner } from './ui'
 
-/** Two-letter badges for common source files, keyed by extension. */
-const BADGES: Record<string, [string, string]> = {
-  ts: ['TS', 'bg-blue-500/12 text-blue-500'],
-  tsx: ['TS', 'bg-blue-500/12 text-blue-500'],
-  mts: ['TS', 'bg-blue-500/12 text-blue-500'],
-  js: ['JS', 'bg-yellow-500/15 text-yellow-600'],
-  jsx: ['JS', 'bg-yellow-500/15 text-yellow-600'],
-  mjs: ['JS', 'bg-yellow-500/15 text-yellow-600'],
-  py: ['PY', 'bg-sky-500/12 text-sky-600'],
-  rs: ['RS', 'bg-orange-500/12 text-orange-600'],
-  go: ['GO', 'bg-cyan-500/12 text-cyan-600'],
-  swift: ['SW', 'bg-orange-500/12 text-orange-500'],
-  java: ['JV', 'bg-red-500/12 text-red-500'],
-  kt: ['KT', 'bg-violet-500/12 text-violet-500'],
-  rb: ['RB', 'bg-red-500/12 text-red-500'],
-  css: ['CS', 'bg-indigo-500/12 text-indigo-500'],
-  scss: ['SC', 'bg-pink-500/12 text-pink-500'],
-  html: ['<>', 'bg-orange-500/12 text-orange-500'],
-  md: ['MD', 'bg-zinc-500/12 text-muted'],
-  sh: ['SH', 'bg-green-500/12 text-green-600']
+export function FileIcon({ name, size = 14 }: { name: string; size?: number }): ReactNode {
+  return <img src={fileIconUrl(name)} alt="" draggable={false} className="shrink-0" style={{ width: size + 2, height: size + 2 }} />
 }
 
-export function FileIcon({ name, size = 14 }: { name: string; size?: number }): ReactNode {
-  const ext = name.match(/\.([^.]+)$/)?.[1].toLowerCase() ?? ''
-  const badge = BADGES[ext]
-  if (badge) {
-    return (
-      <span className={cn('inline-flex shrink-0 items-center justify-center rounded-[3px] font-semibold leading-none', badge[1])} style={{ width: size + 2, height: size + 2, fontSize: Math.round(size * 0.55) }}>
-        {badge[0]}
-      </span>
-    )
-  }
-  if (/^(json|jsonc|yaml|yml|toml)$/.test(ext)) return <Code size={size} className="shrink-0 text-orange-500" />
-  if (/^(png|jpe?g|gif|svg|webp|ico)$/.test(ext)) return <FileImage size={size} className="shrink-0 text-pink-500" />
-  return <FileText size={size} className="shrink-0 text-subtle" />
+export function FolderIcon({ open = false, size = 14 }: { open?: boolean; size?: number }): ReactNode {
+  return <img src={folderIconUrl(open)} alt="" draggable={false} className="shrink-0" style={{ width: size + 2, height: size + 2 }} />
 }
 
 /** The folder holding a project-relative path, '' for the project root. */
@@ -71,7 +43,7 @@ function NameInput({ initial, depth, directory, onSubmit, onCancel }: { initial:
   }
   return <div className="flex h-7 w-full min-w-0 items-center gap-1.5 pr-2" style={{ paddingLeft: 8 + depth * 14 }}>
     <span className="w-3 shrink-0" />
-    {directory ? <Folder size={14} className="shrink-0 text-subtle" /> : <FileIcon name={initial || 'file'} />}
+    {directory ? <FolderIcon /> : <FileIcon name={initial || 'file'} />}
     <input
       ref={input}
       aria-label={directory ? 'Folder name' : 'File name'}
@@ -264,7 +236,7 @@ export function ProjectFilesPane({ tab, available, renderFile }: { tab: Extract<
     }
     return <div key={entry.path}>
       <button type="button" onClick={(event) => pick(entry, event)} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); if (!marked.has(entry.relativePath)) { setMarked(new Set([entry.relativePath])); markAnchor.current = entry.relativePath } setMenu({ entry, x: event.clientX, y: event.clientY }) }} onDoubleClick={() => { if (!entry.directory) useStore.getState().openFile(entry.path) }} title={entry.relativePath} className={cn('flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pr-2 text-left text-[12px] transition-colors hover:bg-hover', marked.has(entry.relativePath) ? 'bg-active text-fg' : selected?.path === entry.path ? 'bg-hover text-fg' : 'text-muted')} style={{ paddingLeft: 8 + depth * 14 }}>
-        {entry.directory ? <><ChevronRight size={12} className={cn('shrink-0 text-subtle transition-transform', open && 'rotate-90')} />{open ? <FolderOpen size={14} className="shrink-0 text-subtle" /> : <Folder size={14} className="shrink-0 text-subtle" />}</> : <><span className="w-3 shrink-0" /><FileIcon name={entry.name} /></>}
+        {entry.directory ? <><ChevronRight size={12} className={cn('shrink-0 text-subtle transition-transform', open && 'rotate-90')} /><FolderIcon open={open} /></> : <><span className="w-3 shrink-0" /><FileIcon name={entry.name} /></>}
         <span className="min-w-0 truncate">{filter.trim() ? entry.relativePath : entry.name}</span>
         {loading.has(entry.relativePath) && <Spinner size={11} />}
       </button>

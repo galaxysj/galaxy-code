@@ -39,8 +39,9 @@ const api: GalaxyApi = {
     login: call('accounts.login')
   },
   acp: {
-    answerConsent: call('acp.answerConsent'),
-    options: call('acp.options')
+    options: call('acp.options'),
+    registry: call('acp.registry'),
+    install: call('acp.install')
   },
   projects: {
     create: call('projects.create'),

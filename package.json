@@ -54,6 +54,7 @@
     "electron-vite": "^5.0.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.545.0",
+    "material-icon-theme": "^5.40.0",
     "monaco-editor": "^0.52.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

@@ -1,9 +1,10 @@
 import { shell } from 'electron'
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename } from 'node:path'
 import { ACCOUNT_LABELS, ACP_ACCOUNTS, type AccountId, type AccountStatus } from '@shared/types'
-import { acpAgent, acpBaseEnv, acpBinary, acpLaunch } from '../engines/acp'
+import { acpAgent, acpBaseEnv, acpBinary, acpCommand, acpLaunch, acpSignedIn } from '../engines/acp'
+import { RpcProcess } from '../engines/jsonrpc'
 import { codexBinary, startCodexProcess } from '../engines/codex'
 import { store } from '../store'
 import { errorMessage, run, which } from '../util'
@@ -49,34 +50,21 @@ async function authState(id: AccountId, binary: string): Promise<{ authenticated
   return { authenticated: null, detail: null }
 }
 
-/** The Antigravity CLI the adapter drives, found the way agy-acp looks for it. */
-async function agyBinary(): Promise<string | null> {
-  if (process.env.AGY_BIN) return which(process.env.AGY_BIN)
-  return (await which(process.platform === 'win32' ? 'agy.exe' : 'agy')) ?? which(join(homedir(), '.local', 'bin', 'agy'))
-}
-
-/** Probes `agy models` directly, as the adapter does, without launching or downloading the adapter. */
-async function antigravityAuth(): Promise<{ version: string | null; authenticated: boolean | null; detail: string | null }> {
-  const agy = await agyBinary()
-  if (!agy) return { version: null, authenticated: null, detail: 'Unofficial adapter' }
-  const [ver, result] = await Promise.all([version(agy), run(agy, ['models'], { timeout: 20000 })])
-  const text = result.stdout + result.stderr
-  if (/not logged into antigravity|not logged in|authentication required|please log in|login required/i.test(text)) {
-    return { version: ver, authenticated: false, detail: null }
-  }
-  const signedIn = result.code === 0 && result.stdout.split('\n').some((line) => line.includes('\t'))
-  return { version: ver, authenticated: signedIn ? true : null, detail: signedIn ? 'Signed in · unofficial adapter' : 'Unofficial adapter' }
-}
-
 export async function accountStatuses(): Promise<AccountStatus[]> {
   return Promise.all(
     ['claude', 'codex', ...ACP_ACCOUNTS].map(async (id): Promise<AccountStatus> => {
       const binary = await binaryFor(id)
+      // A registry release downloads when the agent first starts, never during a status check.
+      if (acpAgent(id)?.RegistryId && !store.settings.accounts[id]?.binaryPath.trim()) {
+        return { id, installed: true, binary, version: null, authenticated: acpSignedIn.get(id) ?? null, detail: binary ? null : 'Downloads on first use' }
+      }
       if (!binary) return { id, installed: false, binary: null, version: null, authenticated: null, detail: null }
-      // Do not launch/download the unofficial adapter during background status checks.
-      if (id === 'antigravity') return { id, installed: true, binary, ...(await antigravityAuth()) }
+      // A package runner stands in for an agent that is not installed; asking it for a version would answer for the runner.
+      const runner = (await acpCommand(id))?.prefix.length ? acpAgent(id)?.Runner?.Command : acpAgent(id)?.Registry ? /^(npx|uvx)(\.cmd)?$/.exec(basename(binary))?.[1] : undefined
+      if (runner) return { id, installed: true, binary, version: null, authenticated: acpSignedIn.get(id) ?? null, detail: `Runs with ${runner}` }
       const [ver, auth] = await Promise.all([version(binary), authState(id, binary)])
-      return { id, installed: true, binary, version: ver, ...auth }
+      // Agents with no status command report what they last showed.
+      return { id, installed: true, binary, version: ver, ...auth, authenticated: auth.authenticated ?? acpSignedIn.get(id) ?? null }
     })
   )
 }
@@ -124,20 +112,76 @@ async function loginCodex(): Promise<{ ok: boolean; message: string }> {
   }
 }
 
+type Json = Record<string, unknown>
+
+/** A shell line that runs a command with extra environment variables. */
+function shellLine(command: string[], env: Record<string, string> = {}): string {
+  return [...Object.entries(env).map(([name, value]) => `${name}=${shellQuote(value)}`), ...command.map(shellQuote)].join(' ')
+}
+
+/**
+ * Signs in to an ACP agent the way the protocol describes: the agent lists its sign-in methods when it starts.
+ * A terminal method runs in the user's terminal; any other is asked of the agent, which usually opens a browser.
+ */
+async function loginAcp(id: AccountId, label: string): Promise<{ ok: boolean; message: string }> {
+  const launch = await acpLaunch(id, 'ask')
+  const rpc = new RpcProcess({ ...launch, cwd: homedir(), strict: true })
+  const inTerminal = async (command: string[], env?: Record<string, string>): Promise<{ ok: boolean; message: string }> => {
+    await openInTerminal(shellLine(command, env))
+    // Whether it worked shows the next time the agent starts.
+    acpSignedIn.delete(id)
+    return { ok: true, message: `Finish signing in to ${label} in the terminal window, then check again.` }
+  }
+  try {
+    const init = await rpc.request<Json>(
+      'initialize',
+      {
+        protocolVersion: 1,
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, auth: { terminal: true }, _meta: { 'terminal-auth': true } },
+        clientInfo: { name: 'galaxy-code', title: 'Galaxy Code', version: '0.1.0' }
+      },
+      id === 'antigravity' ? 180000 : 30000
+    )
+    const methods = Array.isArray(init.authMethods) ? (init.authMethods as Json[]) : []
+    // An older convention puts the terminal command in _meta; the protocol's own terminal method reruns the agent with its args.
+    const legacy = methods.map((method) => (method._meta as Json | undefined)?.['terminal-auth'] as Json | undefined).find((meta) => meta?.command)
+    if (legacy) return await inTerminal([String(legacy.command), ...((legacy.args as string[] | undefined) ?? [])], { ...((legacy.env as Record<string, string> | undefined) ?? {}) })
+    const agentMethod = methods.find((method) => !method.type || method.type === 'agent')
+    if (agentMethod) {
+      await rpc.request('authenticate', { methodId: agentMethod.id }, 5 * 60 * 1000)
+      acpSignedIn.set(id, true)
+      return { ok: true, message: `Signed in to ${label}` }
+    }
+    const terminal = methods.find((method) => method.type === 'terminal')
+    if (terminal) return await inTerminal([launch.command, ...launch.args, ...((terminal.args as string[] | undefined) ?? [])], (terminal.env as Record<string, string> | undefined) ?? {})
+    const login = acpAgent(id)?.Login
+    if (login) return await inTerminal([launch.command, ...login])
+    return { ok: false, message: `${label} does not offer a sign-in. Sign in with its own CLI, then check again.` }
+  } catch (err) {
+    // Agents that cannot sign in over the protocol often name the command that does.
+    const command = errorMessage(err).match(/[Rr]un `([^`]+)`/)?.[1]
+    if (command) {
+      await openInTerminal(command)
+      acpSignedIn.delete(id)
+      return { ok: true, message: `Finish signing in to ${label} in the terminal window, then check again.` }
+    }
+    throw err
+  } finally {
+    rpc.kill()
+  }
+}
+
 export async function loginAccount(id: AccountId): Promise<{ ok: boolean; message: string }> {
   const label = ACCOUNT_LABELS[id]
   const binary = await binaryFor(id)
-  if (!binary) return { ok: false, message: `${label} CLI is not installed` }
+  if (!binary && !acpAgent(id)?.RegistryId) return { ok: false, message: `${label} CLI is not installed` }
   try {
     if (id === 'codex') return await loginCodex()
-    if (id === 'antigravity') {
-      const launch = await acpLaunch(id, 'ask')
-      await openInTerminal([launch.command, ...launch.args, '--login'].map(shellQuote).join(' '))
-      return { ok: true, message: 'Finish signing in to Antigravity in the terminal window, then try again.' }
-    }
+    if (ACP_ACCOUNTS.includes(id) && !acpAgent(id)?.Login) return await loginAcp(id, label)
     const args = id === 'claude' ? ['auth', 'login'] : acpAgent(id)?.Login
-    if (!args) return { ok: false, message: `Sign in to ${label} from its own app, then check again.` }
-    const command = [binary, ...args].map(shellQuote).join(' ')
+    if (!binary || !args) return { ok: false, message: `Sign in to ${label} from its own app, then check again.` }
+    const prefix = id === 'claude' ? [] : ((await acpCommand(id))?.prefix ?? [])
+    const command = [binary, ...prefix, ...args].map(shellQuote).join(' ')
     await openInTerminal(command)
     return { ok: true, message: `Finish signing in to ${label} in the terminal window, then check again.` }
   } catch (err) {

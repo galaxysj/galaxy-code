@@ -2,7 +2,8 @@ import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ACP_MODEL_ID, modelKey, type ProviderId } from '@shared/catalog'
-import { ACP_ACCOUNTS, acpAgentFor, applyCustomAcpAgents, type AccountId, type Chat, type Item, type Project, type SecretState, type Settings } from '@shared/types'
+import { AcpLibrary } from '@shared/acp-registry'
+import { ACP_ACCOUNTS, acpAgentFor, applyAcpAgents, libraryAcpAgent, type AccountId, type Chat, type Item, type Project, type SecretState, type Settings } from '@shared/types'
 import { writeJsonAtomic } from './util'
 
 /** Per-chat state that engines need to continue a conversation. */
@@ -41,7 +42,7 @@ function maskKey(key: string): string {
   return '•'.repeat(key.length)
 }
 
-const ACCOUNT_IDS: AccountId[] = ['claude', 'codex', ...ACP_ACCOUNTS]
+const ACCOUNT_IDS: AccountId[] = ['claude', 'codex']
 
 function defaultSettings(): Settings {
   const accounts = {} as Settings['accounts']
@@ -72,7 +73,7 @@ function defaultSettings(): Settings {
     creditLimit: null,
     accounts,
     acpEnabled: true,
-    customAcpAgents: [],
+    acpAgents: AcpLibrary.map(libraryAcpAgent),
     mcpServers: [],
     browserOpenLinks: 'built-in',
     browserSearchEngine: 'duckduckgo',
@@ -111,10 +112,13 @@ class Store {
     this.dir = app.getPath('userData')
     mkdirSync(join(this.dir, 'chats'), { recursive: true })
 
-    const saved = readJson<Partial<Settings>>(this.file('settings.json'), {})
+    const saved = readJson<Partial<Settings> & { customAcpAgents?: Settings['acpAgents'] }>(this.file('settings.json'), {})
     const base = defaultSettings()
-    this.settings = { ...base, ...saved, accounts: { ...base.accounts, ...(saved.accounts ?? {}) } }
-    applyCustomAcpAgents(this.settings.customAcpAgents)
+    // Library agents were once always present and custom agents kept apart; both now live in one list.
+    const { customAcpAgents, ...rest } = saved
+    this.settings = { ...base, ...rest, accounts: { ...base.accounts, ...(saved.accounts ?? {}) } }
+    if (!saved.acpAgents) this.settings.acpAgents = [...base.acpAgents, ...(customAcpAgents ?? [])]
+    this.applyAcpAgents()
     if (!saved.permissionDefaultsVersion) {
       this.settings.defaultPermissionMode = 'auto'
       this.settings.permissionDefaultsVersion = 1
@@ -150,9 +154,15 @@ class Store {
 
   // Settings
 
+  /** Registers the ACP agents in Settings and gives each one an account entry. */
+  private applyAcpAgents(): void {
+    applyAcpAgents(this.settings.acpAgents)
+    for (const id of ACP_ACCOUNTS) this.settings.accounts[id] ??= { enabled: true, binaryPath: '' }
+  }
+
   saveSettings(patch: Partial<Settings>): Settings {
     this.settings = { ...this.settings, ...patch }
-    if (patch.customAcpAgents) applyCustomAcpAgents(this.settings.customAcpAgents)
+    if (patch.acpAgents) this.applyAcpAgents()
     void writeJsonAtomic(this.file('settings.json'), this.settings)
     return this.settings
   }

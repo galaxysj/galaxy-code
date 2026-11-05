@@ -24,8 +24,8 @@ import type {
 import { manager } from './agent/manager'
 import { initReviewRepository, readReview, reviewCommits } from './services/review'
 import { accountStatuses, loginAccount } from './services/accounts'
-import { answerAntigravityConsent, configureAntigravityConsent, confirmAntigravityUse } from './services/antigravityConsent'
 import { probeAcpOptions } from './engines/acp'
+import { installRegistryAgent, registryAgents } from './services/acpRegistry'
 import { browser } from './services/browser'
 import { computer } from './services/computer'
 import { terminals } from './services/terminal'
@@ -154,11 +154,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
   const emitProjects = (): void => emitUi({ type: 'projects', projects: store.projects })
 
   manager.connect(emitChat, emitUi)
-  configureAntigravityConsent((requestId) => {
-    const win = requestWindow()
-    sendUi(win, { type: 'antigravity-consent', requestId })
-    return win
-  })
   browser.windowForChat = chatWindow
   mcp.onStatus((statuses) => emitUi({ type: 'mcp-status', statuses }))
   browser.onState((state, tabId) => emitUi({ type: 'browser-state', state, tabId }))
@@ -228,9 +223,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     },
 
     'settings.update': async (patch: Partial<Settings>): Promise<Settings> => {
-      const enablingAntigravity = patch.accounts?.antigravity?.enabled === true && store.settings.accounts.antigravity?.enabled === false
-      const enablingAcp = patch.acpEnabled === true && store.settings.acpEnabled === false && (patch.accounts ?? store.settings.accounts).antigravity?.enabled !== false
-      if (enablingAntigravity || enablingAcp) await confirmAntigravityUse(true)
       const settings = store.saveSettings(patch)
       if (patch.mcpServers) void mcp.sync()
       // Warm utility CLIs pick up a changed account or binary path on their next start.
@@ -261,13 +253,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     },
 
     'accounts.status': () => accountStatuses(),
-    'acp.answerConsent': (requestId: string, allow: boolean) => {
-      const win = requestWindow()
-      if (win) answerAntigravityConsent(requestId, allow === true, win.id)
-    },
     'accounts.login': (id: AccountId) => loginAccount(id),
     'acp.options': (id: AccountId, projectId: string | null, fresh?: boolean) =>
       probeAcpOptions(id, (projectId && store.project(projectId)?.path) || homedir(), fresh === true),
+    'acp.registry': (fresh?: boolean) => registryAgents(fresh === true),
+    'acp.install': (id: string) => installRegistryAgent(String(id)),
 
     'projects.create': async (input: CreateProjectInput) => {
       const project = await createProject(input)

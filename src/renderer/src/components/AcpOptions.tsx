@@ -1,6 +1,6 @@
 import { Brain, Check, ChevronDown, CircleAlert, Cpu, ListTodo, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { AcpConfigOption } from '@shared/types'
+import { EFFORT_LABELS, type AcpConfigOption } from '@shared/types'
 import { cn } from '../lib/utils'
 import { useChatId, useRunConfig, useStore } from '../store'
 import { Popover, Spinner } from './ui'
@@ -12,6 +12,11 @@ function iconFor(category: string | null): typeof Cpu {
   if (category === 'thought_level') return Brain
   if (category === 'mode') return ListTodo
   return SlidersHorizontal
+}
+
+/** Whether an effort choice is named like Galaxy Code's levels, so the model picker shows it as effort. */
+function isEffortName(choice: { value: string; name: string }): boolean {
+  return Object.entries(EFFORT_LABELS).some(([key, label]) => key === choice.value.toLowerCase() || label.toLowerCase() === choice.name.toLowerCase())
 }
 
 /** Agents often prefix choices with their provider; the pill only has room for the rest. */
@@ -112,7 +117,7 @@ function OptionPicker({ option, value, onPick }: { option: AcpConfigOption; valu
   )
 }
 
-/** Sits beside the + button in ACP chats: one picker per session option the agent reports. */
+/** Sits beside the + button in ACP chats: one picker per session option the agent reports, apart from the model and effort, which the model picker shows. */
 export function AcpOptions(): ReactNode {
   const { model, acp } = useRunConfig()
   const load = useStore((s) => s.loadAcpOptions)
@@ -129,10 +134,11 @@ export function AcpOptions(): ReactNode {
       const index = CATEGORY_ORDER.indexOf(option.category ?? '')
       return index < 0 ? CATEGORY_ORDER.length : index
     }
-    return [...(acp?.options ?? [])].sort((a, b) => rank(a) - rank(b))
+    return (acp?.options ?? []).filter((option) => option.category !== 'model' && !(option.category === 'thought_level' && option.options.some((choice) => isEffortName(choice)))).sort((a, b) => rank(a) - rank(b))
   }, [acp?.options])
 
   if (!acp) return null
+  if (acp.options.length > 0 && options.length === 0) return null
   if (options.length === 0) {
     if (acp.loading) {
       return (

@@ -19,11 +19,13 @@ import {
   UserRound,
   X
 } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ACCOUNT_LABELS,
   ACP_ACCOUNTS,
   KEYLESS_ACCOUNTS,
+  RESERVED_AGENT_NAMES,
+  libraryAcpAgent,
   SUBSCRIPTIONS,
   acpAgentFor,
   accountSubscription,
@@ -35,7 +37,8 @@ import {
   type ComputerMode,
   type ComputerPermission,
   type ComputerPermissions,
-  type CustomAcpAgent,
+  type AcpAgentConfig,
+  type AcpRegistryAgent,
   type CustomProvider,
   type CustomProviderApi,
   type McpServerConfig,
@@ -50,7 +53,7 @@ import {
   type UsageWindow
 } from '@shared/types'
 import { AUTO_MODEL, BYOK_PROVIDERS, customModelId, parseCustomModel, type ByokProvider } from '@shared/catalog'
-import { AcpAgents } from '@shared/acp-registry'
+import { AcpAgents, AcpLibrary, type AcpAgentSpec } from '@shared/acp-registry'
 import { AutoApprovalModel, CommitMessageModel, CompletionModel, InlineModel, resolveAutoApprovalModel, usableUtilityModels, utilityModelLabel } from '@shared/models'
 import { cn, tildify } from '../lib/utils'
 import { useStore, type SettingsSection } from '../store'
@@ -58,7 +61,7 @@ import { LiveMarkdown } from './LiveMarkdown'
 import { Markdown } from './Markdown'
 import { SUBSCRIPTION_LABELS } from './ModelPicker'
 import { Resizer, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from './Resizer'
-import { Button, Dropdown, IconButton, Modal, Segmented, Spinner, Switch, TextInput, type DropdownOption } from './ui'
+import { Button, Dropdown, IconButton, MenuItem, MenuSeparator, Modal, Popover, Segmented, Spinner, Switch, TextInput, type DropdownOption } from './ui'
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu; dividerBefore?: boolean; beta?: boolean }[] = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
@@ -152,23 +155,26 @@ function GeneralSection(): ReactNode {
               ]}
             />
           </RowItem>
+          {/* Medium and Compact show commands and edits as lines that stay closed, so this only applies to Default. */}
+          {settings.toolDensity === 'default' && (
+            <RowItem label="Tool output" hint="Command output and edit previews.">
+              <Select<TerminalOutputMode>
+                label="Terminal output"
+                value={settings.terminalOutput}
+                onChange={(value) => void update({ terminalOutput: value })}
+                options={[
+                  { value: 'collapsed', label: 'Always collapsed' },
+                  { value: 'foreground', label: 'Expand while running' },
+                  { value: 'preview', label: 'Always show a scrolling preview' }
+                ]}
+              />
+            </RowItem>
+          )}
           <RowItem label="Expand tool calls" hint="Open tool groups while they run.">
             <Switch checked={settings.expandToolCalls !== false} onChange={(expandToolCalls) => void update({ expandToolCalls })} label="Expand tool calls" />
           </RowItem>
           <RowItem label="Fold finished work" hint="Collapse a finished turn's steps.">
             <Switch checked={settings.foldWork} onChange={(foldWork) => void update({ foldWork })} label="Fold finished work" />
-          </RowItem>
-          <RowItem label="Tool output" hint="Command output and edit previews.">
-            <Select<TerminalOutputMode>
-              label="Terminal output"
-              value={settings.terminalOutput}
-              onChange={(value) => void update({ terminalOutput: value })}
-              options={[
-                { value: 'collapsed', label: 'Always collapsed' },
-                { value: 'foreground', label: 'Expand while running' },
-                { value: 'preview', label: 'Always show a scrolling preview' }
-              ]}
-            />
           </RowItem>
         </Card>
       </Section>
@@ -1048,16 +1054,26 @@ function ProvidersSection(): ReactNode {
 
 // Accounts
 
-const ACCOUNT_NOTES: Record<AccountId, string> = {
-  claude: 'Your Claude Code login.',
-  codex: 'Your ChatGPT login.',
-  ...Object.fromEntries(AcpAgents.map((agent) => [agent.ID, agent.Description]))
+function accountNote(id: AccountId): string {
+  if (id === 'claude') return 'Your Claude Code login.'
+  if (id === 'codex') return 'Your ChatGPT login.'
+  const agent = AcpAgents.find((entry) => entry.ID === id)
+  return agent?.Custom && !agent.Registry ? [...agent.Binaries, ...agent.Args].join(' ') : (agent?.Description ?? '')
 }
 
-/** Accounts Galaxy Code can start a sign-in for. The rest sign in from their own app. */
-const CAN_SIGN_IN = new Set<AccountId>(['claude', 'codex', ...AcpAgents.filter((agent) => agent.Login).map((agent) => agent.ID)])
+/** Whether Galaxy Code can start a sign-in for an account. Every ACP agent can be asked for its sign-in methods. */
+function canSignIn(id: AccountId): boolean {
+  return id === 'claude' || id === 'codex' || ACP_ACCOUNTS.includes(id)
+}
 
-function AccountList({ ids, off = false }: { ids: AccountId[]; off?: boolean }): ReactNode {
+interface AcpRowActions {
+  /** A custom agent's editor, shown in place of its row while it is being edited. */
+  editor(id: AccountId): ReactNode | null
+  edit(id: AccountId): void
+  remove(id: AccountId): void
+}
+
+function AccountList({ ids, off = false, acp }: { ids: AccountId[]; off?: boolean; acp?: AcpRowActions }): ReactNode {
   const settings = useStore((s) => s.settings)
   const update = useStore((s) => s.updateSettings)
   const models = useStore((s) => s.models)
@@ -1095,8 +1111,12 @@ function AccountList({ ids, off = false }: { ids: AccountId[]; off?: boolean }):
   return (
     <Card className={cn(off && 'opacity-50')}>
       {ids.map((id) => {
+        const editor = acp?.editor(id)
+        if (editor) return <div key={id} className="p-2">{editor}</div>
         const status = statuses?.find((s) => s.id === id)
-        const config = settings.accounts[id]
+        const config = settings.accounts[id] ?? { enabled: true, binaryPath: '' }
+        const spec = AcpAgents.find((agent) => agent.ID === id)
+        const custom = spec?.Custom === true
         const subscription = accountSubscription(id)
         const count = ACP_ACCOUNTS.includes(id) ? 0 : models.filter((m) => m.subscription === subscription).length
         const state = !status
@@ -1109,7 +1129,7 @@ function AccountList({ ids, off = false }: { ids: AccountId[]; off?: boolean }):
                 ? { text: 'Not signed in', tone: 'text-warn' }
                 : status.authenticated === true
                   ? { text: status.detail ?? 'Signed in', tone: 'text-ok' }
-                  : { text: 'Installed', tone: 'text-muted' }
+                  : { text: status.detail ?? 'Installed', tone: 'text-muted' }
         return (
           <div key={id} className="px-3.5 py-3">
             <div className="flex items-center gap-3">
@@ -1119,27 +1139,33 @@ function AccountList({ ids, off = false }: { ids: AccountId[]; off?: boolean }):
                   <span className={cn('text-[11.5px]', state.tone)}>{state.text}</span>
                   {status?.version && <span className="font-mono text-[11px] text-subtle">v{status.version}</span>}
                 </div>
-                <div className="mt-0.5 text-[11.5px] leading-snug text-muted">
-                  {ACCOUNT_NOTES[id]} {count > 0 ? `${count} model${count === 1 ? '' : 's'} in the picker.` : ''}
+                <div className={cn('mt-0.5 text-[11.5px] leading-snug text-muted', custom && !spec?.Registry && 'truncate font-mono text-[11px] text-subtle')}>
+                  {accountNote(id)} {count > 0 ? `${count} model${count === 1 ? '' : 's'} in the picker.` : ''}
                 </div>
               </div>
-              {status?.installed && status.authenticated !== true && CAN_SIGN_IN.has(id) && (
+              {status?.installed && status.authenticated !== true && canSignIn(id) && (
                 <Button size="sm" disabled={off || signingIn !== null} onClick={() => void login(id)}>
                   {signingIn === id ? <Spinner size={12} /> : null} Sign in
                 </Button>
               )}
               <IconButton
-                label="Set CLI path"
+                label={custom ? 'Edit' : 'Set CLI path'}
                 size="sm"
                 active={editing === id}
                 disabled={off}
                 onClick={() => {
+                  if (custom && acp) return acp.edit(id)
                   setEditing(editing === id ? null : id)
                   setPath(config.binaryPath)
                 }}
               >
                 <Pencil size={12.5} />
               </IconButton>
+              {acp && (
+                <IconButton label="Remove" size="sm" disabled={off} onClick={() => acp.remove(id)}>
+                  <Trash2 size={12.5} />
+                </IconButton>
+              )}
               <Switch checked={config.enabled} disabled={off} onChange={(enabled) => void patchAccount(id, { enabled })} label={`Enable ${ACCOUNT_LABELS[id]}`} />
             </div>
             {editing === id && !off && (
@@ -1202,29 +1228,171 @@ function AccountsSection(): ReactNode {
 }
 
 function AcpSection(): ReactNode {
-  const enabled = useStore((s) => s.settings.acpEnabled !== false)
+  const settings = useStore((s) => s.settings)
+  const enabled = settings.acpEnabled !== false
   const update = useStore((s) => s.updateSettings)
-  const builtin = AcpAgents.filter((agent) => !agent.Custom).map((agent) => agent.ID)
+  const agents = settings.acpAgents ?? []
+  const [editing, setEditing] = useState<string | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const anchor = useRef<HTMLSpanElement>(null)
+  // A custom agent may already use a library agent's name, which keeps that one out.
+  const available = AcpLibrary.filter((entry) => !AcpAgents.some((agent) => agent.ID === entry.ID || agent.DisplayName.toLowerCase() === entry.DisplayName.toLowerCase()))
+  const ids = AcpAgents.map((agent) => agent.ID)
+
+  const takenBy = (id: string | null): string[] => [
+    ...RESERVED_AGENT_NAMES,
+    ...AcpAgents.filter((agent) => agent.ID !== id).map((agent) => agent.DisplayName.toLowerCase())
+  ]
+
+  const add = (agent: AcpAgentConfig): void => {
+    void update({ acpAgents: [...agents, agent], accounts: { ...settings.accounts, [agent.id]: { enabled: true, binaryPath: '' } } })
+  }
+
+  const save = (agent: AcpAgentConfig): void => {
+    if (agents.some((a) => a.id === agent.id)) void update({ acpAgents: agents.map((a) => (a.id === agent.id ? agent : a)) })
+    else add(agent)
+    setEditing(null)
+  }
+
+  const remove = (id: string): void => {
+    const accounts = { ...settings.accounts }
+    delete accounts[id]
+    void update({ acpAgents: agents.filter((a) => a.id !== id), accounts })
+  }
+
+  return (
+    <Section
+      title="ACP agents"
+      description="Coding agents reached over the Agent Client Protocol. Add one from the library, or any agent that speaks ACP on stdio."
+      action={
+        <div className="flex gap-1.5">
+          <RefreshAccountsButton />
+          <span ref={anchor} className="inline-flex">
+            <Button size="sm" disabled={!enabled || editing === 'new'} onClick={() => setMenuOpen(true)}>
+              <Plus size={13} /> Add agent
+            </Button>
+          </span>
+          <Popover open={menuOpen} onClose={() => setMenuOpen(false)} anchor={anchor} placement="bottom-end" className="w-[300px] p-1">
+            <AcpAddMenu
+              library={available}
+              onLibrary={(entry) => {
+                setMenuOpen(false)
+                add(libraryAcpAgent(entry))
+              }}
+              onRegistry={(agent) => {
+                setMenuOpen(false)
+                add(agent)
+              }}
+              onCustom={() => {
+                setMenuOpen(false)
+                setEditing('new')
+              }}
+            />
+          </Popover>
+        </div>
+      }
+    >
+      <Card className="mb-2.5">
+        <RowItem label="Use ACP agents" hint="Turns every agent below on or off.">
+          <Switch checked={enabled} onChange={(acpEnabled) => void update({ acpEnabled })} label="Use ACP agents" />
+        </RowItem>
+      </Card>
+      {editing === 'new' && (
+        <div className="mb-2.5">
+          <CustomAcpEditor initial={null} taken={takenBy(null)} onSave={save} onCancel={() => setEditing(null)} />
+        </div>
+      )}
+      {ids.length > 0 ? (
+        <AccountList
+          ids={ids}
+          off={!enabled}
+          acp={{
+            editor: (id) => {
+              const agent = agents.find((a) => a.id === id)
+              return editing === id && agent ? <CustomAcpEditor initial={agent} taken={takenBy(id)} onSave={save} onCancel={() => setEditing(null)} /> : null
+            },
+            edit: setEditing,
+            remove
+          }}
+        />
+      ) : (
+        editing !== 'new' && <div className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center text-[12.5px] text-subtle">No ACP agents yet.</div>
+      )}
+    </Section>
+  )
+}
+
+/** Library agents first, then the public ACP registry, then a custom command. */
+function AcpAddMenu({ library, onLibrary, onRegistry, onCustom }: { library: AcpAgentSpec[]; onLibrary(entry: AcpAgentSpec): void; onRegistry(agent: AcpAgentConfig): void; onCustom(): void }): ReactNode {
+  const notify = useStore((s) => s.notify)
+  const [registry, setRegistry] = useState<AcpRegistryAgent[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [installing, setInstalling] = useState<string | null>(null)
+
+  useEffect(() => {
+    window.galaxy.acp.registry().then(setRegistry, (err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+  }, [])
+
+  // Names already in use, by an added agent, a library entry or Galaxy Code itself, cannot be added twice.
+  const taken = new Set([...RESERVED_AGENT_NAMES, ...AcpAgents.map((agent) => agent.DisplayName.toLowerCase()), ...AcpLibrary.map((entry) => entry.DisplayName.toLowerCase())])
+  const needle = query.trim().toLowerCase()
+  const listed = (registry ?? []).filter((agent) => !taken.has(agent.name.toLowerCase()) && (!needle || `${agent.name} ${agent.description}`.toLowerCase().includes(needle)))
+
+  const install = async (agent: AcpRegistryAgent): Promise<void> => {
+    setInstalling(agent.id)
+    try {
+      onRegistry(await window.galaxy.acp.install(agent.id))
+    } catch (err) {
+      notify(err instanceof Error ? err.message : String(err), 'error')
+    } finally {
+      setInstalling(null)
+    }
+  }
+
   return (
     <>
-      <Section
-        title="ACP agents"
-        description="Coding agents reached over the Agent Client Protocol."
-        action={<RefreshAccountsButton />}
-      >
-        <Card className="mb-2.5">
-          <RowItem label="Use ACP agents" hint="Turns every agent below on or off.">
-            <Switch checked={enabled} onChange={(acpEnabled) => void update({ acpEnabled })} label="Use ACP agents" />
-          </RowItem>
-        </Card>
-        <AccountList ids={builtin} off={!enabled} />
-      </Section>
-      <CustomAcpSection off={!enabled} />
+      {library.map((entry) => (
+        <MenuItem key={entry.ID} label={entry.DisplayName} hint={entry.Keyless ? 'Free models' : undefined} disabled={installing !== null} onClick={() => onLibrary(entry)} />
+      ))}
+      {library.length > 0 && <MenuSeparator />}
+      <div className="px-2 pt-1 pb-1.5 text-[11px] font-medium text-subtle">ACP registry</div>
+      <input
+        autoFocus
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="Search agents"
+        className="mb-1 h-7 w-full rounded-md bg-inset px-2 text-[12px] placeholder:text-subtle"
+      />
+      <div className="max-h-[260px] overflow-y-auto">
+        {error ? (
+          <div className="px-2 py-2 text-[11.5px] text-danger">{error}</div>
+        ) : !registry ? (
+          <div className="flex items-center gap-2 px-2 py-2 text-[11.5px] text-subtle">
+            <Spinner size={12} /> Loading the registry…
+          </div>
+        ) : listed.length === 0 ? (
+          <div className="px-2 py-2 text-[11.5px] text-subtle">No agents to add.</div>
+        ) : (
+          listed.map((agent) => (
+            <MenuItem
+              key={agent.id}
+              icon={installing === agent.id ? <Spinner size={12} /> : undefined}
+              label={agent.name}
+              hint={agent.distribution === 'binary' ? 'Download' : agent.distribution}
+              disabled={installing !== null}
+              onClick={() => void install(agent)}
+            />
+          ))
+        )}
+      </div>
+      <MenuSeparator />
+      <MenuItem icon={<Plus size={13} />} label="Custom agent…" disabled={installing !== null} onClick={onCustom} />
     </>
   )
 }
 
-function CustomAcpEditor({ initial, taken, onSave, onCancel }: { initial: CustomAcpAgent | null; taken: string[]; onSave(agent: CustomAcpAgent): void; onCancel(): void }): ReactNode {
+function CustomAcpEditor({ initial, taken, onSave, onCancel }: { initial: AcpAgentConfig | null; taken: string[]; onSave(agent: AcpAgentConfig): void; onCancel(): void }): ReactNode {
   const [name, setName] = useState(initial?.name ?? '')
   const [command, setCommand] = useState(initial ? [initial.command, ...initial.args.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a))].join(' ') : '')
   const [env, setEnv] = useState(Object.entries(initial?.env ?? {}).map(([k, v]) => `${k}=${v}`).join('\n'))
@@ -1267,98 +1435,6 @@ function CustomAcpEditor({ initial, taken, onSave, onCancel }: { initial: Custom
         </Button>
       </div>
     </Card>
-  )
-}
-
-function CustomAcpSection({ off }: { off: boolean }): ReactNode {
-  const settings = useStore((s) => s.settings)
-  const agents = settings.customAcpAgents ?? []
-  const statuses = useStore((s) => s.accountStatuses)
-  const update = useStore((s) => s.updateSettings)
-  const [editing, setEditing] = useState<string | 'new' | null>(null)
-
-  const takenBy = (id: string | null): string[] => [
-    'default',
-    'local',
-    'openrouter',
-    'claude',
-    'claude code',
-    'codex',
-    ...AcpAgents.filter((agent) => !agent.Custom).map((agent) => agent.DisplayName.toLowerCase()),
-    ...agents.filter((agent) => agent.id !== id).map((agent) => agent.name.toLowerCase())
-  ]
-
-  const save = (agent: CustomAcpAgent): void => {
-    const exists = agents.some((a) => a.id === agent.id)
-    void update({
-      customAcpAgents: exists ? agents.map((a) => (a.id === agent.id ? agent : a)) : [...agents, agent],
-      ...(exists ? {} : { accounts: { ...settings.accounts, [agent.id]: { enabled: true, binaryPath: '' } } })
-    })
-    setEditing(null)
-  }
-
-  const remove = (id: string): void => {
-    const accounts = { ...settings.accounts }
-    delete accounts[id]
-    void update({ customAcpAgents: agents.filter((a) => a.id !== id), accounts })
-  }
-
-  return (
-    <Section
-      title="Custom agents"
-      description="Any agent that speaks ACP on stdio."
-      action={
-        editing === null ? (
-          <Button size="sm" disabled={off} onClick={() => setEditing('new')}>
-            <Plus size={13} /> Add agent
-          </Button>
-        ) : null
-      }
-    >
-      {editing === 'new' && (
-        <div className="mb-3">
-          <CustomAcpEditor initial={null} taken={takenBy(null)} onSave={save} onCancel={() => setEditing(null)} />
-        </div>
-      )}
-      {agents.length === 0 && editing !== 'new' ? (
-        <div className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center text-[12.5px] text-subtle">No custom agents yet.</div>
-      ) : (
-        <div className={cn('space-y-2', off && 'opacity-50')}>
-          {agents.map((agent) => {
-            if (editing === agent.id) return <CustomAcpEditor key={agent.id} initial={agent} taken={takenBy(agent.id)} onSave={save} onCancel={() => setEditing(null)} />
-            const status = statuses?.find((s) => s.id === agent.id)
-            const state = !status ? { text: 'Checking…', tone: 'text-subtle' } : status.installed ? { text: 'Installed', tone: 'text-ok' } : { text: 'Command not found', tone: 'text-warn' }
-            const on = settings.accounts[agent.id]?.enabled !== false
-            return (
-              <Card key={agent.id}>
-                <div className="flex items-center gap-3 px-3.5 py-2.5">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[12.5px] font-medium text-fg">{agent.name}</span>
-                      <span className={cn('text-[11.5px]', state.tone)}>{state.text}</span>
-                      {status?.version && <span className="font-mono text-[11px] text-subtle">v{status.version}</span>}
-                    </div>
-                    <div className="mt-0.5 truncate font-mono text-[11px] text-subtle">{[agent.command, ...agent.args].join(' ')}</div>
-                  </div>
-                  <IconButton label="Edit" size="sm" disabled={off} onClick={() => setEditing(agent.id)}>
-                    <Pencil size={12.5} />
-                  </IconButton>
-                  <IconButton label="Remove" size="sm" disabled={off} onClick={() => remove(agent.id)}>
-                    <Trash2 size={12.5} />
-                  </IconButton>
-                  <Switch
-                    checked={on}
-                    disabled={off}
-                    onChange={(enabled) => void update({ accounts: { ...settings.accounts, [agent.id]: { binaryPath: settings.accounts[agent.id]?.binaryPath ?? '', enabled } } })}
-                    label={`Enable ${agent.name}`}
-                  />
-                </div>
-              </Card>
-            )
-          })}
-        </div>
-      )}
-    </Section>
   )
 }
 

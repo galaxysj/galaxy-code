@@ -34,9 +34,9 @@ import {
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { EXPLORE_KINDS, type AskQuestion, type FileDiff, type Item, type ReasoningItem, type TaskEntry, type ToolItem, type ToolKind } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, pageHost, plural, relativeTo } from '../../lib/utils'
-import { attemptedTitle, isNoChange, isTerminalRead, isToolOutputRead, readPath, thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
+import { attemptedTitle, editStats, isNoChange, isTerminalRead, isToolOutputRead, readPath, thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
 import { useStore } from '../../store'
-import { DiffStat, DiffView } from '../DiffView'
+import { DiffStat, DiffView, LiveDiffStat } from '../DiffView'
 import { Markdown } from '../Markdown'
 import { FileIcon as FileTypeIcon } from '../ProjectFiles'
 import { Button, Spinner, TabFavicon } from '../ui'
@@ -278,7 +278,7 @@ function exploreSummary(all: ToolItem[], verb = 'Explored'): string {
   const web = items.filter((i) => i.tool === 'websearch').length
   const pages = items.filter((i) => i.tool === 'webfetch' || i.tool === 'browser').length
   const commands = items.filter((i) => i.tool === 'bash').length
-  const edited = new Set(items.filter((i) => i.tool === 'edit' || i.tool === 'create').flatMap((i) => i.meta?.diffs?.map((d) => d.path) ?? [i.id])).size
+  const edited = new Set(items.filter((i) => i.tool === 'edit' || i.tool === 'create').flatMap((i) => { const { paths } = editStats(i); return paths.length ? paths : [i.id] })).size
   const others = items.filter((i) => !EXPLORE_KINDS.includes(i.tool) && !['bash', 'edit', 'create', 'browser'].includes(i.tool)).length
   const parts = [
     files && plural(files, 'file'),
@@ -302,11 +302,11 @@ function exploreSummary(all: ToolItem[], verb = 'Explored'): string {
   else if (single && web) parts[0] = 'web search'
   else if (single && pages) parts[0] = pageLabel(single.meta?.url ?? String((single.input as { url?: unknown } | null)?.url ?? '')) || 'page'
   const done = verb === 'Explored'
-  const editedPath = items.flatMap((i) => (i.tool === 'edit' || i.tool === 'create' ? i.meta?.diffs ?? [] : []))[0]?.path
   const singleCommand = single?.tool === 'bash' ? toolActivityTitle(single) : ''
   const actions = [
     commands && `${done ? 'ran' : 'running'} ${singleCommand ? singleCommand.charAt(0).toLowerCase() + singleCommand.slice(1) : plural(commands, 'command')}`,
-    edited && `${done ? 'edited' : 'editing'} ${edited === 1 && editedPath ? basename(editedPath) : plural(edited, 'file')}`,
+    // A group never names the file it edited, even when there is one: "edited a file".
+    edited && `${done ? 'edited' : 'editing'} ${edited === 1 ? 'a file' : plural(edited, 'file')}`,
     others && `${done ? 'used' : 'using'} ${others === 1 && single ? single.name : plural(others, 'tool')}`
   ].filter((part): part is string => !!part)
   // Waits sit in the group without being listed; on their own the group reads "Waited".
@@ -388,14 +388,16 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
   const path = isTerminalRead(item) || isToolOutputRead(item) ? undefined : item.tool === 'read' && typeof (item.input as { path?: string; file_path?: string })?.path === 'string' ? (item.input as { path: string }).path : (item.input as { file_path?: string })?.file_path
   const url = item.meta?.url
   const results = item.meta?.results
-  const outputMode = useStore((s) => s.settings.terminalOutput)
+  // Medium and Compact have no Tool output setting: their lines stay closed until clicked.
+  const dense = useStore((s) => s.settings.toolDensity !== 'default')
+  const outputMode = useStore((s) => dense ? 'collapsed' : s.settings.terminalOutput)
   const editing = item.tool === 'edit' || item.tool === 'create'
   const [open, toggle] = useDisclosure(false, `${outputMode}:${isLive(item) ? 'running' : 'complete'}`)
   const diffs = item.tool === 'edit' || item.tool === 'create' ? item.meta?.diffs ?? [] : []
   const preview = !open && editing && diffs.length > 0 && (outputMode === 'preview' || outputMode === 'foreground' && isLive(item))
   const command = item.tool === 'bash' ? item.meta?.command ?? (item.input as { command?: string } | null)?.command ?? '' : ''
-  // Grouped commands and edits expand in place, like their standalone blocks.
-  const expandable = item.tool === 'bash' ? !!(item.output || item.error) : diffs.length > 0
+  // Grouped commands and edits expand in place, like their standalone blocks; a command opens to itself even before it prints.
+  const expandable = item.tool === 'bash' ? !!(command || item.output || item.error) : diffs.length > 0
   const action = expandable ? toggle : path ? () => openFile(path) : url ? (event?: { altKey?: boolean }) => void openLink(url, event) : results?.length ? toggle : undefined
   if (item.tool === 'mcp') return <McpTool item={item} />
   return (
@@ -410,12 +412,16 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
         <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(item.tool === 'bash' && item.status !== 'error' ? `${isLive(item) ? 'Running' : 'Ran'} ${toolActivityTitle(item)}` : toolActivityTitle(item))}</span>
         {!isTerminalRead(item) && !isToolOutputRead(item) && item.detail && (item.tool === 'browser' || item.detail !== basename(item.detail)) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
         {item.meta?.matches !== undefined && item.tool !== 'read' && <span className="shrink-0 text-[12.1px] text-subtle">{plural(item.meta.matches, 'match', 'matches')}</span>}
+        {editing && item.status !== 'error' && !isNoChange(item) && <LiveDiffStat {...editStats(item)} live={isLive(item)} />}
         <StatusMark item={item} />
       </button>
       {(open || preview) && expandable && (
         <div className={cn('activity-output-surface activity-reveal mb-1.5 ml-6 overflow-hidden rounded-lg border border-line', preview && 'max-h-[78px] overflow-y-auto overscroll-contain')}>
           {item.tool === 'bash'
-            ? item.output ? <OutputBlock text={item.output} command={command} highlight maxHeight="none" /> : <div className="px-3 py-2 text-[13.2px] text-danger">{item.error}</div>
+            ? <>
+              {(item.output || command) && <OutputBlock text={item.output ?? ''} command={command} highlight maxHeight="none" />}
+              {item.error && !item.output && <div className={cn('px-3 py-2 text-[13.2px] text-danger', command && 'border-t border-line')}>{item.error}</div>}
+            </>
             : diffs.map((diff) => <DiffView key={diff.path} diff={diff} maxHeight={null} />)}
         </div>
       )}
@@ -473,16 +479,22 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
     }
   }, [items, latestItemId, open])
   const failed = tools.length === 1 && tools[0].status === 'error'
+  // Compact folds edits and commands in too, so the icon follows the group's latest action: edit, terminal or search.
+  const compact = useStore((s) => s.settings.toolDensity === 'compact')
+  const lastTool = tools[tools.length - 1]
+  const GroupIcon = compact && (lastTool?.tool === 'edit' || lastTool?.tool === 'create') ? KIND_ICON[lastTool.tool] : compact && lastTool?.tool === 'bash' ? SquareTerminal : Search
+  // Compact folds edits into the group, so its row carries their line counts as they are written.
+  const edits = tools.filter((tool) => (tool.tool === 'edit' || tool.tool === 'create') && tool.status !== 'error' && !isNoChange(tool)).map(editStats).reduce((sum, stat) => ({ added: sum.added + stat.added, removed: sum.removed + stat.removed }), { added: 0, removed: 0 })
   const failures = tools.filter((tool) => tool.status === 'error')
   return (
     <div className="explore-group" title={failures.length && failures.length === tools.length ? failures.map((tool) => `${toolActivityTitle({ ...tool, status: 'done' })}: ${failureReason(tool)}`).join('\n') : undefined}>
       <Row
-        icon={computer ? <ToolIcon item={appTool ?? tools[0]} icon={Monitor} /> : browsing ? <PageIcon items={tools} /> : thinkingOnly ? <Lightbulb size={13.5} className="text-subtle" /> : <Search size={13.5} className="text-subtle" />}
+        icon={computer ? <ToolIcon item={appTool ?? tools[0]} icon={Monitor} /> : browsing ? <PageIcon items={tools} /> : thinkingOnly ? <Lightbulb size={13.5} className="text-subtle" /> : <GroupIcon size={13.5} className="text-subtle" />}
         title={title}
         live={live}
         open={open}
         onToggle={toggle}
-        trailing={failed ? <StatusMark item={tools[0]} /> : null}
+        trailing={failed ? <StatusMark item={tools[0]} /> : edits.added || edits.removed ? <LiveDiffStat added={edits.added} removed={edits.removed} live={live} /> : null}
       />
       {(open || shown) && (
         <div className="fold" data-open={open && shown} inert={!open}>
@@ -1031,7 +1043,7 @@ export function PresentTool({ item }: { item: ToolItem }): ReactNode {
           return (
             <div key={file.path} className="group/file flex w-full items-center gap-3 rounded-lg border border-line px-4 py-3">
               <div className="flex min-w-0 flex-1 items-center gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center"><FileTypeIcon name={file.name} size={24} /></span>
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-line bg-hover"><FileTypeIcon name={file.name} size={16} /></span>
                 <button type="button" onClick={() => openFile(file.path)} className="min-w-0 flex-1 text-left" title={file.path}>
                   <span className="block truncate text-[14.3px] font-medium text-fg">{file.name}</span>
                   <span className="block text-[12.1px] text-subtle">{formatBytes(file.size)}</span>

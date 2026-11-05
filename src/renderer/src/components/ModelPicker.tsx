@@ -1,8 +1,8 @@
 import { Check, ChevronDown, ChevronLeft, ChevronRight, RotateCcw, Search, Settings2, Sparkles, Zap } from 'lucide-react'
 import { AUTO_MODEL, needsCredits, PREMIUM_MODEL, type ProviderId } from '@shared/catalog'
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
-import { AcpAgents } from '@shared/acp-registry'
-import { EFFORT_LABELS, type Effort, type ResolvedModel, type Subscription } from '@shared/types'
+import { AcpLibrary } from '@shared/acp-registry'
+import { EFFORT_LABELS, type AcpConfigOption, type Effort, type ResolvedModel, type Subscription } from '@shared/types'
 import { cn } from '../lib/utils'
 import { rememberedRunOptions, useChatId, useRunConfig, useStore } from '../store'
 import { Popover, Switch } from './ui'
@@ -19,7 +19,7 @@ export const SUBSCRIPTION_LABELS: Record<Subscription, string> = {
   Default: 'Galaxy',
   Claude: 'Claude',
   Codex: 'Codex',
-  ...Object.fromEntries(AcpAgents.map((agent) => [agent.DisplayName, agent.DisplayName]))
+  ...Object.fromEntries(AcpLibrary.map((agent) => [agent.DisplayName, agent.DisplayName]))
 }
 
 type Stop = Effort | 'ultra'
@@ -130,8 +130,7 @@ function useCreditLock(): { locked: boolean; isLocked(model: ResolvedModel): boo
 
 const CREDIT_LOCK_NOTE = "You've used all your credits. Add a BYOK key or credits to keep using other models."
 
-function ModelList({ current, subscription, allowUltra, onPick, onBack, onClose }: { current: ResolvedModel | null; subscription: Subscription | null; allowUltra: boolean; onPick(key: string): void; onBack(): void; onClose(): void }): ReactNode {
-  const models = useStore((s) => s.models)
+function ModelList({ models, acp, current, subscription, allowUltra, onPick, onBack, onClose }: { models: ResolvedModel[]; acp: boolean; current: ResolvedModel | null; subscription: Subscription | null; allowUltra: boolean; onPick(key: string): void; onBack(): void; onClose(): void }): ReactNode {
   const { locked, isLocked } = useCreditLock()
   const hasKey = useStore((s) => s.secrets.openRouterKey || s.settings.customProviders.length > 0 || Object.keys(s.secrets.providerKeys).some((id) => !s.settings.disabledProviders.includes(id as ProviderId)))
   const [query, setQuery] = useState('')
@@ -203,7 +202,7 @@ function ModelList({ current, subscription, allowUltra, onPick, onBack, onClose 
           </div>
         ))}
       </div>
-      <ConfigureModels onOpen={onClose} />
+      {!acp && <ConfigureModels onOpen={onClose} />}
     </div>
   )
 }
@@ -259,6 +258,90 @@ function PremiumRow({ checked, onChange, className }: { checked: boolean; onChan
 }
 
 /** The Default style: every model in a list, with the picked model's context, effort and options in a menu beside it. */
+type RunOptionsPatch = { effort?: Effort | null; ultra?: boolean; fast?: boolean; ultrafast?: boolean; context?: number | null }
+
+/** Agents often prefix models with their provider; the picker only has room for the rest. */
+function shortModelName(name: string): string {
+  const slash = name.lastIndexOf('/')
+  return slash >= 0 && slash < name.length - 1 ? name.slice(slash + 1) : name
+}
+
+/**
+ * What the pickers list and change. Most chats pick from the model catalog; an ACP agent lists the models it reports
+ * for its session, and its effort levels stand in for effort, so both picker styles work the same for it.
+ */
+function usePickerSource(): ReturnType<typeof useRunConfig> & {
+  models: ResolvedModel[]
+  acp: ReturnType<typeof useRunConfig>['acp']
+  pick(key: string): void
+  setOptions(patch: RunOptionsPatch): void
+  reset(key: string): void
+} {
+  const config = useRunConfig()
+  const catalog = useStore((s) => s.models)
+  const pickModel = useStore((s) => s.pickModel)
+  const setRunOptions = useStore((s) => s.setRunOptions)
+  const setAcpOption = useStore((s) => s.setAcpOption)
+  const chatId = useChatId()
+  const { acp, model } = config
+  if (!acp || !model) {
+    return {
+      ...config,
+      models: catalog,
+      pick: (key) => pickModel(key, chatId),
+      setOptions: (patch) => setRunOptions(patch, chatId),
+      reset: (key) => useStore.getState().resetModelOptions(key, chatId)
+    }
+  }
+  const valueOf = (option: AcpConfigOption): string => acp.values[option.id] ?? option.currentValue
+  const modelOption = acp.options.find((option) => option.category === 'model')
+  const effortOption = acp.options.find((option) => option.category === 'thought_level')
+  // Effort levels the agent names the way Galaxy Code does; others stay with the agent's other options.
+  const efforts = new Map<Effort, string>()
+  for (const choice of effortOption?.options ?? []) {
+    const level = (Object.keys(EFFORT_LABELS) as Effort[]).find((key) => key === choice.value.toLowerCase() || EFFORT_LABELS[key].toLowerCase() === choice.name.toLowerCase())
+    if (level && !efforts.has(level)) efforts.set(level, choice.value)
+  }
+  const effort = effortOption ? ([...efforts].find(([, value]) => value === valueOf(effortOption))?.[0] ?? null) : null
+  const asModel = (id: string, name: string): ResolvedModel => ({
+    ...model,
+    key: `acp:${id}`,
+    id,
+    name,
+    efforts: [...efforts.keys()],
+    defaultEffort: effort,
+    ultraEffort: null,
+    fastMode: false,
+    ultrafastMode: false,
+    contextOptions: undefined
+  })
+  // Agents can list a model more than once, and several providers can serve one model, so each value appears once
+  // and a name keeps its provider prefix when dropping it would make two rows read the same.
+  const choices = (modelOption?.options ?? []).filter((choice, index, all) => all.findIndex((other) => other.value === choice.value) === index)
+  const shortCounts = new Map<string, number>()
+  for (const choice of choices) shortCounts.set(shortModelName(choice.name), (shortCounts.get(shortModelName(choice.name)) ?? 0) + 1)
+  const models = modelOption ? choices.map((choice) => asModel(choice.value, shortCounts.get(shortModelName(choice.name))! > 1 ? choice.name : shortModelName(choice.name))) : [asModel(model.id, model.name)]
+  const current = models.find((entry) => entry.id === (modelOption ? valueOf(modelOption) : model.id)) ?? models[0]
+  return {
+    ...config,
+    model: current,
+    effort,
+    ultra: false,
+    fast: false,
+    ultrafast: false,
+    context: null,
+    models,
+    pick: (key) => {
+      if (modelOption) setAcpOption(modelOption.id, key.slice('acp:'.length), chatId)
+    },
+    setOptions: (patch) => {
+      const value = patch.effort ? efforts.get(patch.effort) : undefined
+      if (effortOption && value) setAcpOption(effortOption.id, value, chatId)
+    },
+    reset: () => {}
+  }
+}
+
 function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
   const anchor = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
@@ -286,12 +369,8 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
     window.addEventListener('resize', measure)
     return () => window.removeEventListener('resize', measure)
   }, [open])
-  const models = useStore((s) => s.models)
-  const pickModel = useStore((s) => s.pickModel)
-  const setRunOptions = useStore((s) => s.setRunOptions)
-  const chatId = useChatId()
-  const config = useRunConfig()
-  const { model, subscription, effort, fast, ultrafast, context } = config
+  const config = usePickerSource()
+  const { model, models, subscription, effort, fast, ultrafast, context } = config
   const ultra = config.ultra && !noUltra
   const auto = !!model?.auto
   // Effort and speed in words, such as "High Fast", instead of the slider style's icons.
@@ -338,11 +417,11 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
             <div className="shrink-0 border-b border-line px-3 text-[12px]">
               <div className="flex h-8 items-center justify-between">
                 <span>Auto</span>
-                <Switch checked={auto} onChange={(on) => pickModel(on ? AUTO_MODEL.key : (visible[0]?.key ?? AUTO_MODEL.key), chatId)} label="Auto" />
+                <Switch checked={auto} onChange={(on) => config.pick(on ? AUTO_MODEL.key : (visible[0]?.key ?? AUTO_MODEL.key))} label="Auto" />
               </div>
               {/* With Auto on, Premium swaps the free router for OpenRouter's Auto Router. */}
               {auto && <>
-                {!locked && <PremiumRow checked={model?.key === PREMIUM_MODEL.key} onChange={(on) => pickModel(on ? PREMIUM_MODEL.key : AUTO_MODEL.key, chatId)} className="-mx-2 w-[calc(100%+1rem)]" />}
+                {!locked && <PremiumRow checked={model?.key === PREMIUM_MODEL.key} onChange={(on) => config.pick(on ? PREMIUM_MODEL.key : AUTO_MODEL.key)} className="-mx-2 w-[calc(100%+1rem)]" />}
                 <p className="pb-2 pt-1 text-[11.5px] leading-snug text-subtle">{locked ? CREDIT_LOCK_NOTE : model?.description}</p>
               </>}
             </div>
@@ -359,7 +438,7 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
               const isDefault = (options.effort ?? entry.defaultEffort) === entry.defaultEffort && !options.ultra && options.fast === defaultFast && options.ultrafast === defaultUltrafast && (options.context == null || options.context === (entry.contextOptions?.[0] ?? entry.contextWindow))
               return (
                 <div key={entry.key} className="group/model flex h-6 w-full items-center rounded-md transition-colors hover:bg-hover">
-                  <button type="button" onClick={() => { pickModel(entry.key, chatId); setEditing(null) }} className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2 text-left text-[12px] text-fg">
+                  <button type="button" onClick={() => { config.pick(entry.key); setEditing(null) }} className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2 text-left text-[12px] text-fg">
                     <span className="min-w-0 flex-1 truncate">{entry.name}{summary && <span className="text-subtle"> {summary}</span>}</span>
                   </button>
                   {/* The far right shows a check on the picked model; hovering swaps it for Edit, which opens the model's options. */}
@@ -369,7 +448,7 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
                         type="button"
                         title="Reset to defaults"
                         aria-label={`Reset ${entry.name} to defaults`}
-                        onClick={() => useStore.getState().resetModelOptions(entry.key, chatId)}
+                        onClick={() => config.reset(entry.key)}
                         className="hidden h-5 w-5 shrink-0 items-center justify-center rounded text-muted hover:text-fg group-hover/model:flex group-focus-within/model:flex"
                       >
                         <RotateCcw size={12} />
@@ -377,34 +456,34 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
                     )}
                     {checked && editing !== entry.key && <Check size={12} className={cn('mr-1 text-muted', hasOptions(entry) && 'group-hover/model:hidden')} />}
                     {hasOptions(entry) && (
-                      <button type="button" onClick={(event) => { if (!checked) pickModel(entry.key, chatId); const row = event.currentTarget.closest('.group\\/model') as HTMLElement; const box = listBox.current!.getBoundingClientRect(); const rect = row.getBoundingClientRect(); setEditCenter(rect.top - box.top + rect.height / 2); setEditing((value) => value === entry.key ? null : entry.key) }} className={cn('h-5 rounded px-1.5 text-[11px] text-muted hover:text-fg', editing === entry.key ? 'text-fg' : 'hidden group-hover/model:block')}>Edit</button>
+                      <button type="button" onClick={(event) => { if (!checked) config.pick(entry.key); const row = event.currentTarget.closest('.group\\/model') as HTMLElement; const box = listBox.current!.getBoundingClientRect(); const rect = row.getBoundingClientRect(); setEditCenter(rect.top - box.top + rect.height / 2); setEditing((value) => value === entry.key ? null : entry.key) }} className={cn('h-5 rounded px-1.5 text-[11px] text-muted hover:text-fg', editing === entry.key ? 'text-fg' : 'hidden group-hover/model:block')}>Edit</button>
                     )}
                   </span>
                 </div>
               )
             })}
           </div>}
-          {(!auto || !!needle) && <ConfigureModels onOpen={() => setOpen(false)} />}
+          {(!auto || !!needle) && !config.acp && <ConfigureModels onOpen={() => setOpen(false)} />}
         </div>
         {/* Keep options out of the popover's measured width so toggling Edit never moves the model list. */}
         {side && (
           <div ref={sideBox} style={{ top: sideTop, ...(sideOnLeft ? { right: 'calc(100% + 6px)' } : { left: 'calc(100% + 6px)' }) }} className="absolute w-[180px] rounded-lg bg-elev p-1 shadow-pop">
             {!!model.contextOptions?.length && <>
               <MenuHeading>Context</MenuHeading>
-              {model.contextOptions.map((size) => <MenuRow key={size} label={contextLabel(size)} checked={(context != null && model.contextOptions?.includes(context) ? context : model.contextOptions?.[0]) === size} onClick={() => setRunOptions({ context: size }, chatId)} />)}
+              {model.contextOptions.map((size) => <MenuRow key={size} label={contextLabel(size)} checked={(context != null && model.contextOptions?.includes(context) ? context : model.contextOptions?.[0]) === size} onClick={() => config.setOptions({ context: size })} />)}
             </>}
             {model.efforts.length > 0 && <>
               {!!model.contextOptions?.length && <div className="my-1 border-t border-line" />}
               <MenuHeading>Effort</MenuHeading>
-              {model.efforts.map((value) => <MenuRow key={value} label={EFFORT_LABELS[value]} checked={!ultra && (effort ?? model.defaultEffort) === value} onClick={() => setRunOptions({ effort: value, ultra: false }, chatId)} />)}
+              {model.efforts.map((value) => <MenuRow key={value} label={EFFORT_LABELS[value]} checked={!ultra && (effort ?? model.defaultEffort) === value} onClick={() => config.setOptions({ effort: value, ultra: false })} />)}
               {/* Ultra sits below the highest effort, in purple. */}
-              {model.ultraEffort && !noUltra && <MenuRow label="Ultra" checked={ultra} onClick={() => setRunOptions({ ultra: true }, chatId)} className="font-medium text-ultra" />}
+              {model.ultraEffort && !noUltra && <MenuRow label="Ultra" checked={ultra} onClick={() => config.setOptions({ ultra: true })} className="font-medium text-ultra" />}
             </>}
             {model.fastMode && <>
               <div className="my-1 border-t border-line" />
               <MenuHeading>Options</MenuHeading>
-              <div className="flex h-6 items-center justify-between rounded-md px-2 text-[12px] text-fg transition-colors hover:bg-hover"><span>Fast</span><Switch checked={fast && !ultrafast} onChange={(on) => setRunOptions({ fast: on, ultrafast: false }, chatId)} label="Fast" /></div>
-              {model.ultrafastMode && <div className="flex h-6 items-center justify-between rounded-md px-2 text-[12px] text-fg transition-colors hover:bg-hover"><span>Ultrafast</span><Switch checked={ultrafast} onChange={(on) => setRunOptions({ fast: on, ultrafast: on }, chatId)} label="Ultrafast" /></div>}
+              <div className="flex h-6 items-center justify-between rounded-md px-2 text-[12px] text-fg transition-colors hover:bg-hover"><span>Fast</span><Switch checked={fast && !ultrafast} onChange={(on) => config.setOptions({ fast: on, ultrafast: false })} label="Fast" /></div>
+              {model.ultrafastMode && <div className="flex h-6 items-center justify-between rounded-md px-2 text-[12px] text-fg transition-colors hover:bg-hover"><span>Ultrafast</span><Switch checked={ultrafast} onChange={(on) => config.setOptions({ fast: on, ultrafast: on })} label="Ultrafast" /></div>}
             </>}
           </div>
         )}
@@ -425,10 +504,7 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
   const anchor = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const [listing, setListing] = useState(false)
-  const pickModel = useStore((s) => s.pickModel)
-  const setRunOptions = useStore((s) => s.setRunOptions)
-  const chatId = useChatId()
-  const config = useRunConfig()
+  const config = usePickerSource()
   const { model, subscription, effort, fast, ultrafast } = config
   const ultra = config.ultra && !noUltra
 
@@ -484,13 +560,15 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
       <Popover open={open} onClose={close} anchor={anchor} placement="top-end" offset={8} className={cn('overflow-hidden rounded-2xl!', listing || !model ? 'w-[264px]' : 'w-[228px]')}>
         {listing || !model ? (
           <ModelList
+            models={config.models}
+            acp={!!config.acp}
             current={model}
             subscription={subscription}
             allowUltra={!noUltra}
             onBack={() => (model ? setListing(false) : close())}
             onClose={close}
             onPick={(key) => {
-              pickModel(key, chatId)
+              config.pick(key)
               setListing(false)
             }}
           />
@@ -503,7 +581,7 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
                 disabled={!model.fastMode}
                 aria-label={ultrafast ? 'Ultrafast mode' : 'Fast mode'}
                 aria-pressed={fast}
-                onClick={() => setRunOptions(nextSpeed(), chatId)}
+                onClick={() => config.setOptions(nextSpeed())}
                 className={cn(
                   '-ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors disabled:opacity-25',
                   fast ? 'text-fg hover:bg-hover' : 'text-muted hover:bg-hover hover:text-fg'
@@ -527,17 +605,17 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
                 type="button"
                 title="Reset to default"
                 disabled={auto || isDefault || (!hasEffort && fast === defaultFast && ultrafast === defaultUltrafast)}
-                onClick={() => setRunOptions({ ...(model.defaultEffort ? { effort: model.defaultEffort } : {}), ultra: false, fast: defaultFast, ultrafast: defaultUltrafast }, chatId)}
+                onClick={() => config.setOptions({ ...(model.defaultEffort ? { effort: model.defaultEffort } : {}), ultra: false, fast: defaultFast, ultrafast: defaultUltrafast })}
                 className="-mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-25"
               >
                 <RotateCcw size={13} />
               </button>
             </div>
-            {auto && !creditsLocked && <PremiumRow checked={model.key === PREMIUM_MODEL.key} onChange={(on) => pickModel(on ? PREMIUM_MODEL.key : AUTO_MODEL.key, chatId)} className="mt-2 w-full" />}
+            {auto && !creditsLocked && <PremiumRow checked={model.key === PREMIUM_MODEL.key} onChange={(on) => config.pick(on ? PREMIUM_MODEL.key : AUTO_MODEL.key)} className="mt-2 w-full" />}
             {(creditsLocked || model.description) && <p className="mt-2 px-1 text-center text-[11.5px] leading-snug text-subtle">{creditsLocked ? CREDIT_LOCK_NOTE : model.description}</p>}
             {hasEffort && (
               <div className="mt-2.5" title={ultra ? `Ultra orchestrates parallel subagents at ${EFFORT_LABELS[model.ultraEffort as Effort].toLowerCase()} effort` : undefined}>
-                <EffortSlider model={model} effort={effort} ultra={ultra} allowUltra={!noUltra} onChange={(next) => setRunOptions(next, chatId)} />
+                <EffortSlider model={model} effort={effort} ultra={ultra} allowUltra={!noUltra} onChange={(next) => config.setOptions(next)} />
               </div>
             )}
           </div>

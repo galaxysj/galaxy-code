@@ -3,6 +3,7 @@ import {
   ACCOUNT_LABELS,
   ACP_ACCOUNTS,
   SUBSCRIPTION_ACCOUNT,
+  acpAgentFor,
   type AgentMode,
   type Chat,
   type Attachment,
@@ -515,8 +516,9 @@ class ChatManager {
 
   private async runTurn(session: Session, text: string, attachments: SendInput['attachments'], mentions: PromptMentions = { skills: [], files: [], chats: [], browser: false, tools: [] }, extra: { mode?: AgentMode; plan?: string; event?: string } = {}): Promise<void> {
     const chat = session.chat
-    // Ask and Plan are only enforced by Galaxy Code's own tools.
-    const mode = extra.mode && usesGalaxyTools(findModel(this.models(), chat.modelKey)?.subscription) ? extra.mode : undefined
+    // Galaxy Code's own tools enforce every mode. ACP agents switch to their own Ask or Plan mode, and multitask with Galaxy's Agent tool.
+    const subscription = findModel(this.models(), chat.modelKey)?.subscription
+    const mode = extra.mode && (usesGalaxyTools(subscription) || acpAgentFor(subscription)) ? extra.mode : undefined
     const controller = new AbortController()
     session.controller = controller
     const startedAt = Date.now()

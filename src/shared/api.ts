@@ -4,7 +4,9 @@ import type {
   AnalyticsRow,
   UsageReport,
   AccountStatus,
+  AcpAgentConfig,
   AcpConfigOption,
+  AcpRegistryAgent,
   Attachment,
   Bootstrap,
   BrowserDataKind,
@@ -82,9 +84,12 @@ export interface GalaxyApi {
   }
 
   acp: {
-    answerConsent(requestId: string, allow: boolean): Promise<void>
     /** Session options an ACP agent offers, read before a chat exists. */
     options(id: AccountId, projectId: string | null, fresh?: boolean): Promise<AcpConfigOption[]>
+    /** Agents in the public ACP registry that run on this computer. */
+    registry(fresh?: boolean): Promise<AcpRegistryAgent[]>
+    /** Downloads a registry agent when it ships as a binary, and returns its Settings entry. */
+    install(id: string): Promise<AcpAgentConfig>
   }
 
   projects: {

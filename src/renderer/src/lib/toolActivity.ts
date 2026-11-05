@@ -120,7 +120,7 @@ export function toolActivityTitle(item: ToolItem): string {
   const forms = first ? FORMS.get(first) : undefined
   if (!forms) return item.title
   const verb = forms[isToolInProgress(item) ? 2 : item.status === 'done' ? 1 : 0]
-  const title = verb + item.title.slice(first!.length)
+  const title = editTitleWithFile(item, verb + item.title.slice(first!.length))
   return item.tool === 'browser'
     ? title.replace(/^(Open(?:ing|ed)?) https?:\/\/(?:www\.)?/, '$1 ')
     : title
@@ -130,4 +130,55 @@ export function toolActivityTitle(item: ToolItem): string {
 export function thinkingTopic(text: string): string | null {
   const topics = [...text.matchAll(/\*\*([^*\n]+?)\*\*/g)]
   return topics.at(-1)?.[1].trim() || null
+}
+
+function baseName(path: string): string {
+  return path.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? path
+}
+
+function lineCount(text: string): number {
+  return text ? text.replace(/\n$/, '').split('\n').length : 0
+}
+
+/**
+ * The files an Edit or Create touches and its added and removed line counts, from its diff once it has one and from
+ * the input while it is still being written, so the name and counts show from the moment they can be read.
+ */
+export function editStats(item: ToolItem): { paths: string[]; added: number; removed: number } {
+  const diffs = item.meta?.diffs
+  if (diffs?.length) return { paths: diffs.map((diff) => diff.path), added: diffs.reduce((n, d) => n + d.added, 0), removed: diffs.reduce((n, d) => n + d.removed, 0) }
+  const input = (item.input ?? {}) as Record<string, unknown>
+  if (typeof input.patch === 'string') {
+    const paths: string[] = []
+    let added = 0
+    let removed = 0
+    let inFile = false
+    for (const line of input.patch.split('\n')) {
+      const header = line.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/)
+      if (header) {
+        const path = header[1].trim()
+        if (path && !paths.includes(path)) paths.push(path)
+        inFile = true
+      } else if (line.startsWith('***')) {
+        if (/^\*\*\* End Patch/.test(line)) inFile = false
+      } else if (inFile && line.startsWith('+')) added++
+      else if (inFile && line.startsWith('-')) removed++
+    }
+    return { paths, added, removed }
+  }
+  const path = typeof input.file_path === 'string' ? input.file_path : typeof input.path === 'string' ? input.path : ''
+  const paths = path ? [path] : []
+  if (typeof input.content === 'string') return { paths, added: lineCount(input.content), removed: 0 }
+  if (typeof input.new_string === 'string' || typeof input.old_string === 'string') {
+    return { paths, added: lineCount(String(input.new_string ?? '')), removed: lineCount(String(input.old_string ?? '')) }
+  }
+  return { paths, added: 0, removed: 0 }
+}
+
+/** An edit's title with its file named as soon as the input says which, such as "Editing App.tsx" or "Editing 2 files". */
+export function editTitleWithFile(item: ToolItem, title: string): string {
+  if ((item.tool !== 'edit' && item.tool !== 'create') || /\s/.test(title.trim())) return title
+  const { paths } = editStats(item)
+  if (!paths.length) return title
+  return `${title.trim()} ${paths.length === 1 ? baseName(paths[0]) : `${paths.length} files`}`
 }

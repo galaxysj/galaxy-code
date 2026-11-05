@@ -3,7 +3,7 @@ import { create } from 'zustand'
 import { AUTO_MODEL, availableSubscriptions, canUseChatSubscription, defaultModel, findModel, needsCredits, normalizeEffort, resolveImageModels, resolveModels } from '@shared/catalog'
 import {
   acpAgentFor,
-  applyCustomAcpAgents,
+  applyAcpAgents,
   type AccountStatus,
   type AcpConfigOption,
   type AgentMode,
@@ -190,7 +190,6 @@ interface State {
   accountStatuses: AccountStatus[]
   accountsLoading: boolean
   acpProbes: Record<string, AcpProbe>
-  antigravityConsent: string | null
   /** OpenRouter has nothing left to spend, so models that need credits are locked to Auto. */
   creditsLocked: boolean
   /** The favicon of each site seen in the browser, by host, kept between runs. */
@@ -414,9 +413,6 @@ export const useStore = create<State>((set, get) => {
 
   const applyUiEvent = (event: UiEvent): void => {
     switch (event.type) {
-      case 'antigravity-consent':
-        set({ antigravityConsent: event.requestId })
-        break
       case 'computer-window': {
         const { [event.chatId]: previous = [], ...others } = get().computerWindows
         const { window } = event
@@ -440,8 +436,8 @@ export const useStore = create<State>((set, get) => {
       case 'settings': {
         const previous = get().settings
         const accountsChanged = JSON.stringify(previous.accounts) !== JSON.stringify(event.settings.accounts) || previous.acpEnabled !== event.settings.acpEnabled ||
-          JSON.stringify(previous.customAcpAgents) !== JSON.stringify(event.settings.customAcpAgents)
-        applyCustomAcpAgents(event.settings.customAcpAgents)
+          JSON.stringify(previous.acpAgents) !== JSON.stringify(event.settings.acpAgents)
+        applyAcpAgents(event.settings.acpAgents)
         set({ settings: event.settings, secrets: event.secrets, models: resolveModels(event.settings), ...(accountsChanged ? { acpProbes: {} } : {}) })
         if (accountsChanged) void get().refreshAccounts()
         break
@@ -521,7 +517,6 @@ export const useStore = create<State>((set, get) => {
     accountStatuses: [],
     accountsLoading: false,
     acpProbes: {},
-    antigravityConsent: null,
     computerWindows: {},
     creditsLocked: false,
     pageFavicons: loadFavicons(),
@@ -563,7 +558,7 @@ export const useStore = create<State>((set, get) => {
       if (initialization) return initialization
       initialization = (async () => {
         const boot = await window.galaxy.bootstrap()
-        applyCustomAcpAgents(boot.settings.customAcpAgents)
+        applyAcpAgents(boot.settings.acpAgents)
         const chats: Record<string, Chat> = {}
         for (const chat of boot.chats) chats[chat.id] = chat
         const lastProject = boot.projects.some((p) => p.id === prefs.lastProjectId) ? prefs.lastProjectId : null
@@ -806,7 +801,7 @@ export const useStore = create<State>((set, get) => {
 
     async updateSettings(patch) {
       const settings = await window.galaxy.settings.update(patch)
-      applyCustomAcpAgents(settings.customAcpAgents)
+      applyAcpAgents(settings.acpAgents)
       set({ settings, models: resolveModels(settings) })
     },
 

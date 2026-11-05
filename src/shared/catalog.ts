@@ -226,12 +226,16 @@ export function accountEnabled(settings: Pick<Settings, 'accounts' | 'acpEnabled
   return settings.acpEnabled !== false || !ACP_ACCOUNTS.includes(id)
 }
 
-/** Galaxy uses the native engine. Account subscriptions require confirmed sign-in, except keyless ones. */
+/**
+ * Galaxy uses the native engine. Claude Code and Codex require confirmed sign-in. ACP agents mostly cannot report
+ * theirs up front, so they count as usable until they ask for sign-in, except keyless ones, which always run.
+ */
 export function availableSubscriptions(settings: Pick<Settings, 'accounts' | 'acpEnabled'>, statuses: AccountStatus[]): Subscription[] {
   return SUBSCRIPTIONS.filter((subscription) => {
     if (subscription === 'Default') return true
     const id = SUBSCRIPTION_ACCOUNT[subscription]
-    return accountEnabled(settings, id) && statuses.some((status) => status.id === id && status.installed && (status.authenticated === true || KEYLESS_ACCOUNTS.includes(id)))
+    const signedIn = (status: AccountStatus): boolean => status.authenticated === true || KEYLESS_ACCOUNTS.includes(id) || (ACP_ACCOUNTS.includes(id) && status.authenticated !== false)
+    return accountEnabled(settings, id) && statuses.some((status) => status.id === id && status.installed && signedIn(status))
   })
 }
 

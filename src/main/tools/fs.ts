@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, join, sep } from 'node:path'
 import { rgPath as bundledRgPath } from '@vscode/ripgrep'
 import type { ToolItem } from '@shared/types'
 import { outsideReadApproval } from '../agent/approval'
@@ -267,7 +267,7 @@ export const editTool: ToolDef = {
   name: 'Edit',
   kind: 'edit',
   description:
-    `Apply a V4A (apply_patch) patch using @galaxysj/v4a. Pass only patch. Read existing files first and include enough context to identify each hunk. Paths must be inside the working directory; relative paths are preferred. One patch can update, add, delete or move multiple files. This is not a unified git diff: use bare @@ or @@ followed by a context anchor, not numeric line ranges.
+    `Apply a V4A (apply_patch) patch using @galaxysj/v4a. Pass only patch. Read existing files first and include enough context to identify each hunk. Paths are relative to the working directory, or absolute (~ allowed) for files outside it; changes outside the working directory need the user's approval. One patch can update, add, delete or move multiple files. This is not a unified git diff: use bare @@ or @@ followed by a context anchor, not numeric line ranges.
 
 Example:
 *** Begin Patch
@@ -296,16 +296,18 @@ Update File hunks use a space for unchanged context, - for removed lines and + f
   approval(input, ctx) {
     const patch = str(input, 'patch', true)
     const operations = parseEditPatch(patch, ctx.cwd).operations
+    const outside = patchFiles({ operations }, ctx.cwd).some((path) => path !== ctx.cwd && !path.startsWith(ctx.cwd + sep))
     return {
       action: {
         tool: 'Edit',
         engine: '@galaxysj/v4a',
-        inside_workspace: true,
+        working_directory: ctx.cwd,
+        inside_workspace: !outside,
         files: operations.map((operation) => ({ type: operation.type, path: resolvePath(ctx.cwd, operation.path), ...(operation.type === 'update' && operation.moveTo ? { moveTo: resolvePath(ctx.cwd, operation.moveTo) } : {}) })),
         patch
       },
-      sessionKey: 'edit',
-      sessionLabel: 'Allow all edits in this chat'
+      sessionKey: outside ? 'edit-outside' : 'edit',
+      sessionLabel: outside ? 'Allow edits outside the project in this chat' : 'Allow all edits in this chat'
     }
   },
   async execute(input, ctx) {

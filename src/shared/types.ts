@@ -1,4 +1,4 @@
-import { AcpAgents, type AcpAgentSpec } from './acp-registry'
+import { AcpAgents, AcpLibrary, type AcpAgentSpec } from './acp-registry'
 import type { ProviderId } from './catalog'
 import type { Effort, ModelBrand, Subscription } from './models'
 
@@ -104,13 +104,30 @@ export interface McpServerStatus {
 export type AccountId = 'claude' | 'codex' | (string & {})
 
 /** An ACP agent added in Settings: any command that speaks the Agent Client Protocol on stdio. */
-export interface CustomAcpAgent {
+/** An ACP agent added in Settings: a library entry, or a custom agent with its own command. */
+export interface AcpAgentConfig {
   id: string
   /** Shown in Settings and the subscription picker. Also keys saved chats. */
   name: string
   command: string
   args: string[]
   env: Record<string, string>
+  /** ID of the AcpLibrary entry this agent runs; the fields above then come from the library. */
+  library?: string
+  /** The ACP registry entry this agent was installed from. */
+  registry?: { id: string; version: string; description?: string }
+}
+
+/** An agent in the public ACP registry that can run on this computer. */
+export interface AcpRegistryAgent {
+  id: string
+  name: string
+  version: string
+  description: string
+  icon?: string
+  website?: string
+  /** How it runs here: a downloaded binary, or a package fetched by npx or uvx. */
+  distribution: 'binary' | 'npx' | 'uvx'
 }
 
 /** One model's token and cost totals for one local day. */
@@ -242,8 +259,8 @@ export interface Settings {
   accounts: Record<AccountId, AccountSettings>
   /** Master switch for the agents reached over the Agent Client Protocol. */
   acpEnabled: boolean
-  /** ACP agents the user added in Settings, on top of acp-registry.ts. */
-  customAcpAgents: CustomAcpAgent[]
+  /** ACP agents the user added in Settings, from the library in acp-registry.ts or with their own command. */
+  acpAgents: AcpAgentConfig[]
   mcpServers: McpServerConfig[]
   browserOpenLinks: BrowserLinkTarget
   /** Answers address bar text that is not a URL. */
@@ -626,7 +643,6 @@ export type ChatEvent =
   | { type: 'items-reset'; chatId: string; items: Item[] }
 
 export type UiEvent =
-  | { type: 'antigravity-consent'; requestId: string }
   | { type: 'open-file'; chatId: string; path: string; line?: number }
   | { type: 'open-browser'; chatId: string; tabId?: string; background?: boolean }
   | { type: 'open-browser-tab'; tabId: string; background?: boolean }
@@ -752,40 +768,45 @@ export const SUBSCRIPTION_ACCOUNT: Record<Exclude<Subscription, 'Default'>, Acco
 
 export const SUBSCRIPTIONS: Subscription[] = []
 
-const BUILTIN_ACP = AcpAgents.length
-const RESERVED_NAMES = new Set(['default', 'local', 'openrouter', 'claude', 'claude code', 'codex'])
+export const RESERVED_AGENT_NAMES = new Set(['default', 'local', 'openrouter', 'claude', 'claude code', 'codex'])
 
-/** The registry entry for an ACP agent added in Settings. */
-function customAcpSpec(agent: CustomAcpAgent): AcpAgentSpec {
+/** The Settings entry that adds a library agent. */
+export function libraryAcpAgent(spec: AcpAgentSpec): AcpAgentConfig {
+  return { id: spec.ID, name: spec.DisplayName, command: '', args: [], env: {}, library: spec.ID }
+}
+
+/** The registry entry for a custom ACP agent. */
+function customAcpSpec(agent: AcpAgentConfig): AcpAgentSpec {
   return {
     ID: agent.id,
     DisplayName: agent.name,
-    Description: 'Custom agent.',
+    Description: agent.registry ? (agent.registry.description ?? `From the ACP registry, v${agent.registry.version}.`) : 'Custom agent.',
     Binaries: [agent.command],
     Args: agent.args,
     Env: agent.env,
-    // There is no generic way to ask an arbitrary agent whether it is signed in, so an installed one counts as usable.
-    Keyless: true,
-    Custom: true
+    Custom: true,
+    ...(agent.registry ? { Registry: true } : {})
   }
 }
 
 /**
- * Puts the user's own ACP agents into the registry and the account tables built from it.
+ * Puts the ACP agents added in Settings into AcpAgents and the account tables built from it.
  * The tables are filled in place, so every module that imported them sees the change.
  * Main and renderer call this whenever settings load or change.
  */
-export function applyCustomAcpAgents(custom: CustomAcpAgent[] | undefined): void {
-  const names = new Set([...RESERVED_NAMES, ...AcpAgents.slice(0, BUILTIN_ACP).map((agent) => agent.DisplayName.toLowerCase())])
-  const ids = new Set(AcpAgents.slice(0, BUILTIN_ACP).map((agent) => agent.ID))
-  const added = (custom ?? []).filter((agent) => {
-    const name = agent.name.trim().toLowerCase()
-    if (!name || !agent.command.trim() || names.has(name) || ids.has(agent.id)) return false
+export function applyAcpAgents(agents: AcpAgentConfig[] | undefined): void {
+  const names = new Set(RESERVED_AGENT_NAMES)
+  const ids = new Set<string>()
+  const specs: AcpAgentSpec[] = []
+  for (const agent of agents ?? []) {
+    const spec = agent.library ? AcpLibrary.find((entry) => entry.ID === agent.library) : agent.command.trim() ? customAcpSpec(agent) : undefined
+    const name = spec?.DisplayName.trim().toLowerCase()
+    if (!spec || !name || names.has(name) || ids.has(spec.ID)) continue
     names.add(name)
-    ids.add(agent.id)
-    return true
-  })
-  AcpAgents.splice(BUILTIN_ACP, AcpAgents.length - BUILTIN_ACP, ...added.map(customAcpSpec))
+    ids.add(spec.ID)
+    specs.push(spec)
+  }
+  AcpAgents.splice(0, AcpAgents.length, ...specs)
 
   for (const key of Object.keys(ACCOUNT_LABELS)) delete ACCOUNT_LABELS[key]
   Object.assign(ACCOUNT_LABELS, { claude: 'Claude Code', codex: 'Codex' }, Object.fromEntries(AcpAgents.map((agent) => [agent.ID, agent.DisplayName])))
@@ -796,7 +817,7 @@ export function applyCustomAcpAgents(custom: CustomAcpAgent[] | undefined): void
   SUBSCRIPTIONS.splice(0, SUBSCRIPTIONS.length, 'Default', 'Claude', 'Codex', ...AcpAgents.map((agent) => agent.DisplayName))
 }
 
-applyCustomAcpAgents([])
+applyAcpAgents([])
 
 /** The subscription an account serves, the inverse of SUBSCRIPTION_ACCOUNT. */
 export function accountSubscription(id: AccountId): Subscription | null {

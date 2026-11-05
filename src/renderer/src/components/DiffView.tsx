@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { FileDiff } from '@shared/types'
 import { cn } from '../lib/utils'
 
@@ -38,6 +38,66 @@ export function DiffStat({ added, removed, className }: { added: number; removed
     <span className={cn('inline-flex shrink-0 gap-1.5 font-mono text-[11.5px] tabular-nums', className)}>
       {added > 0 && <span className="text-ok">+{added}</span>}
       {removed > 0 && <span className="text-danger">-{removed}</span>}
+    </span>
+  )
+}
+
+/** Lines a streamed count gathers before it moves, varied a little so the two counts do not tick in step. */
+function nextStep(): number {
+  return 8 + Math.floor(Math.random() * 5)
+}
+
+/**
+ * A streamed count that moves in steps of 8 to 12 rather than on every line, and lands on the exact value once the
+ * edit is done. Counts that go down, as a patch is corrected, follow at once.
+ */
+function useSteppedCount(value: number, live: boolean): number {
+  const [shown, setShown] = useState(value)
+  const step = useRef(nextStep())
+  useEffect(() => {
+    if (!live || value < shown || value - shown >= step.current) {
+      if (value !== shown) setShown(value)
+      step.current = nextStep()
+    }
+  }, [value, live, shown])
+  return shown
+}
+
+/** A number whose digits that change roll up: the old ones leave through the top as the new ones rise in. */
+function RollingNumber({ value }: { value: number }): ReactNode {
+  const [state, setState] = useState({ current: String(value), previous: null as string | null, step: 0 })
+  const text = String(value)
+  if (state.current !== text) setState({ current: text, previous: state.current, step: state.step + 1 })
+  const { current, previous, step } = state
+  // Digits line up from the right, so 98 → 104 rolls only the places that changed.
+  const width = Math.max(current.length, previous?.length ?? 0)
+  const now = current.padStart(width, ' ')
+  const before = (previous ?? current).padStart(width, ' ')
+  return (
+    <>
+      {[...now].map((digit, index) => {
+        const old = before[index]
+        if (previous === null || old === digit) return <span key={`${index}:${digit}`} className={digit === ' ' ? 'hidden' : undefined}>{digit}</span>
+        return (
+          <span key={`${index}:${step}`} className="roll-slot">
+            {old !== ' ' && <span className="roll-out" onAnimationEnd={() => setState((s) => (s.step === step ? { ...s, previous: null } : s))}>{old}</span>}
+            {digit !== ' ' && <span className="roll-in">{digit}</span>}
+          </span>
+        )
+      })}
+    </>
+  )
+}
+
+/** +n -n that follows an edit while it is written, rolling up in steps as lines arrive. */
+export function LiveDiffStat({ added, removed, live = false, className }: { added: number; removed: number; live?: boolean; className?: string }): ReactNode {
+  const plus = useSteppedCount(added, live)
+  const minus = useSteppedCount(removed, live)
+  if (!plus && !minus) return null
+  return (
+    <span className={cn('inline-flex shrink-0 gap-1.5 font-mono text-[11.5px] tabular-nums', className)}>
+      {plus > 0 && <span className="inline-flex text-ok">+<RollingNumber value={plus} /></span>}
+      {minus > 0 && <span className="inline-flex text-danger">-<RollingNumber value={minus} /></span>}
     </span>
   )
 }

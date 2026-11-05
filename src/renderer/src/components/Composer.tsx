@@ -461,11 +461,13 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const { model, subscription, acp } = runConfig
   const models = useStore((s) => s.models)
   const pickModel = useStore((s) => s.pickModel)
+  const setAcpOption = useStore((s) => s.setAcpOption)
   const setRunOptions = useStore((s) => s.setRunOptions)
   const [usageBubble, setUsageBubble] = useState<string | null>(null)
   const chatId = useChatId()
-  // Ask and Plan are enforced by Galaxy Code's own tools, so only models that run on them offer them.
-  const modesAvailable = usesGalaxyTools(model?.subscription)
+  // Galaxy Code's own tools enforce the modes; ACP agents take Ask and Plan as their own modes and multitask with Galaxy's Agent tool.
+  const galaxyTools = usesGalaxyTools(model?.subscription)
+  const modesAvailable = galaxyTools || !!acp
   // The error that stopped the last run stays above the box, with no Continue or Commit chips beside it, until it is dismissed or a message is sent.
   const [dismissedError, setDismissedError] = useState<string | null>(null)
   const errorKey = chat?.error ? `${chat.id}:${chat.updatedAt}:${chat.error}` : null
@@ -474,7 +476,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const setComposerMode = useStore((s) => s.setComposerMode)
   const mode = modesAvailable ? storedMode : undefined
   // /compact summarizes a Galaxy model's history; account and ACP agents keep their own context.
-  const canCompact = !edit && !!chat && modesAvailable
+  const canCompact = !edit && !!chat && galaxyTools
   const compactChat = (): void => {
     if (!chat) return
     void window.galaxy.chats.compact(chat.id).catch((error: unknown) => useStore.getState().notify(String(error instanceof Error ? error.message : error), 'error'))
@@ -624,6 +626,23 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         ...(!edit && SIDE_COMMANDS.some((command) => command.startsWith(mention.query.toLowerCase()))
           ? [{ id: 'command:side', kind: 'command' as const, name: 'Side Chat', detail: 'Open a side chat in the panel. It is deleted when closed.' }]
           : []),
+        // An ACP agent's own modes and models, from the options it reports.
+        ...(acp?.options ?? [])
+          .filter((option) => option.category === 'mode' || option.category === 'model')
+          .flatMap((option) => option.options.map((choice) => ({ option, choice })))
+          .filter(({ choice }) => !mention.query || `${choice.name} ${choice.value}`.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase().includes(mention.query.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase()))
+          .sort((a, b) => (a.option.category === 'mode' ? 0 : 1) - (b.option.category === 'mode' ? 0 : 1))
+          .map(({ option, choice }) => {
+            const selected = (acp?.values[option.id] ?? option.currentValue) === choice.value
+            return {
+              id: `acp:${option.id}:${choice.value}`,
+              kind: option.category === 'mode' ? ('mode' as const) : ('model' as const),
+              name: choice.name,
+              detail: selected ? `${option.name} · Selected` : (choice.description ?? `Switch ${option.name.toLowerCase()}`),
+              acpOption: option.id,
+              acpValue: choice.value
+            }
+          }),
         ...models
           .filter((entry) => !acp && entry.enabled && entry.subscription === subscription &&
             (!mention.query || `${entry.name} ${entry.id}`.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase().includes(mention.query.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase())))
@@ -686,6 +705,11 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
 
   const chooseMention = (entry: MentionEntry): void => {
     if (entry.disabled) return
+    if (entry.acpOption && entry.acpValue !== undefined) {
+      replaceMention('')
+      setAcpOption(entry.acpOption, entry.acpValue, chatId)
+      return
+    }
     if (entry.kind === 'model' && entry.modelKey) {
       pickModel(entry.modelKey, chatId)
       replaceMention('')
@@ -1202,11 +1226,11 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
           <div className="composer-options flex min-w-0 flex-wrap items-center gap-0.5">
             <AddMenu onAdd={insertMention} />
             {mode && <ModeChip mode={mode} onClear={() => { setComposerMode(key, undefined); textarea.current?.focus() }} />}
-            {/* ACP agents bring their own session options, which take the place of the access mode and model pickers. */}
+            {/* ACP agents bring their own session options. The model picker shows their model and effort; the rest sit here. */}
             {acp && <AcpOptions />}
           </div>
           <div className="composer-actions ml-auto flex min-w-0 max-w-full items-center">
-            {!acp && <span ref={modelSlot} className="composer-model flex min-w-0 items-center"><ModelPicker noUltra={mode === 'multitask'} /></span>}
+            <span ref={modelSlot} className="composer-model flex min-w-0 items-center"><ModelPicker noUltra={mode === 'multitask'} /></span>
             {running && !canSend ? (
               <button
                 type="button"
@@ -1406,6 +1430,9 @@ interface MentionEntry {
   /** Shown but not selectable; `detail` says why. */
   disabled?: boolean
   modelKey?: string
+  /** An ACP session option and the value this entry sets it to. */
+  acpOption?: string
+  acpValue?: string
   brand?: ModelBrand
   git?: GitCommand
   name: string

@@ -1,19 +1,22 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import { AcpAgents, type AcpAgentSpec } from '@shared/acp-registry'
-import { ACCOUNT_LABELS, type AccountId, type AcpConfigChoice, type AcpConfigOption, type FileDiff, type TaskEntry, type ToolItem, type ToolKind, type ToolMeta } from '@shared/types'
+import { ACCOUNT_LABELS, type AccountId, type AgentMode, type AcpConfigChoice, type AcpConfigOption, type FileDiff, type TaskEntry, type ToolItem, type ToolKind, type ToolMeta } from '@shared/types'
 import { commandPrefix, gate } from '../agent/approval'
 import { gatherContext, inlineMentionsBlock } from '../agent/prompt'
 import { TurnWriter, type Session, type Turn } from '../agent/session'
-import { bridge, BRIDGE_SERVER_NAME, type BridgeHandle } from '../services/bridge'
-import { confirmAntigravityUse } from '../services/antigravityConsent'
+import { bridge, BRIDGE_SERVER_NAME, bridgeStdioCommand, type BridgeHandle } from '../services/bridge'
+import { installedRegistryLaunch, registryLaunch } from '../services/acpRegistry'
 import { store } from '../store'
-import { BRIDGE_TOOLS, type ToolEnv } from '../tools'
+import { ALL_TOOLS, type ToolDef, type ToolEnv } from '../tools'
 import { makeDiff } from '../tools/diff'
 import { displayPath, errorMessage, isImagePath, oneLine, resolvePath, truncateEnd, which } from '../util'
 import { RpcError, RpcProcess } from './jsonrpc'
 
 type Json = Record<string, unknown>
+
+/** Every Galaxy Code tool, lent to ACP agents, which pick between them and their own. */
+const ACP_TOOLS: ToolDef[] = ALL_TOOLS
 
 export function acpAgent(id: AccountId): AcpAgentSpec | null {
   return AcpAgents.find((agent) => agent.ID === id) ?? null
@@ -48,28 +51,35 @@ function modeAtLaunch(agent: AcpAgentSpec): boolean {
 export async function acpBinary(id: AccountId): Promise<string | null> {
   const configured = store.settings.accounts[id]?.binaryPath.trim()
   if (configured) return which(configured)
-  for (const name of acpAgent(id)?.Binaries ?? []) {
+  const agent = acpAgent(id)
+  for (const name of agent?.Binaries ?? []) {
     const found = await which(name)
     if (found) return found
   }
-  if (id === 'antigravity') return which(process.platform === 'win32' ? 'npx.cmd' : 'npx')
+  if (agent?.Runner) return which(process.platform === 'win32' && agent.Runner.Command === 'npx' ? 'npx.cmd' : agent.Runner.Command)
+  if (agent?.RegistryId) return (await installedRegistryLaunch(agent.RegistryId))?.command ?? null
   return null
 }
 
-/** Use a pinned community adapter when it has not been installed globally. */
-export async function acpLaunch(id: AccountId, mode: Turn['permissionMode']): Promise<{ command: string; args: string[]; env: NodeJS.ProcessEnv }> {
-  if (id === 'antigravity') await confirmAntigravityUse()
-  const agent = requireAgent(id)
+/** The command that starts an agent's CLI: its own binary, or the registry's package runner with its pinned release. */
+export async function acpCommand(id: AccountId): Promise<{ command: string; prefix: string[] } | null> {
   const command = await acpBinary(id)
-  if (!command) throw new Error(`${agent.DisplayName} CLI was not found. Install it or set its path in Settings → ACP agents.`)
-  if (id === 'antigravity' && /^agy_acp_server(?:\.par|\.exe)?$/i.test(basename(command))) {
-    throw new Error('Antigravity now uses the unofficial agy-acp adapter. Clear the old CLI path in Settings → ACP agents to use the bundled launch command, or set it to an agy-acp executable.')
-  }
+  if (!command) return null
+  const runner = acpAgent(id)?.Runner
+  const viaRunner = !store.settings.accounts[id]?.binaryPath.trim() && runner && basename(command).replace(/\.cmd$/i, '') === runner.Command
+  return { command, prefix: viaRunner ? runner.Args : [] }
+}
+
+export async function acpLaunch(id: AccountId, mode: Turn['permissionMode']): Promise<{ command: string; args: string[]; env: NodeJS.ProcessEnv }> {
+  const agent = requireAgent(id)
   const launch = launchFor(agent, mode)
-  if (id === 'antigravity' && /^npx(?:\.cmd)?$/i.test(basename(command))) {
-    launch.args = ['--yes', 'agy-acp@0.5.2', ...launch.args]
+  if (agent.RegistryId && !store.settings.accounts[id]?.binaryPath.trim()) {
+    const release = await registryLaunch(agent.RegistryId)
+    return { command: release.command, args: [...release.args, ...launch.args], env: { ...launch.env, ...release.env } }
   }
-  return { command, ...launch }
+  const found = await acpCommand(id)
+  if (!found) throw new Error(`${agent.DisplayName} CLI was not found. Install it${agent.Runner ? ` or ${agent.Runner.Command}` : ''}, or set its path in Settings → ACP agents.`)
+  return { command: found.command, args: [...found.prefix, ...launch.args], env: launch.env }
 }
 
 // Session config options
@@ -77,6 +87,12 @@ export async function acpLaunch(id: AccountId, mode: Turn['permissionMode']): Pr
 /** Option ids that came from the older `models` / `modes` session fields, which have their own setters. */
 const LEGACY_MODEL = 'model'
 const LEGACY_MODE = 'mode'
+
+/** Agents can list a choice in more than one group, such as Recent and its provider; it is offered once, where it first appears. */
+function uniqueChoices(choices: AcpConfigChoice[]): AcpConfigChoice[] {
+  const seen = new Set<string>()
+  return choices.filter((choice) => !seen.has(choice.value) && !!seen.add(choice.value))
+}
 
 function choicesOf(raw: unknown): AcpConfigChoice[] {
   const out: AcpConfigChoice[] = []
@@ -107,7 +123,7 @@ function optionsOf(result: Json): { options: AcpConfigOption[]; legacy: Set<stri
         ...(option.description ? { description: String(option.description) } : {}),
         category: typeof option.category === 'string' ? option.category : null,
         currentValue: String(option.currentValue ?? ''),
-        options: choicesOf(option.options)
+        options: uniqueChoices(choicesOf(option.options))
       }))
       .filter((option) => option.id && option.options.length > 0)
     return { options, legacy }
@@ -121,7 +137,7 @@ function optionsOf(result: Json): { options: AcpConfigOption[]; legacy: Set<stri
       name: 'Model',
       category: 'model',
       currentValue: String(models.currentModelId ?? ''),
-      options: (models.availableModels as Json[]).map((m) => ({ value: String(m.modelId ?? ''), name: String(m.name ?? m.modelId ?? ''), ...(m.description ? { description: String(m.description) } : {}) }))
+      options: uniqueChoices((models.availableModels as Json[]).map((m) => ({ value: String(m.modelId ?? ''), name: String(m.name ?? m.modelId ?? ''), ...(m.description ? { description: String(m.description) } : {}) })))
     })
   }
   const modes = result.modes as Json | undefined
@@ -159,6 +175,23 @@ async function applyConfig(connection: Connection, sessionId: string, wanted: Re
 const probes = new Map<string, Promise<AcpConfigOption[]>>()
 
 /**
+ * Sign-in state an ACP agent has shown: false after it asked for sign-in, true after a sign-in through Galaxy Code.
+ * Agents have no standard way to report it up front, so Settings shows what was last seen.
+ */
+export const acpSignedIn = new Map<AccountId, boolean>()
+
+function isAuthError(err: unknown): boolean {
+  return err instanceof RpcError && (err.code === -32000 || /auth/i.test(err.message))
+}
+
+/** Records a sign-in request and turns it into a message that says where to sign in. */
+function signInError(id: AccountId, err: unknown): unknown {
+  if (!isAuthError(err)) return err
+  acpSignedIn.set(id, false)
+  return new Error(`${ACCOUNT_LABELS[id]} is not signed in. Open Settings → ACP agents and sign in, then try again.`)
+}
+
+/**
  * The options an agent offers before any chat exists, read from a throwaway
  * session. Cached per agent until `fresh` is set.
  */
@@ -171,7 +204,10 @@ export function probeAcpOptions(id: AccountId, cwd: string, fresh = false): Prom
     try {
       await rpc.request('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'galaxy-code', title: 'Galaxy Code', version: '0.1.0' } }, id === 'antigravity' ? 180000 : 30000)
       const opened = await rpc.request<Json>('session/new', { cwd, mcpServers: [] }, 60000)
+      acpSignedIn.set(id, true)
       return optionsOf(opened).options
+    } catch (err) {
+      throw signInError(id, err)
     } finally {
       rpc.kill()
     }
@@ -214,10 +250,15 @@ export function disposeAllAcp(): void {
   for (const id of [...connections.keys()]) disposeAcp(id)
 }
 
-function mcpServerList(capabilities: Json): Json[] {
+function mcpServerList(bridgeUrl: string, capabilities: Json): Json[] {
   const mcpCaps = (capabilities.mcpCapabilities ?? {}) as Json
   const servers: Json[] = []
-  // ACP agents run on their own tools; Galaxy Code's bridge is not offered to them.
+  if (mcpCaps.http) servers.push({ type: 'http', name: BRIDGE_SERVER_NAME, url: bridgeUrl, headers: [] })
+  else {
+    // Every ACP agent takes stdio servers; those without HTTP reach the bridge through a relay.
+    const relay = bridgeStdioCommand(bridgeUrl)
+    servers.push({ name: BRIDGE_SERVER_NAME, command: relay.command, args: relay.args, env: Object.entries(relay.env).map(([name, value]) => ({ name, value })) })
+  }
   for (const config of store.settings.mcpServers) {
     if (!config.enabled) continue
     if (config.transport === 'stdio' && config.command) {
@@ -251,7 +292,7 @@ async function connect(account: AccountId, session: Session, env: ToolEnv, mode:
 
   const label = ACCOUNT_LABELS[account]
   const launch = await acpLaunch(account, mode)
-  const handle = await bridge.register(BRIDGE_TOOLS, env)
+  const handle = await bridge.register(ACP_TOOLS, env)
   const rpc = new RpcProcess({
     command: launch.command,
     args: launch.args,
@@ -321,7 +362,7 @@ function titleFor(kindName: string, rawTitle: string, path: string): string {
   return title
 }
 
-const BRIDGE_TOOL_NAMES = BRIDGE_TOOLS.map((t) => t.name).join('|')
+const BRIDGE_TOOL_NAMES = ACP_TOOLS.map((t) => t.name).join('|')
 const BRIDGE_TITLE = new RegExp(`^(?:mcp__)?${BRIDGE_SERVER_NAME}(?:__|[_.:/ ])(?:${BRIDGE_TOOL_NAMES})$`, 'i')
 
 /**
@@ -355,6 +396,25 @@ function contentOf(update: Json, cwd: string): { output?: string; diffs?: FileDi
     output: texts.length ? truncateEnd(texts.join('\n'), 60000) : undefined,
     diffs: diffs.length ? diffs : undefined
   }
+}
+
+const MODE_PATTERNS: Record<'ask' | 'plan', RegExp> = {
+  plan: /plan/i,
+  ask: /\b(ask|chat|read[\s_-]?only|question)/i
+}
+
+/** For agents with no Ask or Plan mode of their own. */
+const MODE_NOTES: Record<AgentMode, string> = {
+  multitask: '<mode>Multitask: split this request into independent tasks and give each to its own subagent with the galaxy Agent tool, all in one turn so they run in parallel. Then collect their reports with the galaxy Message tool (action wait) and answer from them.</mode>',
+  ask: '<mode>Ask: answer with read-only actions. Do not create, edit or delete files, and do not run commands that change anything.</mode>',
+  plan: '<mode>Plan: research and write a plan for this request before building it. Do not change project files; give the plan in your reply.</mode>'
+}
+
+/** The agent's own session mode that matches Galaxy Code's Ask or Plan, if it has one. */
+function agentModeFor(options: AcpConfigOption[], mode: 'ask' | 'plan'): { option: string; value: string } | null {
+  const option = options.find((entry) => entry.category === 'mode' || entry.id === LEGACY_MODE)
+  const choice = option?.options.find((entry) => MODE_PATTERNS[mode].test(entry.value) || MODE_PATTERNS[mode].test(entry.name))
+  return option && choice ? { option: option.id, value: choice.value } : null
 }
 
 /** Runs a turn through a CLI that speaks the Agent Client Protocol. */
@@ -559,7 +619,7 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
   // Session setup
 
   if (!connection.sessionId) {
-    const servers = mcpServerList(connection.capabilities)
+    const servers = mcpServerList(connection.handle.url, connection.capabilities)
     const saved = session.doc.engine.acpAccount === account ? session.doc.engine.acpSessionId : undefined
     const open = async (): Promise<Json & { sessionId?: string }> => {
       if (saved && connection.capabilities.loadSession) {
@@ -578,11 +638,9 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
     let opened: Json & { sessionId?: string }
     try {
       opened = await open()
+      acpSignedIn.set(account, true)
     } catch (err) {
-      if (err instanceof RpcError && (err.code === -32000 || /auth/i.test(err.message))) {
-        throw new Error(`${label} is not signed in. Open Settings → ACP agents and sign in, then try again.`)
-      }
-      throw err
+      throw signInError(account, err)
     }
     if (!opened.sessionId) throw new Error(`${label} did not return a session`)
     connection.sessionId = opened.sessionId
@@ -599,6 +657,16 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
     disposeAcp(session.id)
     throw new Error(`Could not apply the ${label} session options: ${errorMessage(err)}`)
   }
+  // Ask and Plan switch the agent to its own matching mode for this turn, or, when it has none, go along as instructions.
+  const modeSwitch = turn.mode === 'ask' || turn.mode === 'plan' ? agentModeFor(connection.options, turn.mode) : null
+  if (modeSwitch) {
+    try {
+      await applyConfig(connection, sessionId, { [modeSwitch.option]: modeSwitch.value })
+    } catch (err) {
+      throw new Error(`Could not switch ${label} to ${turn.mode === 'ask' ? 'Ask' : 'Plan'} mode: ${errorMessage(err)}`)
+    }
+  }
+  const modeNote = turn.mode && !modeSwitch ? MODE_NOTES[turn.mode] : ''
   session.patchChat({ acpOptions: connection.options })
   store.touchDoc(session.id)
 
@@ -616,7 +684,7 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
     others.push(attachment.path)
   }
   const note = others.length ? `\n\nAttached files:\n${others.map((p) => `- ${p}`).join('\n')}` : ''
-  prompt.unshift({ type: 'text', text: inlineMentionsBlock(turn.mentions) + '\n\n' + (turn.text || 'See the attached files.') + note })
+  prompt.unshift({ type: 'text', text: [inlineMentionsBlock(turn.mentions), modeNote, (turn.text || 'See the attached files.') + note].filter(Boolean).join('\n\n') })
 
   const onAbort = (): void => rpc.notify('session/cancel', { sessionId })
   turn.signal.addEventListener('abort', onAbort, { once: true })
@@ -634,9 +702,7 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
     else if (result.stopReason === 'max_turn_requests') session.notice('error', `${label} reached its step limit. Send a message to continue.`)
   } catch (err) {
     if (!turn.signal.aborted) {
-      failure = err instanceof RpcError && (err.code === -32000 || /auth/i.test(err.message))
-        ? `${label} is not signed in. Open Settings → ACP agents and sign in, then try again.`
-        : errorMessage(err)
+      failure = errorMessage(signInError(account, err))
     }
   } finally {
     turn.signal.removeEventListener('abort', onAbort)

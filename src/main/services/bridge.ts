@@ -23,6 +23,43 @@ export interface BridgeHandle {
 export const BRIDGE_SERVER_NAME = 'galaxy'
 
 /**
+ * Relays MCP between stdio and the bridge's HTTP endpoint, for clients that only start stdio servers. Each line on
+ * stdin is posted as is; a JSON reply, or each event of a streamed one, goes back as a line on stdout.
+ */
+const STDIO_PROXY = `
+const url = process.argv[1]
+const reply = (text) => { if (text.trim()) process.stdout.write(text.trim() + '\\n') }
+const post = async (line) => {
+  try {
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }, body: line })
+    const body = await res.text()
+    if ((res.headers.get('content-type') || '').includes('text/event-stream')) {
+      for (const event of body.split(/\\r?\\n\\r?\\n/)) reply(event.split(/\\r?\\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trimStart()).join('\\n'))
+    } else reply(body)
+  } catch (err) {
+    const id = (() => { try { return JSON.parse(line).id } catch { return undefined } })()
+    if (id !== undefined) reply(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32603, message: String(err && err.message || err) } }))
+  }
+}
+let buffered = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  buffered += chunk
+  let end
+  while ((end = buffered.indexOf('\\n')) >= 0) {
+    const line = buffered.slice(0, end).trim()
+    buffered = buffered.slice(end + 1)
+    if (line) void post(line)
+  }
+})
+`
+
+/** Starts a stdio MCP server that forwards to a bridge URL, using the app's own runtime as Node. */
+export function bridgeStdioCommand(url: string): { command: string; args: string[]; env: Record<string, string> } {
+  return { command: process.execPath, args: ['-e', STDIO_PROXY, url], env: { ELECTRON_RUN_AS_NODE: '1' } }
+}
+
+/**
  * A loopback MCP server that lends Galaxy Code's own tools (Browser, Ask, Task,
  * Present, Open, Memory, ImageGeneration) to account CLIs. Each chat gets a
  * private URL; calls arriving on it run through the same tool runtime as the
