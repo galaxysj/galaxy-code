@@ -1,6 +1,6 @@
 import { ChevronDown } from 'lucide-react'
 import { useCallback, useRef, useState, type ReactNode } from 'react'
-import { availableSubscriptions, canUseChatSubscription } from '@shared/catalog'
+import { availableSubscriptions } from '@shared/catalog'
 import { cn } from '../lib/utils'
 import { useActiveChat, useChatId, useRunConfig, useStore } from '../store'
 import { SUBSCRIPTION_LABELS } from './ModelPicker'
@@ -19,18 +19,11 @@ export function SubscriptionPicker(): ReactNode {
   const pickSubscription = useStore((s) => s.pickSubscription)
   const chatId = useChatId()
   const refresh = useStore((s) => s.refreshAccounts)
-  const subscriptions = availableSubscriptions(settings, statuses).filter((entry) => canUseChatSubscription(chat, entry))
+  const subscriptions = availableSubscriptions(settings, statuses)
+  // A chat can move to another harness between turns; the next turn hands it the conversation so far.
+  const busy = chat?.status === 'running' || chat?.status === 'awaiting'
   const close = useCallback(() => setOpen(false), [])
   const label = subscription ? (SUBSCRIPTION_LABELS[subscription] ?? subscription) : 'Subscription'
-
-  // A chat keeps the provider it started with.
-  if (chat)
-    return (
-      <div className="flex h-7 min-w-0 max-w-[150px] items-center gap-1.5 px-2 text-[12.5px] text-muted">
-        <SubscriptionIcon subscription={subscription} />
-        <span className="truncate">{label}</span>
-      </div>
-    )
 
   return (
     <>
@@ -40,12 +33,13 @@ export function SubscriptionPicker(): ReactNode {
         aria-label="Subscription"
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Choose a subscription"
+        title={busy ? 'Switch providers once this turn ends' : 'Choose a subscription'}
+        disabled={busy}
         onClick={() => {
           setOpen(!open)
           if (!open) void refresh()
         }}
-        className={cn('flex h-7 min-w-0 max-w-[150px] items-center gap-1.5 rounded-lg px-2 text-[12.5px] text-muted transition-colors hover:bg-hover hover:text-fg', open && 'bg-hover text-fg')}
+        className={cn('flex h-7 min-w-0 max-w-[150px] items-center gap-1.5 rounded-lg px-2 text-[12.5px] text-muted transition-colors hover:bg-hover hover:text-fg disabled:pointer-events-none', open && 'bg-hover text-fg')}
       >
         <SubscriptionIcon subscription={subscription} />
         <span className="truncate">{label}</span>

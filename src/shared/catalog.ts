@@ -83,13 +83,6 @@ export function usesGalaxyTools(subscription: Subscription | null | undefined): 
   return subscription === 'Default' || subscription === 'Codex'
 }
 
-/** Existing chats stay within the native engines or their original ACP agent. */
-export function canUseChatSubscription(chat: { modelKey: string; initialSubscription?: Subscription } | null | undefined, subscription: Subscription): boolean {
-  if (!chat) return true
-  const initial = chat.initialSubscription ?? chat.modelKey.split(':', 1)[0]
-  return initial === subscription
-}
-
 function pickDefaultEffort(spec: AgentModelSpec): Effort | null {
   if (spec.Efforts.length === 0) return null
   if (spec.DefaultEffort && spec.Efforts.includes(spec.DefaultEffort)) return spec.DefaultEffort
@@ -221,8 +214,8 @@ export function findModel(models: ResolvedModel[], key: string | null | undefine
 }
 
 /** An account is usable only when its own switch is on, and for ACP agents the ACP switch too. */
-export function accountEnabled(settings: Pick<Settings, 'accounts' | 'acpEnabled'>, id: AccountId): boolean {
-  if (settings.accounts[id]?.enabled === false) return false
+export function accountEnabled(settings: Pick<Settings, 'accounts' | 'acpEnabled' | 'removedAccounts'>, id: AccountId): boolean {
+  if (settings.accounts[id]?.enabled === false || settings.removedAccounts?.includes(id)) return false
   return settings.acpEnabled !== false || !ACP_ACCOUNTS.includes(id)
 }
 
@@ -230,7 +223,7 @@ export function accountEnabled(settings: Pick<Settings, 'accounts' | 'acpEnabled
  * Galaxy uses the native engine. Claude Code and Codex require confirmed sign-in. ACP agents mostly cannot report
  * theirs up front, so they count as usable until they ask for sign-in, except keyless ones, which always run.
  */
-export function availableSubscriptions(settings: Pick<Settings, 'accounts' | 'acpEnabled'>, statuses: AccountStatus[]): Subscription[] {
+export function availableSubscriptions(settings: Pick<Settings, 'accounts' | 'acpEnabled' | 'removedAccounts'>, statuses: AccountStatus[]): Subscription[] {
   return SUBSCRIPTIONS.filter((subscription) => {
     if (subscription === 'Default') return true
     const id = SUBSCRIPTION_ACCOUNT[subscription]

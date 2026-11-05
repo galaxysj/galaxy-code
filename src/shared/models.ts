@@ -65,9 +65,13 @@ export interface AccountUtilityModelSpec extends UtilityModelSpec {
   Subscription: 'Default' | 'Claude' | 'Codex'
 }
 
-/** Entries whose connection is available: OpenRouter ones always, account ones while that account is on. */
-export function usableUtilityModels<T extends AccountUtilityModelSpec>(models: T[], accounts: Record<string, { enabled: boolean } | undefined>): T[] {
-  return models.filter((model) => model.Subscription === 'Default' || accounts[model.Subscription === 'Claude' ? 'claude' : 'codex']?.enabled)
+/** Entries whose connection is available: OpenRouter ones always, account ones while that account is on and not removed. */
+export function usableUtilityModels<T extends AccountUtilityModelSpec>(models: T[], accounts: Record<string, { enabled: boolean } | undefined>, removed: readonly string[] = []): T[] {
+  return models.filter((model) => {
+    if (model.Subscription === 'Default') return true
+    const id = model.Subscription === 'Claude' ? 'claude' : 'codex'
+    return accounts[id]?.enabled && !removed.includes(id)
+  })
 }
 
 export function utilityModelLabel(model: AccountUtilityModelSpec): string {

@@ -328,7 +328,8 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onTextChange, o
   // Inline edit
 
   const accounts = useStore((s) => s.settings.accounts)
-  const modelId = usableUtilityModels(InlineModel, accounts).some((m) => m.ID === inlineModelId) ? (inlineModelId as string) : InlineModel[0].ID
+  const removedAccounts = useStore((s) => s.settings.removedAccounts)
+  const modelId = usableUtilityModels(InlineModel, accounts, removedAccounts).some((m) => m.ID === inlineModelId) ? (inlineModelId as string) : InlineModel[0].ID
 
   /** Puts the code back to how it was before the edit started and removes everything the edit drew. */
   const restore = (): void => {
@@ -614,7 +615,8 @@ export function InlineEditBox({
     if (!proposal) input.current?.focus()
   }, [proposal])
   const accounts = useStore((s) => s.settings.accounts)
-  const models = usableUtilityModels(InlineModel, accounts)
+  const removedAccounts = useStore((s) => s.settings.removedAccounts)
+  const models = usableUtilityModels(InlineModel, accounts, removedAccounts)
   const model = models.find((m) => m.ID === modelId) ?? InlineModel[0]
   return (
     <div

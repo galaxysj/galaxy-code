@@ -1,4 +1,4 @@
-import { accountEnabled, canUseChatSubscription, usesGalaxyTools, effectiveEffort, findModel, normalizeEffort, resolveModels } from '@shared/catalog'
+import { accountEnabled, usesGalaxyTools, effectiveEffort, findModel, normalizeEffort, resolveModels } from '@shared/catalog'
 import {
   ACCOUNT_LABELS,
   ACP_ACCOUNTS,
@@ -14,6 +14,7 @@ import {
   type QueuedMessage,
   type ResolvedModel,
   type SendInput,
+  type Subscription,
   type UiEvent,
   type UserItem,
   type WorktreeInfo,
@@ -150,8 +151,11 @@ class ChatManager {
     if (patch.title !== undefined) allowed.title = patch.title.trim().slice(0, 120) || session.chat.title
     if (patch.permissionMode !== undefined) allowed.permissionMode = patch.permissionMode
     if (patch.modelKey !== undefined) {
-      if (!canUseChatSubscription(session.chat, patch.modelKey.split(':', 1)[0])) {
-        throw new Error('This chat cannot switch to that provider. Start a new chat to use it.')
+      const from = session.chat.modelKey.split(':', 1)[0]
+      const to = patch.modelKey.split(':', 1)[0]
+      if (from !== to) {
+        if (session.chat.status === 'running' || session.chat.status === 'awaiting') throw new Error('Stop the chat before switching to another provider.')
+        this.switchHarness(session, from)
       }
       allowed.modelKey = patch.modelKey
     }
@@ -168,6 +172,17 @@ class ChatManager {
     }
     session.patchChat(allowed)
     return session.chat
+  }
+
+  /**
+   * Moves a chat onto another harness. The old one's session cannot be carried over, so it is dropped and the next turn
+   * hands the new harness the whole conversation so far: messages, tool calls with their results, and file changes.
+   */
+  private switchHarness(session: Session, from: string): void {
+    Object.assign(session.doc.engine, { history: undefined, claudeSessionId: undefined, codexThreadId: undefined, acpSessionId: undefined, acpAccount: undefined, forkClaude: undefined, replay: { from } })
+    disposeCodex(session.id)
+    disposeAcp(session.id)
+    store.flushDocs()
   }
 
   markRead(chatId: string): void {
@@ -531,7 +546,8 @@ class ChatManager {
     // A turn an event resumed still runs in its mode, but its message shows no mode label.
     const userItem = session.add<UserItem>({ kind: 'user', text, ...(extra.event ? { event: extra.event } : {}), attachments, prompt: mentions, ...(mentions.chips?.length ? { mentions: mentions.chips } : {}), ...(mode && !extra.event ? { mode } : {}), ...(extra.plan ? { plan: extra.plan } : {}) })
     // Earlier conversation for an agent whose session was reset by a revert.
-    const replay = session.doc.engine.replay ? replayTranscript(session.doc.items.slice(0, -1)) : ''
+    const pending = session.doc.engine.replay
+    const replay = !pending ? '' : pending === true ? replayTranscript(session.doc.items.slice(0, -1)) : handoffTranscript(session.doc.items.slice(0, -1), pending.from)
     const parent = this.parentContext(session)
     // The main chat's attachments go along as real attachments, so images can be seen too.
     const shared = parent.attachments.filter((file) => !attachments.some((own) => own.path === file.path))
@@ -695,6 +711,14 @@ function parentTranscript(items: Item[]): string {
 function replayTranscript(items: Item[]): string {
   const lines = transcriptLines(items)
   return lines ? `<earlier_conversation>\nThe user reverted later messages. This is the conversation up to this point:\n\n${lines}\n</earlier_conversation>` : ''
+}
+
+/** What a harness the chat moved to is told about the conversation it did not see. */
+function handoffTranscript(items: Item[], from: string): string {
+  const text = parentTranscript(items.filter((item) => !item.parentId || item.kind === 'tool'))
+  if (!text) return ''
+  const label = from === 'Default' ? 'Galaxy' : (ACCOUNT_LABELS[SUBSCRIPTION_ACCOUNT[from as Exclude<Subscription, 'Default'>]] ?? from)
+  return `<earlier_conversation>\nThe user moved this chat to you from ${label}. Everything below happened before you joined; the files on disk already include its changes. Continue from here.\n\n${text}\n</earlier_conversation>`
 }
 
 export const manager = new ChatManager()

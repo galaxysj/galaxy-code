@@ -422,7 +422,8 @@ function TerminalPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean })
     if (!output?.exited) setAsk((current) => current ?? { instruction: '', busy: false, error: '' })
   }
   const accounts = useStore((s) => s.settings.accounts)
-  const modelId = usableUtilityModels(InlineModel, accounts).some((m) => m.ID === inlineModelId) ? (inlineModelId as string) : InlineModel[0].ID
+  const removedAccounts = useStore((s) => s.settings.removedAccounts)
+  const modelId = usableUtilityModels(InlineModel, accounts, removedAccounts).some((m) => m.ID === inlineModelId) ? (inlineModelId as string) : InlineModel[0].ID
 
   const generate = async (): Promise<void> => {
     if (!ask || !ask.instruction.trim() || ask.busy) return

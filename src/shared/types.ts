@@ -264,6 +264,8 @@ export interface Settings {
   acpEnabled: boolean
   /** ACP agents the user added in Settings, from the library in acp-registry.ts or with their own command. */
   acpAgents: AcpAgentConfig[]
+  /** Built-in agents removed in Settings, Claude Code or Codex; their account settings are kept for when they come back. */
+  removedAccounts?: AccountId[]
   mcpServers: McpServerConfig[]
   browserOpenLinks: BrowserLinkTarget
   /** Answers address bar text that is not a URL. */

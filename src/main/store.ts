@@ -18,8 +18,11 @@ export interface EngineState {
   sessionAllow?: string[]
   /** File snapshots around each user message, by user item id. */
   checkpoints?: Record<string, { before: string; after?: string }>
-  /** After a revert the agent's own session no longer matches the chat, so the next turn replays it. */
-  replay?: boolean
+  /**
+   * After a revert the agent's own session no longer matches the chat, so the next turn replays it. After a switch to
+   * another harness it names the one the chat came from, and the next turn hands over the whole conversation.
+   */
+  replay?: boolean | { from: string }
   /** Side chats: how many of the parent chat's items the agent has already been shown. */
   parentSeen?: number
   /** Side chats: the Claude session was copied from the main chat; the first run forks it instead of continuing it. */

@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react'
 import { create } from 'zustand'
-import { AUTO_MODEL, availableSubscriptions, canUseChatSubscription, defaultModel, findModel, needsCredits, normalizeEffort, resolveImageModels, resolveModels } from '@shared/catalog'
+import { AUTO_MODEL, availableSubscriptions, defaultModel, findModel, needsCredits, normalizeEffort, resolveImageModels, resolveModels } from '@shared/catalog'
 import {
   acpAgentFor,
   applyAcpAgents,
@@ -636,7 +636,6 @@ export const useStore = create<State>((set, get) => {
       const id = chatId === undefined ? s.activeChatId : chatId
       const model = findModel(s.models, modelKey)
       if (!model?.enabled || !availableSubscriptions(s.settings, s.accountStatuses).includes(model.subscription)) return
-      if (!canUseChatSubscription(id ? s.chats[id] : null, model.subscription)) return
       prefs.models[model.subscription] = modelKey
       savePrefs(prefs)
       const next = {
@@ -662,7 +661,6 @@ export const useStore = create<State>((set, get) => {
       const s = get()
       const id = chatId === undefined ? s.activeChatId : chatId
       if (!availableSubscriptions(s.settings, s.accountStatuses).includes(subscription)) return
-      if (!canUseChatSubscription(id ? s.chats[id] : null, subscription)) return
       const models = s.models.filter((model) => model.enabled && model.subscription === subscription)
       const current = findModel(s.models, id ? s.chats[id]?.modelKey : s.draft.modelKey)
       const remembered = models.find((model) => model.key === prefs.models[subscription])
