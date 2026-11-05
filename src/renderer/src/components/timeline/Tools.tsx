@@ -632,7 +632,9 @@ function BashTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactNode
 /** A finished edit says what it did: Created, Deleted or Edited, then the file or the file count. */
 function editedTitle(item: ToolItem, diffs: FileDiff[]): string {
   if (!diffs.length) return item.title
-  const verb = diffs.every((diff) => diff.created) ? 'Created' : diffs.every((diff) => diff.deleted) ? 'Deleted' : 'Edited'
+  // Waiting for approval or declined, nothing happened, so it names what it would do: Create, Delete or Edit.
+  const pending = item.status === 'awaiting' || item.status === 'denied'
+  const verb = diffs.every((diff) => diff.created) ? (pending ? 'Create' : 'Created') : diffs.every((diff) => diff.deleted) ? (pending ? 'Delete' : 'Deleted') : pending ? 'Edit' : 'Edited'
   return `${verb} ${diffs.length === 1 ? basename(diffs[0].path) : plural(diffs.length, 'file')}`
 }
 
