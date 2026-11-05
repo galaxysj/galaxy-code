@@ -1251,75 +1251,23 @@ function useAgentEditing(): {
   }
 }
 
-/** Claude, Codex, Cursor, Antigravity, OpenCode and Grok together, with the switch that turns every agent on or off. */
-function SubscriptionsSection(): ReactNode {
+/**
+ * Every agent in one list: Claude, Codex, Cursor, Antigravity, OpenCode and Grok first, then agents from the ACP
+ * registry and custom commands, under the switch that turns them all on or off.
+ */
+function AgentsSection(): ReactNode {
   const settings = useStore((s) => s.settings)
   const update = useStore((s) => s.updateSettings)
   const enabled = settings.acpEnabled !== false
-  const { add, remove } = useAgentEditing()
+  const { agents, add, remove } = useAgentEditing()
+  const [editing, setEditing] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const anchor = useRef<HTMLSpanElement>(null)
   const removedBuiltIns = BUILT_IN_ACCOUNTS.filter((id) => settings.removedAccounts?.includes(id))
   // A custom agent may already use a library agent's name, which keeps that one out.
   const missing = AcpLibrary.filter((entry) => !AcpAgents.some((agent) => agent.ID === entry.ID || agent.DisplayName.toLowerCase() === entry.DisplayName.toLowerCase()))
-  const ids = SUBSCRIPTION_IDS.filter((id) => BUILT_IN_ACCOUNTS.includes(id) ? !removedBuiltIns.includes(id) : AcpAgents.some((agent) => agent.ID === id))
-  const addable = removedBuiltIns.length + missing.length > 0
-
-  return (
-    <Section
-      title="AI subscriptions"
-      description="Coding agents you already pay for or sign in to. Galaxy Code runs them with your own login."
-      action={
-        <div className="flex gap-1.5">
-          <RefreshAccountsButton />
-          {addable && (
-            <span ref={anchor} className="inline-flex">
-              <Button size="sm" onClick={() => setMenuOpen(true)}>
-                <Plus size={13} /> Add
-              </Button>
-            </span>
-          )}
-          <Popover open={menuOpen} onClose={() => setMenuOpen(false)} anchor={anchor} placement="bottom-end" className="w-[240px] p-1">
-            {removedBuiltIns.map((id) => (
-              <MenuItem key={id} icon={<AccountIcon id={id} />} label={ACCOUNT_LABELS[id]} onClick={() => {
-                setMenuOpen(false)
-                void update({ removedAccounts: (settings.removedAccounts ?? []).filter((entry) => entry !== id) })
-              }} />
-            ))}
-            {missing.map((entry) => (
-              <MenuItem key={entry.ID} icon={<AccountIcon id={entry.ID} />} label={entry.DisplayName} hint={entry.Keyless ? 'Free models' : undefined} onClick={() => {
-                setMenuOpen(false)
-                add(libraryAcpAgent(entry))
-              }} />
-            ))}
-          </Popover>
-        </div>
-      }
-    >
-      <Card className="mb-2.5">
-        <RowItem label="Use AI subscriptions" hint="Turns every subscription and agent on this page on or off.">
-          <Switch checked={enabled} onChange={(acpEnabled) => void update({ acpEnabled })} label="Use AI subscriptions" />
-        </RowItem>
-      </Card>
-      {ids.length > 0 ? (
-        <AccountList ids={ids} off={!enabled} acp={{ editor: () => null, edit: () => {}, remove }} />
-      ) : (
-        <div className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center text-[12.5px] text-subtle">No subscriptions yet.</div>
-      )}
-    </Section>
-  )
-}
-
-/** Agents from the public ACP registry and custom commands. */
-function AcpAgentsSection(): ReactNode {
-  const settings = useStore((s) => s.settings)
-  const enabled = settings.acpEnabled !== false
-  const update = useStore((s) => s.updateSettings)
-  const { agents, add, remove } = useAgentEditing()
-  const [editing, setEditing] = useState<string | null>(null)
-  const [menuOpen, setMenuOpen] = useState(false)
-  const anchor = useRef<HTMLSpanElement>(null)
-  const ids = AcpAgents.filter((agent) => !SUBSCRIPTION_IDS.includes(agent.ID)).map((agent) => agent.ID)
+  const subscriptions = SUBSCRIPTION_IDS.filter((id) => BUILT_IN_ACCOUNTS.includes(id) ? !removedBuiltIns.includes(id) : AcpAgents.some((agent) => agent.ID === id))
+  const ids = [...subscriptions, ...AcpAgents.filter((agent) => !SUBSCRIPTION_IDS.includes(agent.ID)).map((agent) => agent.ID)]
 
   const takenBy = (id: string | null): string[] => [
     ...RESERVED_AGENT_NAMES,
@@ -1334,16 +1282,30 @@ function AcpAgentsSection(): ReactNode {
 
   return (
     <Section
-      title="ACP agents"
-      description="Other coding agents reached over the Agent Client Protocol: one from the public registry, or any agent that speaks ACP on stdio."
+      title="AI subscriptions"
+      description="Coding agents you already pay for or sign in to, run with your own login. Add more from the ACP registry, or any agent that speaks ACP on stdio."
       action={
-        <>
+        <div className="flex gap-1.5">
+          <RefreshAccountsButton />
           <span ref={anchor} className="inline-flex">
             <Button size="sm" disabled={!enabled || editing === 'new'} onClick={() => setMenuOpen(true)}>
               <Plus size={13} /> Add agent
             </Button>
           </span>
           <Popover open={menuOpen} onClose={() => setMenuOpen(false)} anchor={anchor} placement="bottom-end" className="w-[300px] p-1">
+            {removedBuiltIns.map((id) => (
+              <MenuItem key={id} icon={<AccountIcon id={id} />} label={ACCOUNT_LABELS[id]} onClick={() => {
+                setMenuOpen(false)
+                void update({ removedAccounts: (settings.removedAccounts ?? []).filter((entry) => entry !== id) })
+              }} />
+            ))}
+            {missing.map((entry) => (
+              <MenuItem key={entry.ID} icon={<AccountIcon id={entry.ID} />} label={entry.DisplayName} hint={entry.Keyless ? 'Free models' : undefined} onClick={() => {
+                setMenuOpen(false)
+                add(libraryAcpAgent(entry))
+              }} />
+            ))}
+            {removedBuiltIns.length + missing.length > 0 && <MenuSeparator />}
             <AcpAddMenu
               onRegistry={(agent) => {
                 setMenuOpen(false)
@@ -1355,9 +1317,14 @@ function AcpAgentsSection(): ReactNode {
               }}
             />
           </Popover>
-        </>
+        </div>
       }
     >
+      <Card className="mb-2.5">
+        <RowItem label="Use AI subscriptions" hint="Turns every agent below on or off.">
+          <Switch checked={enabled} onChange={(acpEnabled) => void update({ acpEnabled })} label="Use AI subscriptions" />
+        </RowItem>
+      </Card>
       {editing === 'new' && (
         <div className="mb-2.5">
           <CustomAcpEditor initial={null} taken={takenBy(null)} onSave={save} onCancel={() => setEditing(null)} />
@@ -1377,7 +1344,7 @@ function AcpAgentsSection(): ReactNode {
           }}
         />
       ) : (
-        editing !== 'new' && <div className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center text-[12.5px] text-subtle">No other agents yet.</div>
+        editing !== 'new' && <div className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center text-[12.5px] text-subtle">No agents yet.</div>
       )}
     </Section>
   )
@@ -2207,8 +2174,7 @@ export function SettingsPage(): ReactNode {
             {section === 'providers' && <ProvidersSection />}
             {section === 'subscriptions' && (
               <>
-                <SubscriptionsSection />
-                <AcpAgentsSection />
+                <AgentsSection />
               </>
             )}
             {section === 'usage' && <UsageSection />}
