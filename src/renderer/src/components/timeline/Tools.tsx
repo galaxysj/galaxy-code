@@ -34,9 +34,9 @@ import {
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { EXPLORE_KINDS, type AskQuestion, type FileDiff, type Item, type ReasoningItem, type TaskEntry, type ToolItem, type ToolKind } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, pageHost, plural, relativeTo } from '../../lib/utils'
-import { attemptedTitle, editStats, isNoChange, isTerminalRead, isToolOutputRead, readPath, thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
+import { attemptedTitle, baseName, editFileStats, editStats, isNoChange, isTerminalRead, isToolOutputRead, readPath, thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
 import { useStore } from '../../store'
-import { DiffStat, DiffView } from '../DiffView'
+import { DiffStat, DiffView, LiveDiffStat } from '../DiffView'
 import { Markdown } from '../Markdown'
 import { FileIcon as FileTypeIcon } from '../ProjectFiles'
 import { Button, Spinner, TabFavicon } from '../ui'
@@ -388,7 +388,14 @@ function ToolIcon({ item, icon: Icon }: { item: ToolItem; icon: typeof Monitor }
   return appIcon ? <img src={appIcon} alt="" width={20} height={20} className="max-w-none shrink-0" /> : <Icon size={13.5} className="text-subtle" />
 }
 
+/** A finished patch that touched several files reads as one line per file, as it did while it was written. */
 function ExploreLine({ item }: { item: ToolItem }): ReactNode {
+  const diffs = (item.tool === 'edit' || item.tool === 'create') && !isLive(item) ? item.meta?.diffs ?? [] : []
+  if (diffs.length > 1) return <>{diffs.map((diff) => <ExploreItemLine key={diff.path} item={{ ...item, meta: { ...item.meta, diffs: [diff] } }} />)}</>
+  return <ExploreItemLine item={item} />
+}
+
+function ExploreItemLine({ item }: { item: ToolItem }): ReactNode {
   const openFile = useStore((s) => s.openFile)
   const Icon = isTerminalRead(item) ? SquareTerminal : isToolOutputRead(item) ? FileOutput : KIND_ICON[item.tool]
   const path = isTerminalRead(item) || isToolOutputRead(item) ? undefined : item.tool === 'read' && typeof (item.input as { path?: string; file_path?: string })?.path === 'string' ? (item.input as { path: string }).path : (item.input as { file_path?: string })?.file_path
@@ -408,7 +415,7 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
   if (item.tool === 'mcp') return <McpTool item={item} />
   return (
     <div title={failureReason(item)}>
-      <button
+      {editing && isLive(item) ? <LiveEditLines item={item} icon={<ToolIcon item={item} icon={Icon} />} /> : <button
         type="button"
         disabled={!action}
         onClick={action}
@@ -416,13 +423,14 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
         className={cn('group/line flex h-7 w-full min-w-0 items-center gap-2 text-left text-[13.8px] font-[450] text-muted', action && 'hover:text-fg')}
       >
         <span className="flex w-4 shrink-0 justify-center">{isLive(item) ? <Spinner size={13} /> : <ToolIcon item={item} icon={Icon} />}</span>
-        <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(item.tool === 'bash' && item.status !== 'error' ? `${isLive(item) ? 'Running' : 'Ran'} ${toolActivityTitle(item)}` : toolActivityTitle(item))}</span>
+        <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(item.tool === 'bash' && item.status !== 'error' ? `${isLive(item) ? 'Running' : 'Ran'} ${toolActivityTitle(item)}` : editing && diffs.length && !attemptedTitle(item) ? editedTitle(item, diffs) : toolActivityTitle(item))}</span>
+        {editing && diffs.length > 0 && !isNoChange(item) && <DiffStat added={diffs[0].added} removed={diffs[0].removed} />}
         {expandable && <ChevronRight size={13} className={cn('-ml-1 shrink-0 text-subtle opacity-0 transition-all group-hover/line:opacity-100', open && 'rotate-90 opacity-100')} />}
         {/* A command shows only once its line is opened, at the top of the output. */}
         {item.tool !== 'bash' && !isTerminalRead(item) && !isToolOutputRead(item) && item.detail && (item.tool === 'browser' || item.detail !== basename(item.detail)) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
         {item.meta?.matches !== undefined && item.tool !== 'read' && <span className="shrink-0 text-[12.1px] text-subtle">{plural(item.meta.matches, 'match', 'matches')}</span>}
         <StatusMark item={item} />
-      </button>
+      </button>}
       {(open || preview) && expandable && (
         <div className={cn('activity-output-surface activity-reveal mb-1.5 ml-6 overflow-hidden rounded-lg border border-line', preview && 'max-h-[78px] overflow-y-auto overscroll-contain')}>
           {item.tool === 'bash'
@@ -665,6 +673,50 @@ function FileEditCard({ item, diff, ctx }: { item: ToolItem; diff: FileDiff; ctx
   )
 }
 
+/** An edit being written: one line per file, each with its own +n -n that moves as the lines arrive. */
+function LiveEditLines({ item, icon }: { item: ToolItem; icon: ReactNode }): ReactNode {
+  const files = editFileStats(item)
+  const verb = item.tool === 'create' ? 'Creating' : 'Editing'
+  const lines = files.length ? files : [null]
+  return (
+    <>
+      {lines.map((file, index) => (
+        <div key={file?.path ?? index} className="flex h-7 min-w-0 items-center gap-2 text-[13.8px] font-[450] text-muted" title={file?.path}>
+          <span className="flex w-4 shrink-0 justify-center">{index === 0 ? <Spinner size={13} /> : icon}</span>
+          <span className="shimmer min-w-0 truncate">{leadWord(file ? `${verb} ${baseName(file.path)}` : verb)}</span>
+          {file && <LiveDiffStat added={file.added} removed={file.removed} live />}
+        </div>
+      ))}
+    </>
+  )
+}
+
+/** One file of an edit being written in Default density: a spinner and the file name, its card ending where the next file starts. */
+function LiveEditCard({ path, diff, text, preview, follow }: { path: string | null; diff?: FileDiff; text?: string; preview: boolean; follow: boolean }): ReactNode {
+  const viewport = useRef<HTMLDivElement>(null)
+  const following = useRef(true)
+  useLayoutEffect(() => {
+    if (follow && following.current && viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight
+  }, [diff, text, follow])
+  const body = diff ? <DiffView diff={diff} maxHeight={null} monochrome /> : text ? <pre className="selectable whitespace-pre-wrap break-words px-3 font-mono text-[13.2px] text-fg">{text}</pre> : null
+  return (
+    <div className="my-1.5 overflow-hidden rounded-xl border border-line-strong bg-elev">
+      <div className="flex h-9 min-w-0 items-center gap-2 px-3 text-[13.8px] font-[450] text-muted" title={path ?? undefined}>
+        <span className="flex w-4 shrink-0 justify-center"><Spinner size={13} /></span>
+        <span className="shimmer min-w-0 truncate">{path ? basename(path) : 'Preparing changes…'}</span>
+      </div>
+      {preview && body && (
+        <div className="activity-output-surface activity-reveal explore-viewport relative border-t border-line">
+          <div ref={viewport} className="max-h-[78px] overflow-auto overscroll-contain py-2" onScroll={(event) => {
+            const target = event.currentTarget
+            following.current = target.scrollHeight - target.scrollTop - target.clientHeight < 24
+          }}>{body}</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): ReactNode {
   const openFile = useStore((s) => s.openFile)
   const homeDir = useStore((s) => s.homeDir)
@@ -689,6 +741,14 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
   useLayoutEffect(() => {
     if (live && preview && followPatch.current && patchViewport.current) patchViewport.current.scrollTop = patchViewport.current.scrollHeight
   }, [diffs, inputPreview, live, preview])
+
+  // While it is written, each file gets its own card with only a spinner and its name; a new file starts a new card.
+  if (live && !attemptedTitle(item)) {
+    const showPreview = outputMode === 'preview' || outputMode === 'foreground'
+    const files = diffs.length ? diffs.map((diff) => ({ path: diff.path, diff, text: undefined })) : editFileStats(item).map((file) => ({ path: file.path, diff: undefined, text: file.text }))
+    if (!files.length) return <LiveEditCard path={null} preview={false} follow={false} />
+    return <>{files.map((file, index) => <LiveEditCard key={file.path} path={file.path} diff={file.diff} text={file.text} preview={showPreview} follow={index === files.length - 1} />)}</>
+  }
 
   // A finished patch that touched several files shows one card per file instead of a single "Edited 12 files".
   if (!live && item.status === 'done' && diffs.length > 1) {

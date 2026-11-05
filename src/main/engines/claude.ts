@@ -35,6 +35,17 @@ export function streamedEditInput(json: string, keys: readonly string[] = EDIT_F
   return input
 }
 
+/** String fields of streaming tool input whose value has fully arrived, so a half-written path never shows. */
+export function completeStringFields(json: string, keys: readonly string[]): Input {
+  try { return JSON.parse(json) as Input } catch { /* The tool input is still arriving. */ }
+  const input: Input = {}
+  const fields = new RegExp(`"(${keys.join('|')})"\\s*:\\s*("(?:\\\\.|[^"\\\\])*")`, 'g')
+  for (const match of json.matchAll(fields)) {
+    try { input[match[1]] = JSON.parse(match[2]) } catch { /* Not a complete string yet. */ }
+  }
+  return input
+}
+
 interface Presented {
   kind: ToolKind
   title: string
@@ -391,7 +402,7 @@ export async function runClaude(session: Session, turn: Turn): Promise<void> {
         const writer = writerFor(message.parent_tool_use_id)
         if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use' && event.content_block.id && event.content_block.name) {
           ensureItem(event.content_block.id, event.content_block.name, {}, message.parent_tool_use_id)
-          if (event.content_block.name === 'Edit' || event.content_block.name === 'Write' || event.content_block.name === 'MultiEdit') {
+          if (['Edit', 'Write', 'MultiEdit', 'Read'].includes(event.content_block.name)) {
             editStreams.set(streamKey, { id: event.content_block.id, name: event.content_block.name, json: '', publishedAt: 0 })
           }
         } else if (event.type === 'content_block_delta') {
@@ -403,7 +414,17 @@ export async function runClaude(session: Session, turn: Turn): Promise<void> {
             writer.reasoning(event.delta.thinking)
           } else if (event.delta?.type === 'input_json_delta' && event.delta.partial_json) {
             const edit = editStreams.get(streamKey)
-            if (edit) {
+            if (edit?.name === 'Read') {
+              // A read names its file once the whole path has arrived, never part of it.
+              edit.json += event.delta.partial_json
+              if (!edit.publishedAt) {
+                const input = completeStringFields(edit.json, ['file_path'])
+                if (typeof input.file_path === 'string' && input.file_path) {
+                  ensureItem(edit.id, edit.name, input, message.parent_tool_use_id)
+                  edit.publishedAt = Date.now()
+                }
+              }
+            } else if (edit) {
               edit.json += event.delta.partial_json
               if (Date.now() - edit.publishedAt >= 32) {
                 const input = streamedEditInput(edit.json)
@@ -415,7 +436,7 @@ export async function runClaude(session: Session, turn: Turn): Promise<void> {
         } else if (event.type === 'content_block_stop') {
           const edit = editStreams.get(streamKey)
           if (edit) {
-            ensureItem(edit.id, edit.name, streamedEditInput(edit.json), message.parent_tool_use_id)
+            ensureItem(edit.id, edit.name, edit.name === 'Read' ? completeStringFields(edit.json, ['file_path']) : streamedEditInput(edit.json), message.parent_tool_use_id)
             editStreams.delete(streamKey)
           }
           writer.end()

@@ -132,7 +132,7 @@ export function thinkingTopic(text: string): string | null {
   return topics.at(-1)?.[1].trim() || null
 }
 
-function baseName(path: string): string {
+export function baseName(path: string): string {
   return path.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? path
 }
 
@@ -140,39 +140,57 @@ function lineCount(text: string): number {
   return text ? text.replace(/\n$/, '').split('\n').length : 0
 }
 
+export interface EditFileStat {
+  path: string
+  added: number
+  removed: number
+  /** What has been written for this file so far: its part of the patch, or the new content. Absent once there is a diff. */
+  text?: string
+}
+
 /**
- * The files an Edit or Create touches and its added and removed line counts, from its diff once it has one and from
- * the input while it is still being written, so the name and counts show from the moment they can be read.
+ * Each file an Edit or Create touches with its added and removed line counts, from its diff once it has one and from
+ * the input while it is still being written, so every file and its counts show from the moment they can be read.
  */
-export function editStats(item: ToolItem): { paths: string[]; added: number; removed: number } {
+export function editFileStats(item: ToolItem): EditFileStat[] {
   const diffs = item.meta?.diffs
-  if (diffs?.length) return { paths: diffs.map((diff) => diff.path), added: diffs.reduce((n, d) => n + d.added, 0), removed: diffs.reduce((n, d) => n + d.removed, 0) }
+  if (diffs?.length) return diffs.map((diff) => ({ path: diff.path, added: diff.added, removed: diff.removed }))
   const input = (item.input ?? {}) as Record<string, unknown>
   if (typeof input.patch === 'string') {
-    const paths: string[] = []
-    let added = 0
-    let removed = 0
-    let inFile = false
+    const files: EditFileStat[] = []
+    let current: EditFileStat | null = null
     for (const line of input.patch.split('\n')) {
       const header = line.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/)
       if (header) {
         const path = header[1].trim()
-        if (path && !paths.includes(path)) paths.push(path)
-        inFile = true
-      } else if (line.startsWith('***')) {
-        if (/^\*\*\* End Patch/.test(line)) inFile = false
-      } else if (inFile && line.startsWith('+')) added++
-      else if (inFile && line.startsWith('-')) removed++
+        current = path ? files.find((file) => file.path === path) ?? null : null
+        if (path && !current) files.push(current = { path, added: 0, removed: 0, text: '' })
+        continue
+      }
+      if (line.startsWith('***')) {
+        if (/^\*\*\* End Patch/.test(line)) current = null
+        continue
+      }
+      if (!current) continue
+      current.text = current.text ? `${current.text}\n${line}` : line
+      if (line.startsWith('+')) current.added++
+      else if (line.startsWith('-')) current.removed++
     }
-    return { paths, added, removed }
+    return files
   }
   const path = typeof input.file_path === 'string' ? input.file_path : typeof input.path === 'string' ? input.path : ''
-  const paths = path ? [path] : []
-  if (typeof input.content === 'string') return { paths, added: lineCount(input.content), removed: 0 }
+  if (!path) return []
+  if (typeof input.content === 'string') return [{ path, added: lineCount(input.content), removed: 0, text: input.content }]
   if (typeof input.new_string === 'string' || typeof input.old_string === 'string') {
-    return { paths, added: lineCount(String(input.new_string ?? '')), removed: lineCount(String(input.old_string ?? '')) }
+    return [{ path, added: lineCount(String(input.new_string ?? '')), removed: lineCount(String(input.old_string ?? '')), text: String(input.new_string ?? '') }]
   }
-  return { paths, added: 0, removed: 0 }
+  return [{ path, added: 0, removed: 0 }]
+}
+
+/** The files an Edit or Create touches and its total added and removed line counts. */
+export function editStats(item: ToolItem): { paths: string[]; added: number; removed: number } {
+  const files = editFileStats(item)
+  return { paths: files.map((file) => file.path), added: files.reduce((n, f) => n + f.added, 0), removed: files.reduce((n, f) => n + f.removed, 0) }
 }
 
 /** An edit's title with its file named as soon as the input says which, such as "Editing App.tsx" or "Editing 2 files". */

@@ -14,7 +14,7 @@ import { ALL_TOOLS, mcpTools, runTool, toolsForMode, toolsForSubagent, toSpecs, 
 import type { ToolImage } from '../tools/types'
 import { isImagePath, resolvePath, truncateEnd, truncateMiddle } from '../util'
 import { basename } from 'node:path'
-import { streamedEditInput } from './claude'
+import { completeStringFields, streamedEditInput } from './claude'
 import { makeDiff } from '../tools/diff'
 
 const MAX_STEPS = 250
@@ -179,7 +179,8 @@ function toolPreviews(session: Session, env: ToolEnv, tools: ToolDef[]): { updat
     if (streamed) {
       const tool = tools.find((t) => t.name === name)
       if (!tool) return
-      const input = streamedEditInput(call.function.arguments, streamed.keys)
+      // A read names its file only once the whole path has arrived; other targets show as they are written.
+      const input = name === 'Read' ? completeStringFields(call.function.arguments, streamed.keys) : streamedEditInput(call.function.arguments, streamed.keys)
       const started = streamed.keys.some((key) => typeof input[key] === 'string' && input[key])
       if (!started && !streamed.verb) return
       let presentation: { title: string; detail?: string } = { title: streamed.verb ?? name }
