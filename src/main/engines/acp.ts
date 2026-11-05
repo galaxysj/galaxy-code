@@ -3,7 +3,7 @@ import { basename, dirname } from 'node:path'
 import { AcpAgents, type AcpAgentSpec } from '@shared/acp-registry'
 import { ACCOUNT_LABELS, type AccountId, type AgentMode, type AcpConfigChoice, type AcpConfigOption, type FileDiff, type TaskEntry, type ToolItem, type ToolKind, type ToolMeta } from '@shared/types'
 import { commandPrefix, gate } from '../agent/approval'
-import { gatherContext, inlineMentionsBlock } from '../agent/prompt'
+import { gatherContext, inlineMentionsBlock, projectInstructionsBlock } from '../agent/prompt'
 import { TurnWriter, type Session, type Turn } from '../agent/session'
 import { bridge, BRIDGE_SERVER_NAME, bridgeStdioCommand, type BridgeHandle } from '../services/bridge'
 import { installedRegistryLaunch, registryLaunch } from '../services/acpRegistry'
@@ -389,6 +389,15 @@ function isBridgeCall(update: Json): boolean {
   return BRIDGE_TITLE.test(String(update.title ?? '').trim())
 }
 
+/** A call's input in a fixed key order, to match an agent's report of a call with the bridge's; empty for no input. */
+function inputKey(input: unknown): string {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length === 0) return ''
+  const sorted = (value: unknown): unknown => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value as Json).sort().map((key) => [key, sorted((value as Json)[key])]))
+    : value
+  return JSON.stringify(sorted(input))
+}
+
 function contentOf(update: Json, cwd: string): { output?: string; diffs?: FileDiff[] } {
   const content = Array.isArray(update.content) ? (update.content as Json[]) : []
   const texts: string[] = []
@@ -446,12 +455,40 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
   const items = new Map<string, string>()
   const skipped = new Set<string>()
 
+  // Agents also report their calls to Galaxy Code's bridge tools, often titled only by the tool name. The bridge draws
+  // its own item, so the agent's item with the same input is dropped, whichever of the two arrives first.
+  const bridgeInputs = new Map<string, number>()
+  const dropAgentItem = (callId: string): void => {
+    const itemId = items.get(callId)
+    items.delete(callId)
+    skipped.add(callId)
+    if (itemId) session.replaceItems(session.doc.items.filter((item) => item.id !== itemId))
+  }
+  const fromBridge = (input: unknown): boolean => {
+    const key = inputKey(input)
+    const at = key ? bridgeInputs.get(key) : undefined
+    return at !== undefined && Date.now() - at < 120000
+  }
+  connection.handle.onCall((_name, input) => {
+    const key = inputKey(input)
+    if (!key) return
+    bridgeInputs.set(key, Date.now())
+    for (const [callId, itemId] of items) {
+      const item = session.item<ToolItem>(itemId)
+      if (item && item.status !== 'done' && item.status !== 'error' && inputKey(item.input) === key) {
+        dropAgentItem(callId)
+        break
+      }
+    }
+  })
+
   const applyToolCall = (update: Json): void => {
     const callId = String(update.toolCallId ?? '')
     if (!callId || skipped.has(callId)) return
     const existing = items.get(callId)
-    if (!existing && isBridgeCall(update)) {
-      skipped.add(callId)
+    if ((!existing && isBridgeCall(update)) || (update.rawInput !== undefined && fromBridge(update.rawInput))) {
+      if (existing) dropAgentItem(callId)
+      else skipped.add(callId)
       return
     }
     const status = String(update.status ?? '')
@@ -633,6 +670,8 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
 
   // Session setup
 
+  // A new session starts without the project's instructions, so its first prompt carries them.
+  let newSession = false
   if (!connection.sessionId) {
     const servers = mcpServerList(connection.handle.url, connection.capabilities)
     const saved = session.doc.engine.acpAccount === account ? session.doc.engine.acpSessionId : undefined
@@ -648,6 +687,7 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
           connection.replaying = false
         }
       }
+      newSession = true
       return rpc.request<Json & { sessionId: string }>('session/new', { cwd, mcpServers: servers }, 60000)
     }
     let opened: Json & { sessionId?: string }
@@ -699,7 +739,7 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
     others.push(attachment.path)
   }
   const note = others.length ? `\n\nAttached files:\n${others.map((p) => `- ${p}`).join('\n')}` : ''
-  prompt.unshift({ type: 'text', text: [inlineMentionsBlock(turn.mentions), modeNote, (turn.text || 'See the attached files.') + note].filter(Boolean).join('\n\n') })
+  prompt.unshift({ type: 'text', text: [newSession ? projectInstructionsBlock(ctx) : '', inlineMentionsBlock(turn.mentions), modeNote, (turn.text || 'See the attached files.') + note].filter(Boolean).join('\n\n') })
 
   const onAbort = (): void => rpc.notify('session/cancel', { sessionId })
   turn.signal.addEventListener('abort', onAbort, { once: true })

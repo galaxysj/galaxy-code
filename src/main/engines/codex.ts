@@ -226,7 +226,7 @@ export async function runCodex(session: Session, turn: Turn): Promise<void> {
   if (connection.idleTimer) clearTimeout(connection.idleTimer)
   const { rpc } = connection
   const policy = policies(turn.permissionMode)
-  const instructions = buildBridgeInstructions(ctx, BRIDGE_TOOLS.filter((t) => t.name !== 'Task').map((t) => t.name))
+  const instructions = buildBridgeInstructions(ctx, BRIDGE_TOOLS.filter((t) => t.name !== 'Task').map((t) => t.name), undefined, 'AGENTS.md')
 
   if (!connection.threadId) {
     const saved = session.doc.engine.codexThreadId

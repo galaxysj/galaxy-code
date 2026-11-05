@@ -358,7 +358,7 @@ export async function runClaude(session: Session, turn: Turn): Promise<void> {
     disallowedTools: ['Agent', 'Task', 'Edit', 'MultiEdit', 'Bash', 'BashOutput', 'KillShell', 'KillBash', ...(explore ? ['Write', 'NotebookEdit', 'Skill', 'TodoWrite'] : []), ...(session.agentId !== 'main' ? ['AskUserQuestion'] : [])],
     canUseTool,
     settingSources: ['user', 'project', 'local'],
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: buildBridgeInstructions(ctx, bridged.map((t) => t.name), turn.mentions) },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: buildBridgeInstructions(ctx, bridged.map((t) => t.name), turn.mentions, 'CLAUDE.md') },
     mcpServers: { ...userMcpServers(), [BRIDGE_SERVER_NAME]: { type: 'http', url: handle.url, timeout: 60 * 60 * 1000 } },
     env: { ...(process.env as Record<string, string>), CLAUDE_AGENT_SDK_CLIENT_APP: 'galaxy-code/0.1.0' },
     stderr: (data) => {

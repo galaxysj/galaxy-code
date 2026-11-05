@@ -275,11 +275,19 @@ const CORE = `You are Galaxy Code, an AI agent that works in the user's projects
 - Use GitHub-flavored markdown. Put file paths, commands and identifiers in backticks, and code in fenced blocks with a language. Refer to code as \`path/to/file.ts:42\`.
 - Write in the language the user writes in.`
 
+/**
+ * The project's AGENTS.md (or CLAUDE.md) for an agent that would not see it otherwise. `readsOnItsOwn` names the file the
+ * agent already loads by itself, such as CLAUDE.md for Claude Code, so it is not given twice.
+ */
+export function projectInstructionsBlock(ctx: PromptContext, readsOnItsOwn?: string): string {
+  if (!ctx.instructions || ctx.instructions.file === readsOnItsOwn) return ''
+  return `# Project instructions\n\nFrom ${ctx.instructions.file}. Follow these; they come from the project's maintainers.\n\n${ctx.instructions.text}`
+}
+
 export function buildSystemPrompt(ctx: PromptContext, mentions?: PromptMentions): string {
   const parts = [CORE, ...(ctx.mode === 'ask' || ctx.mode === 'plan' ? [] : [ACTION_FIRST]), PROGRESS_UPDATES, TOOL_PREFERENCE, TERMINAL_REPORTING, `# Environment\n\n${environmentBlock(ctx)}\n\n${permissionBlock(ctx.permissionMode)}`]
-  if (ctx.instructions) {
-    parts.push(`# Project instructions\n\nFrom ${ctx.instructions.file}. Follow these; they come from the project's maintainers.\n\n${ctx.instructions.text}`)
-  }
+  const instructions = projectInstructionsBlock(ctx)
+  if (instructions) parts.push(instructions)
   parts.push(memoryBlock(ctx))
   const skills = skillsBlock(ctx.skills)
   if (skills) parts.push(skills)
@@ -326,7 +334,7 @@ ${environmentBlock(ctx)}${ctx.instructions ? `\n\n# Project instructions\n\n${ct
  * Guidance appended to an account CLI's own system prompt so it knows about
  * memory, skills and the tools Galaxy Code lends it.
  */
-export function buildBridgeInstructions(ctx: PromptContext, bridgeTools: string[], mentions?: PromptMentions): string {
+export function buildBridgeInstructions(ctx: PromptContext, bridgeTools: string[], mentions?: PromptMentions, readsOnItsOwn?: string): string {
   const parts = [
     `You are running inside Galaxy Code, a desktop app where the user watches your work in a chat and can open files and a browser beside it.${
       ctx.worktreeBranch ? ` You are working in an isolated git worktree on branch ${ctx.worktreeBranch}, created for this chat.` : ''
@@ -360,6 +368,8 @@ export function buildBridgeInstructions(ctx: PromptContext, bridgeTools: string[
     )
   }
   if (bridgeTools.includes('Browser')) parts.push(BROWSER_RULES)
+  const instructions = projectInstructionsBlock(ctx, readsOnItsOwn)
+  if (instructions) parts.push(instructions)
   parts.push(memoryBlock(ctx))
   const skills = skillsBlock(ctx.skills)
   if (skills) parts.push(skills)

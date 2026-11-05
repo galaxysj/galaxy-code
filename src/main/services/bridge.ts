@@ -10,6 +10,7 @@ import { errorMessage } from '../util'
 interface BridgeContext {
   tools: ToolDef[]
   env: ToolEnv
+  onCall?: (name: string, input: unknown) => void
 }
 
 export interface BridgeHandle {
@@ -17,6 +18,8 @@ export interface BridgeHandle {
   url: string
   /** Swaps in the environment of the current run, e.g. a fresh abort signal. */
   update(env: ToolEnv): void
+  /** Called as each bridge tool starts, so an engine can drop its agent's own item for the same call. */
+  onCall(listener: ((name: string, input: unknown) => void) | undefined): void
   dispose(): void
 }
 
@@ -95,6 +98,9 @@ class Bridge {
       update: (next) => {
         context.env = next
       },
+      onCall: (listener) => {
+        context.onCall = listener
+      },
       dispose: () => {
         this.contexts.delete(token)
       }
@@ -114,6 +120,7 @@ class Bridge {
 
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       try {
+        context.onCall?.(request.params.name, request.params.arguments ?? {})
         const { result } = await runTool(context.tools, context.env, request.params.name, request.params.arguments ?? {})
         return {
           content: [
