@@ -1,4 +1,5 @@
 import { diffLines } from 'diff'
+import { unavailableAccounts } from '@shared/catalog'
 import { CornerDownLeft, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { InlineModel, usableUtilityModels, utilityModelLabel } from '@shared/models'
@@ -329,7 +330,8 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onTextChange, o
 
   const accounts = useStore((s) => s.settings.accounts)
   const removedAccounts = useStore((s) => s.settings.removedAccounts)
-  const modelId = usableUtilityModels(InlineModel, accounts, removedAccounts).some((m) => m.ID === inlineModelId) ? (inlineModelId as string) : InlineModel[0].ID
+  const acpEnabled = useStore((s) => s.settings.acpEnabled)
+  const modelId = usableUtilityModels(InlineModel, accounts, unavailableAccounts({ acpEnabled, removedAccounts })).some((m) => m.ID === inlineModelId) ? (inlineModelId as string) : InlineModel[0].ID
 
   /** Puts the code back to how it was before the edit started and removes everything the edit drew. */
   const restore = (): void => {
@@ -616,7 +618,8 @@ export function InlineEditBox({
   }, [proposal])
   const accounts = useStore((s) => s.settings.accounts)
   const removedAccounts = useStore((s) => s.settings.removedAccounts)
-  const models = usableUtilityModels(InlineModel, accounts, removedAccounts)
+  const acpEnabled = useStore((s) => s.settings.acpEnabled)
+  const models = usableUtilityModels(InlineModel, accounts, unavailableAccounts({ acpEnabled, removedAccounts }))
   const model = models.find((m) => m.ID === modelId) ?? InlineModel[0]
   return (
     <div

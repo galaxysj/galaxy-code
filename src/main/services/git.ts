@@ -1,3 +1,4 @@
+import { unavailableAccounts } from '@shared/catalog'
 import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -30,7 +31,7 @@ export async function gitState(cwd: string): Promise<{ isRepo: boolean; dirty: b
 /** Instant commit: stage everything, have the commit message model write the message, commit, and push when asked. */
 export async function instantCommit(cwd: string, push: boolean): Promise<{ hash: string; message: string; pushed: { branch: string; remote: string } | null }> {
   // An account model falls back to the default when its account is switched off.
-  const model = usableUtilityModels(CommitMessageModel, store.settings.accounts, store.settings.removedAccounts).find((entry) => entry.ID === store.settings.commitMessageModelId) ?? CommitMessageModel[0]
+  const model = usableUtilityModels(CommitMessageModel, store.settings.accounts, unavailableAccounts(store.settings)).find((entry) => entry.ID === store.settings.commitMessageModelId) ?? CommitMessageModel[0]
   if (model.Subscription === 'Default' && !store.openRouterKey) throw new Error('Instant commit writes the message with an OpenRouter model. Add an OpenRouter key in Settings first.')
   const added = await git(cwd, ['add', '-A'])
   if (!added.ok) throw new Error(`git add failed:\n${added.err || added.out}`)

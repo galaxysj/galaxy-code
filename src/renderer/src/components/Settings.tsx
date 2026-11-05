@@ -52,8 +52,8 @@ import {
   type UsageReport,
   type UsageWindow
 } from '@shared/types'
-import { AUTO_MODEL, BYOK_PROVIDERS, customModelId, parseCustomModel, type ByokProvider } from '@shared/catalog'
-import { AcpAgents, AcpLibrary, type AcpAgentSpec } from '@shared/acp-registry'
+import { AUTO_MODEL, BYOK_PROVIDERS, customModelId, parseCustomModel, unavailableAccounts, type ByokProvider } from '@shared/catalog'
+import { AcpAgents, AcpLibrary } from '@shared/acp-registry'
 import { AutoApprovalModel, CommitMessageModel, CompletionModel, InlineModel, resolveAutoApprovalModel, usableUtilityModels, utilityModelLabel } from '@shared/models'
 import { cn, tildify } from '../lib/utils'
 import { useStore, type SettingsSection } from '../store'
@@ -61,7 +61,7 @@ import { LiveMarkdown } from './LiveMarkdown'
 import { Markdown } from './Markdown'
 import { SUBSCRIPTION_LABELS } from './ModelPicker'
 import { Resizer, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from './Resizer'
-import { RegistryIcon, SubscriptionIcon } from './SubscriptionIcon'
+import { AccountIcon, RegistryIcon } from './SubscriptionIcon'
 import { Button, Dropdown, IconButton, MenuItem, MenuSeparator, Modal, Popover, Segmented, Spinner, Switch, TextInput, type DropdownOption } from './ui'
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu; dividerBefore?: boolean; beta?: boolean }[] = [
@@ -126,7 +126,7 @@ function GeneralSection(): ReactNode {
   const settings = useStore((s) => s.settings)
   const update = useStore((s) => s.updateSettings)
   const version = useStore((s) => s.version)
-  const commitModels = usableUtilityModels(CommitMessageModel, settings.accounts, settings.removedAccounts)
+  const commitModels = usableUtilityModels(CommitMessageModel, settings.accounts, unavailableAccounts(settings))
   const decisionModels = settings.customProviders
     .filter((provider) => provider.enabled && provider.api === 'decisions')
     .flatMap((provider) => provider.models.map((model) => ({ value: customModelId(provider.id, model), label: `${provider.name} · ${model}` })))
@@ -266,8 +266,8 @@ function ModelsSection(): ReactNode {
   const imageModels = useStore((s) => s.imageModels)
   const update = useStore((s) => s.updateSettings)
   const notify = useStore((s) => s.notify)
-  const completionModels = usableUtilityModels(CompletionModel, settings.accounts, settings.removedAccounts)
-  const inlineModels = usableUtilityModels(InlineModel, settings.accounts, settings.removedAccounts)
+  const completionModels = usableUtilityModels(CompletionModel, settings.accounts, unavailableAccounts(settings))
+  const inlineModels = usableUtilityModels(InlineModel, settings.accounts, unavailableAccounts(settings))
   const [name, setName] = useState('')
   const [id, setId] = useState('')
   const [subscription, setSubscription] = useState<Subscription>('Default')
@@ -1077,7 +1077,7 @@ interface AcpRowActions {
   remove(id: AccountId): void
 }
 
-/** `off` dims the ACP agents' rows when ACP is turned off; Claude Code and Codex stay usable. */
+/** `off` dims every row while AI subscriptions are turned off. */
 function AccountList({ ids, off: acpOff = false, acp }: { ids: AccountId[]; off?: boolean; acp?: AcpRowActions }): ReactNode {
   const settings = useStore((s) => s.settings)
   const update = useStore((s) => s.updateSettings)
@@ -1116,7 +1116,7 @@ function AccountList({ ids, off: acpOff = false, acp }: { ids: AccountId[]; off?
   return (
     <Card>
       {ids.map((id) => {
-        const off = acpOff && ACP_ACCOUNTS.includes(id)
+        const off = acpOff
         const editor = acp?.editor(id)
         if (editor) return <div key={id} className="p-2">{editor}</div>
         const status = statuses?.find((s) => s.id === id)
@@ -1141,6 +1141,7 @@ function AccountList({ ids, off: acpOff = false, acp }: { ids: AccountId[]; off?
             <div className="flex items-center gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
+                  <AccountIcon id={id} />
                   <span className="text-[12.5px] font-medium text-fg">{ACCOUNT_LABELS[id]}</span>
                   <span className={cn('text-[11.5px]', state.tone)}>{state.text}</span>
                   {status?.version && <span className="font-mono text-[11px] text-subtle">v{status.version}</span>}
@@ -1220,31 +1221,110 @@ function RefreshAccountsButton(): ReactNode {
   )
 }
 
-/** Built-in agents that Settings lists alongside ACP agents and can remove and add back. */
+/** The subscriptions Galaxy Code knows: Claude Code, Codex, and the agents in the ACP library. */
+const SUBSCRIPTION_IDS: AccountId[] = ['claude', 'codex', ...AcpLibrary.map((entry) => entry.ID)]
+
+/** Claude Code and Codex are removed by a flag; library agents by dropping their entry. Both come back from Add. */
 const BUILT_IN_ACCOUNTS: AccountId[] = ['claude', 'codex']
 
-/** Claude Code, Codex and ACP agents in one list. Any of them can be removed and added back from Add agent. */
-function AgentsSection(): ReactNode {
+function useAgentEditing(): {
+  agents: AcpAgentConfig[]
+  add(agent: AcpAgentConfig): void
+  remove(id: string): void
+} {
   const settings = useStore((s) => s.settings)
-  const removedBuiltIns = BUILT_IN_ACCOUNTS.filter((id) => settings.removedAccounts?.includes(id))
-  const enabled = settings.acpEnabled !== false
   const update = useStore((s) => s.updateSettings)
   const agents = settings.acpAgents ?? []
+  return {
+    agents,
+    add: (agent) => void update({ acpAgents: [...agents, agent], accounts: { ...settings.accounts, [agent.id]: { enabled: true, binaryPath: '' } } }),
+    remove: (id) => {
+      // A built-in agent keeps its account settings, so adding it back restores its CLI path.
+      if (BUILT_IN_ACCOUNTS.includes(id)) {
+        void update({ removedAccounts: [...(settings.removedAccounts ?? []), id] })
+        return
+      }
+      const accounts = { ...settings.accounts }
+      delete accounts[id]
+      void update({ acpAgents: agents.filter((a) => a.id !== id), accounts })
+    }
+  }
+}
+
+/** Claude, Codex, Cursor, Antigravity, OpenCode and Grok together, with the switch that turns every agent on or off. */
+function SubscriptionsSection(): ReactNode {
+  const settings = useStore((s) => s.settings)
+  const update = useStore((s) => s.updateSettings)
+  const enabled = settings.acpEnabled !== false
+  const { add, remove } = useAgentEditing()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const anchor = useRef<HTMLSpanElement>(null)
+  const removedBuiltIns = BUILT_IN_ACCOUNTS.filter((id) => settings.removedAccounts?.includes(id))
+  // A custom agent may already use a library agent's name, which keeps that one out.
+  const missing = AcpLibrary.filter((entry) => !AcpAgents.some((agent) => agent.ID === entry.ID || agent.DisplayName.toLowerCase() === entry.DisplayName.toLowerCase()))
+  const ids = SUBSCRIPTION_IDS.filter((id) => BUILT_IN_ACCOUNTS.includes(id) ? !removedBuiltIns.includes(id) : AcpAgents.some((agent) => agent.ID === id))
+  const addable = removedBuiltIns.length + missing.length > 0
+
+  return (
+    <Section
+      title="AI subscriptions"
+      description="Coding agents you already pay for or sign in to. Galaxy Code runs them with your own login."
+      action={
+        <div className="flex gap-1.5">
+          <RefreshAccountsButton />
+          {addable && (
+            <span ref={anchor} className="inline-flex">
+              <Button size="sm" onClick={() => setMenuOpen(true)}>
+                <Plus size={13} /> Add
+              </Button>
+            </span>
+          )}
+          <Popover open={menuOpen} onClose={() => setMenuOpen(false)} anchor={anchor} placement="bottom-end" className="w-[240px] p-1">
+            {removedBuiltIns.map((id) => (
+              <MenuItem key={id} icon={<AccountIcon id={id} />} label={ACCOUNT_LABELS[id]} onClick={() => {
+                setMenuOpen(false)
+                void update({ removedAccounts: (settings.removedAccounts ?? []).filter((entry) => entry !== id) })
+              }} />
+            ))}
+            {missing.map((entry) => (
+              <MenuItem key={entry.ID} icon={<AccountIcon id={entry.ID} />} label={entry.DisplayName} hint={entry.Keyless ? 'Free models' : undefined} onClick={() => {
+                setMenuOpen(false)
+                add(libraryAcpAgent(entry))
+              }} />
+            ))}
+          </Popover>
+        </div>
+      }
+    >
+      <Card className="mb-2.5">
+        <RowItem label="Use AI subscriptions" hint="Turns every subscription and agent on this page on or off.">
+          <Switch checked={enabled} onChange={(acpEnabled) => void update({ acpEnabled })} label="Use AI subscriptions" />
+        </RowItem>
+      </Card>
+      {ids.length > 0 ? (
+        <AccountList ids={ids} off={!enabled} acp={{ editor: () => null, edit: () => {}, remove }} />
+      ) : (
+        <div className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center text-[12.5px] text-subtle">No subscriptions yet.</div>
+      )}
+    </Section>
+  )
+}
+
+/** Agents from the public ACP registry and custom commands. */
+function AcpAgentsSection(): ReactNode {
+  const settings = useStore((s) => s.settings)
+  const enabled = settings.acpEnabled !== false
+  const update = useStore((s) => s.updateSettings)
+  const { agents, add, remove } = useAgentEditing()
   const [editing, setEditing] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const anchor = useRef<HTMLSpanElement>(null)
-  // A custom agent may already use a library agent's name, which keeps that one out.
-  const available = AcpLibrary.filter((entry) => !AcpAgents.some((agent) => agent.ID === entry.ID || agent.DisplayName.toLowerCase() === entry.DisplayName.toLowerCase()))
-  const ids = [...BUILT_IN_ACCOUNTS.filter((id) => !removedBuiltIns.includes(id)), ...AcpAgents.map((agent) => agent.ID)]
+  const ids = AcpAgents.filter((agent) => !SUBSCRIPTION_IDS.includes(agent.ID)).map((agent) => agent.ID)
 
   const takenBy = (id: string | null): string[] => [
     ...RESERVED_AGENT_NAMES,
     ...AcpAgents.filter((agent) => agent.ID !== id).map((agent) => agent.DisplayName.toLowerCase())
   ]
-
-  const add = (agent: AcpAgentConfig): void => {
-    void update({ acpAgents: [...agents, agent], accounts: { ...settings.accounts, [agent.id]: { enabled: true, binaryPath: '' } } })
-  }
 
   const save = (agent: AcpAgentConfig): void => {
     if (agents.some((a) => a.id === agent.id)) void update({ acpAgents: agents.map((a) => (a.id === agent.id ? agent : a)) })
@@ -1252,42 +1332,19 @@ function AgentsSection(): ReactNode {
     setEditing(null)
   }
 
-  const remove = (id: string): void => {
-    // A built-in agent keeps its account settings, so adding it back restores its CLI path.
-    if (BUILT_IN_ACCOUNTS.includes(id)) {
-      void update({ removedAccounts: [...(settings.removedAccounts ?? []), id] })
-      return
-    }
-    const accounts = { ...settings.accounts }
-    delete accounts[id]
-    void update({ acpAgents: agents.filter((a) => a.id !== id), accounts })
-  }
-
   return (
     <Section
-      title="Agents"
-      description="Your Claude Code and ChatGPT logins, and coding agents reached over the Agent Client Protocol. Add one from the library, or any agent that speaks ACP on stdio."
+      title="ACP agents"
+      description="Other coding agents reached over the Agent Client Protocol: one from the public registry, or any agent that speaks ACP on stdio."
       action={
-        <div className="flex gap-1.5">
-          <RefreshAccountsButton />
+        <>
           <span ref={anchor} className="inline-flex">
-            <Button size="sm" disabled={editing === 'new'} onClick={() => setMenuOpen(true)}>
+            <Button size="sm" disabled={!enabled || editing === 'new'} onClick={() => setMenuOpen(true)}>
               <Plus size={13} /> Add agent
             </Button>
           </span>
           <Popover open={menuOpen} onClose={() => setMenuOpen(false)} anchor={anchor} placement="bottom-end" className="w-[300px] p-1">
             <AcpAddMenu
-              builtIns={removedBuiltIns}
-              onBuiltIn={(id) => {
-                setMenuOpen(false)
-                void update({ removedAccounts: (settings.removedAccounts ?? []).filter((entry) => entry !== id) })
-              }}
-              acpEnabled={enabled}
-              library={available}
-              onLibrary={(entry) => {
-                setMenuOpen(false)
-                add(libraryAcpAgent(entry))
-              }}
               onRegistry={(agent) => {
                 setMenuOpen(false)
                 add(agent)
@@ -1298,14 +1355,9 @@ function AgentsSection(): ReactNode {
               }}
             />
           </Popover>
-        </div>
+        </>
       }
     >
-      <Card className="mb-2.5">
-        <RowItem label="Use ACP agents" hint="Turns every ACP agent below on or off.">
-          <Switch checked={enabled} onChange={(acpEnabled) => void update({ acpEnabled })} label="Use ACP agents" />
-        </RowItem>
-      </Card>
       {editing === 'new' && (
         <div className="mb-2.5">
           <CustomAcpEditor initial={null} taken={takenBy(null)} onSave={save} onCancel={() => setEditing(null)} />
@@ -1325,14 +1377,14 @@ function AgentsSection(): ReactNode {
           }}
         />
       ) : (
-        editing !== 'new' && <div className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center text-[12.5px] text-subtle">No agents yet.</div>
+        editing !== 'new' && <div className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center text-[12.5px] text-subtle">No other agents yet.</div>
       )}
     </Section>
   )
 }
 
-/** Library agents first, then the public ACP registry, then a custom command. */
-function AcpAddMenu({ builtIns, onBuiltIn, acpEnabled, library, onLibrary, onRegistry, onCustom }: { builtIns: AccountId[]; onBuiltIn(id: AccountId): void; acpEnabled: boolean; library: AcpAgentSpec[]; onLibrary(entry: AcpAgentSpec): void; onRegistry(agent: AcpAgentConfig): void; onCustom(): void }): ReactNode {
+/** The public ACP registry, then a custom command. */
+function AcpAddMenu({ onRegistry, onCustom }: { onRegistry(agent: AcpAgentConfig): void; onCustom(): void }): ReactNode {
   const notify = useStore((s) => s.notify)
   const [registry, setRegistry] = useState<AcpRegistryAgent[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -1340,8 +1392,8 @@ function AcpAddMenu({ builtIns, onBuiltIn, acpEnabled, library, onLibrary, onReg
   const [installing, setInstalling] = useState<string | null>(null)
 
   useEffect(() => {
-    if (acpEnabled) window.galaxy.acp.registry().then(setRegistry, (err: unknown) => setError(err instanceof Error ? err.message : String(err)))
-  }, [acpEnabled])
+    window.galaxy.acp.registry().then(setRegistry, (err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+  }, [])
 
   // Names already in use, by an added agent, a library entry or Galaxy Code itself, cannot be added twice.
   const taken = new Set([...RESERVED_AGENT_NAMES, ...AcpAgents.map((agent) => agent.DisplayName.toLowerCase()), ...AcpLibrary.map((entry) => entry.DisplayName.toLowerCase())])
@@ -1359,21 +1411,8 @@ function AcpAddMenu({ builtIns, onBuiltIn, acpEnabled, library, onLibrary, onReg
     }
   }
 
-  const builtInItems = builtIns.length > 0 && (
-    <>
-      {builtIns.map((id) => <MenuItem key={id} icon={<SubscriptionIcon subscription={accountSubscription(id)} />} label={ACCOUNT_LABELS[id]} onClick={() => onBuiltIn(id)} />)}
-    </>
-  )
-  // With ACP off, only removed built-in agents can be added.
-  if (!acpEnabled) return builtInItems || <div className="px-2 py-2 text-[11.5px] text-subtle">Turn on ACP agents to add one.</div>
   return (
     <>
-      {builtInItems}
-      {builtInItems && <MenuSeparator />}
-      {library.map((entry) => (
-        <MenuItem key={entry.ID} label={entry.DisplayName} hint={entry.Keyless ? 'Free models' : undefined} disabled={installing !== null} onClick={() => onLibrary(entry)} />
-      ))}
-      {library.length > 0 && <MenuSeparator />}
       <div className="px-2 pt-1 pb-1.5 text-[11px] font-medium text-subtle">ACP registry</div>
       <input
         autoFocus
@@ -2168,7 +2207,8 @@ export function SettingsPage(): ReactNode {
             {section === 'providers' && <ProvidersSection />}
             {section === 'subscriptions' && (
               <>
-                <AgentsSection />
+                <SubscriptionsSection />
+                <AcpAgentsSection />
               </>
             )}
             {section === 'usage' && <UsageSection />}

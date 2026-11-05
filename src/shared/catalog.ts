@@ -213,10 +213,15 @@ export function findModel(models: ResolvedModel[], key: string | null | undefine
   return models.find((m) => m.key === key) ?? null
 }
 
-/** An account is usable only when its own switch is on, and for ACP agents the ACP switch too. */
+/** An account is usable only when its own switch is on, it was not removed, and AI subscriptions are on. */
 export function accountEnabled(settings: Pick<Settings, 'accounts' | 'acpEnabled' | 'removedAccounts'>, id: AccountId): boolean {
   if (settings.accounts[id]?.enabled === false || settings.removedAccounts?.includes(id)) return false
-  return settings.acpEnabled !== false || !ACP_ACCOUNTS.includes(id)
+  return settings.acpEnabled !== false
+}
+
+/** Accounts whose utility models cannot run: removed ones, or every one while AI subscriptions are off. */
+export function unavailableAccounts(settings: Pick<Settings, 'acpEnabled' | 'removedAccounts'>): AccountId[] {
+  return settings.acpEnabled === false ? ['claude', 'codex'] : (settings.removedAccounts ?? [])
 }
 
 /**

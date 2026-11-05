@@ -604,6 +604,17 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const recentChats = Object.values(chats)
     .filter((entry) => entry.id !== activeChatId && !entry.side)
     .sort((a, b) => b.updatedAt - a.updatedAt)
+  // An ACP agent's / entries that share a name with one of Galaxy Code's give way to Galaxy Code's.
+  const squash = (value: string): string => value.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase()
+  const galaxyCommands = new Set([
+    ...(modesAvailable ? (Object.keys(MODES) as AgentMode[]).flatMap((value) => [MODES[value].label, MODES[value].command]) : []),
+    ...(canCompact ? ['compact'] : []),
+    ...(model?.fastMode ? ['fast'] : []),
+    ...(model?.ultrafastMode ? ['ultrafast'] : []),
+    'usage',
+    ...(!edit ? ['Side Chat', ...SIDE_COMMANDS] : []),
+    ...skills.flatMap((skill) => [skill.name, ...(skill.displayName ? [skill.displayName] : [])])
+  ].map(squash))
   const mentionEntries: MentionEntry[] = mention?.trigger === '/'
     ? [
         ...(modesAvailable ? (Object.keys(MODES) as AgentMode[]) : [])
@@ -631,6 +642,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         ...(acp?.options ?? [])
           .filter((option) => option.category === 'mode' || option.category === 'model')
           .flatMap((option) => option.options.map((choice) => ({ option, choice })))
+          .filter(({ choice }) => !galaxyCommands.has(squash(choice.name)) && !galaxyCommands.has(squash(choice.value)))
           .filter(({ choice }) => !mention.query || `${choice.name} ${choice.value}`.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase().includes(mention.query.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase()))
           .sort((a, b) => (a.option.category === 'mode' ? 0 : 1) - (b.option.category === 'mode' ? 0 : 1))
           .map(({ option, choice }) => {

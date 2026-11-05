@@ -1,3 +1,4 @@
+import { unavailableAccounts } from '@shared/catalog'
 import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import { CompletionModel, InlineModel, usableUtilityModels } from '@shared/models'
@@ -275,7 +276,7 @@ async function completeUncached(request: CompletionRequest): Promise<Completion>
   abortQuietly(pending)
   const controller = new AbortController()
   pending = controller
-  const model = usableUtilityModels(CompletionModel, store.settings.accounts, store.settings.removedAccounts).find((m) => m.ID === store.settings.completionModelId) ?? CompletionModel[0]
+  const model = usableUtilityModels(CompletionModel, store.settings.accounts, unavailableAccounts(store.settings)).find((m) => m.ID === store.settings.completionModelId) ?? CompletionModel[0]
   if (model.Subscription === 'Default' && !store.openRouterKey) return NONE
   // Whole lines of context, about 6000 characters before and 2000 after.
   const cut = request.prefix.length > 6000 ? request.prefix.indexOf('\n', request.prefix.length - 6000) + 1 : 0
@@ -343,7 +344,7 @@ export async function suggestEdit(request: EditSuggestionRequest): Promise<EditS
   abortQuietly(pendingEdit)
   const controller = new AbortController()
   pendingEdit = controller
-  const model = usableUtilityModels(CompletionModel, store.settings.accounts, store.settings.removedAccounts).find((m) => m.ID === store.settings.completionModelId) ?? CompletionModel[0]
+  const model = usableUtilityModels(CompletionModel, store.settings.accounts, unavailableAccounts(store.settings)).find((m) => m.ID === store.settings.completionModelId) ?? CompletionModel[0]
   if (model.Subscription === 'Default' && !store.openRouterKey) return null
   const lines = request.text.split('\n')
   const cursorLine = request.text.slice(0, request.offset).split('\n').length
@@ -391,7 +392,7 @@ export function cancelInlineEdit(requestId: string): void {
 
 /** Rewrites the selection, or writes new lines after the cursor's line. Text streams through onText as it arrives. */
 export async function inlineEdit(request: InlineEditRequest, onText: (text: string) => void): Promise<string> {
-  const model = usableUtilityModels(InlineModel, store.settings.accounts, store.settings.removedAccounts).find((m) => m.ID === request.modelId) ?? InlineModel[0]
+  const model = usableUtilityModels(InlineModel, store.settings.accounts, unavailableAccounts(store.settings)).find((m) => m.ID === request.modelId) ?? InlineModel[0]
   const target = request.selection
     ? `Rewrite the code between <SELECTION> and </SELECTION>. Reply with only the replacement for it, keeping its indentation.`
     : `Write new code to go on the lines right after the line that ends at <CURSOR>. Reply with only those new lines, indented to fit the surrounding code.`
@@ -428,7 +429,7 @@ export interface TerminalCommandRequest {
 
 /** Writes a shell command for the terminal from an instruction. Text streams through onText as it arrives. */
 export async function terminalCommand(request: TerminalCommandRequest, onText: (text: string) => void): Promise<string> {
-  const model = usableUtilityModels(InlineModel, store.settings.accounts, store.settings.removedAccounts).find((m) => m.ID === request.modelId) ?? InlineModel[0]
+  const model = usableUtilityModels(InlineModel, store.settings.accounts, unavailableAccounts(store.settings)).find((m) => m.ID === request.modelId) ?? InlineModel[0]
   const shell = process.env.SHELL?.split('/').pop() || (process.platform === 'win32' ? 'powershell' : 'sh')
   const controller = new AbortController()
   running.set(request.requestId, controller)

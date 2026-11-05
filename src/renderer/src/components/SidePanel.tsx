@@ -1,4 +1,5 @@
 import hljs from 'highlight.js/lib/common'
+import { unavailableAccounts } from '@shared/catalog'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -423,7 +424,8 @@ function TerminalPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean })
   }
   const accounts = useStore((s) => s.settings.accounts)
   const removedAccounts = useStore((s) => s.settings.removedAccounts)
-  const modelId = usableUtilityModels(InlineModel, accounts, removedAccounts).some((m) => m.ID === inlineModelId) ? (inlineModelId as string) : InlineModel[0].ID
+  const acpEnabled = useStore((s) => s.settings.acpEnabled)
+  const modelId = usableUtilityModels(InlineModel, accounts, unavailableAccounts({ acpEnabled, removedAccounts })).some((m) => m.ID === inlineModelId) ? (inlineModelId as string) : InlineModel[0].ID
 
   const generate = async (): Promise<void> => {
     if (!ask || !ask.instruction.trim() || ask.busy) return

@@ -69,10 +69,14 @@ function GalaxyLogo({ size }: { size: number }): ReactNode {
 /** The provider logo for a subscription. Galaxy gets the app's own mark, agents without a logo a generic account icon. */
 export function SubscriptionIcon({ subscription, size = 13.5 }: { subscription: Subscription | null | undefined; size?: number }): ReactNode {
   if (subscription === 'Default') return <GalaxyLogo size={size} />
-  const account = subscription ? SUBSCRIPTION_ACCOUNT[subscription] : undefined
-  const logo = account ? LOGOS[account] : undefined
+  return <AccountIcon id={subscription ? SUBSCRIPTION_ACCOUNT[subscription] : undefined} size={size} />
+}
+
+/** An account's logo by its id, also for a library agent that is not added yet: the brand logo, a registry icon, or a generic account. */
+export function AccountIcon({ id, size = 13.5 }: { id: AccountId | undefined; size?: number }): ReactNode {
+  const logo = id ? LOGOS[id] : undefined
   if (!logo) {
-    const icon = account ? AcpAgents.find((agent) => agent.ID === account)?.Icon : undefined
+    const icon = id ? AcpAgents.find((agent) => agent.ID === id)?.Icon : undefined
     return icon ? <RegistryIcon src={icon} size={size} /> : <UserRound size={size} className="shrink-0" />
   }
   return (
