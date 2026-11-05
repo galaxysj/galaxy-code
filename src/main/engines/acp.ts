@@ -184,11 +184,26 @@ function isAuthError(err: unknown): boolean {
   return err instanceof RpcError && (err.code === -32000 || /auth/i.test(err.message))
 }
 
+/** An agent that asked for sign-in before it would open a session. */
+class AcpSignInError extends Error {}
+
 /** Records a sign-in request and turns it into a message that says where to sign in. */
 function signInError(id: AccountId, err: unknown): unknown {
   if (!isAuthError(err)) return err
   acpSignedIn.set(id, false)
-  return new Error(`${ACCOUNT_LABELS[id]} is not signed in. Open Settings → ACP agents and sign in, then try again.`)
+  return new AcpSignInError(`${ACCOUNT_LABELS[id]} is not signed in. Open Settings → ACP agents and sign in, then try again.`)
+}
+
+/**
+ * probeAcpOptions for the renderer: a failure comes back as a value, so it never reaches the terminal as an
+ * unhandled IPC error, and says when the agent only needs a sign-in.
+ */
+export async function acpOptionsResult(id: AccountId, cwd: string, fresh = false): Promise<{ options: AcpConfigOption[]; error?: string; signIn?: boolean }> {
+  try {
+    return { options: await probeAcpOptions(id, cwd, fresh) }
+  } catch (err) {
+    return { options: [], error: err instanceof Error ? err.message : String(err), ...(err instanceof AcpSignInError ? { signIn: true } : {}) }
+  }
 }
 
 /**

@@ -53,6 +53,8 @@ export interface AcpProbe {
   options: AcpConfigOption[]
   loading: boolean
   error: string | null
+  /** The agent would not open a session until it is signed in. */
+  signIn?: boolean
 }
 
 /** The side panel's tabs, which belong to one chat. */
@@ -701,8 +703,9 @@ export const useStore = create<State>((set, get) => {
       const projectId = id ? (get().chats[id]?.projectId ?? null) : get().draft.projectId
       set((s) => ({ acpProbes: { ...s.acpProbes, [agentId]: { options: current?.options ?? [], loading: true, error: null } } }))
       try {
-        const options = await window.galaxy.acp.options(agentId, projectId, fresh)
-        set((s) => ({ acpProbes: { ...s.acpProbes, [agentId]: { options, loading: false, error: null } } }))
+        const result = await window.galaxy.acp.options(agentId, projectId, fresh)
+        const failed = result.error !== undefined
+        set((s) => ({ acpProbes: { ...s.acpProbes, [agentId]: { options: failed ? current?.options ?? [] : result.options, loading: false, error: result.error ?? null, ...(result.signIn ? { signIn: true } : {}) } } }))
       } catch (err) {
         const message = err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(err)
         set((s) => ({ acpProbes: { ...s.acpProbes, [agentId]: { options: current?.options ?? [], loading: false, error: message } } }))
@@ -1043,7 +1046,7 @@ export function useRunConfig(): {
   context: number | null
   permissionMode: PermissionMode
   /** Set when the model is an ACP agent, whose own session options replace effort and Fast. */
-  acp: { agentId: string; options: AcpConfigOption[]; values: Record<string, string>; loading: boolean; error: string | null } | null
+  acp: { agentId: string; options: AcpConfigOption[]; values: Record<string, string>; loading: boolean; error: string | null; signIn: boolean } | null
 } {
   const chat = useActiveChat()
   const draft = useStore((s) => s.draft)
@@ -1076,7 +1079,8 @@ export function useRunConfig(): {
           options: live ?? probe?.options ?? [],
           values: source.acpConfig ?? {},
           loading: !live && (probe?.loading ?? true),
-          error: live ? null : (probe?.error ?? null)
+          error: live ? null : (probe?.error ?? null),
+          signIn: !live && probe?.signIn === true
         }
       : null
   }

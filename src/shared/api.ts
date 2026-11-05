@@ -84,8 +84,8 @@ export interface GalaxyApi {
   }
 
   acp: {
-    /** Session options an ACP agent offers, read before a chat exists. */
-    options(id: AccountId, projectId: string | null, fresh?: boolean): Promise<AcpConfigOption[]>
+    /** Session options an ACP agent offers, read before a chat exists. A failure is returned, with signIn when the agent needs a sign-in. */
+    options(id: AccountId, projectId: string | null, fresh?: boolean): Promise<{ options: AcpConfigOption[]; error?: string; signIn?: boolean }>
     /** Agents in the public ACP registry that run on this computer. */
     registry(fresh?: boolean): Promise<AcpRegistryAgent[]>
     /** Downloads a registry agent when it ships as a binary, and returns its Settings entry. */

@@ -24,7 +24,7 @@ import type {
 import { manager } from './agent/manager'
 import { initReviewRepository, readReview, reviewCommits } from './services/review'
 import { accountStatuses, loginAccount } from './services/accounts'
-import { probeAcpOptions } from './engines/acp'
+import { acpOptionsResult } from './engines/acp'
 import { installRegistryAgent, registryAgents, missingRegistryIcons } from './services/acpRegistry'
 import { browser } from './services/browser'
 import { computer } from './services/computer'
@@ -267,7 +267,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'accounts.status': () => accountStatuses(),
     'accounts.login': (id: AccountId) => loginAccount(id),
     'acp.options': (id: AccountId, projectId: string | null, fresh?: boolean) =>
-      probeAcpOptions(id, (projectId && store.project(projectId)?.path) || homedir(), fresh === true),
+      acpOptionsResult(id, (projectId && store.project(projectId)?.path) || homedir(), fresh === true),
     'acp.registry': (fresh?: boolean) => registryAgents(fresh === true),
     'acp.install': (id: string) => installRegistryAgent(String(id)),
 

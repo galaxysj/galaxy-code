@@ -1,6 +1,6 @@
 import { AcpAgents } from './acp-registry'
 import { AgentModel, ImageModel, type AgentModelSpec, type Effort } from './models'
-import { ACP_ACCOUNTS, KEYLESS_ACCOUNTS, SUBSCRIPTION_ACCOUNT, SUBSCRIPTIONS, type AccountId, type AccountStatus, type CustomModel, type ResolvedImageModel, type ResolvedModel, type SecretState, type Settings, type Subscription } from './types'
+import { ACP_ACCOUNTS, SUBSCRIPTION_ACCOUNT, SUBSCRIPTIONS, type AccountId, type AccountStatus, type CustomModel, type ResolvedImageModel, type ResolvedModel, type SecretState, type Settings, type Subscription } from './types'
 
 const EFFORT_ORDER: Effort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
@@ -234,8 +234,8 @@ export function availableSubscriptions(settings: Pick<Settings, 'accounts' | 'ac
   return SUBSCRIPTIONS.filter((subscription) => {
     if (subscription === 'Default') return true
     const id = SUBSCRIPTION_ACCOUNT[subscription]
-    const signedIn = (status: AccountStatus): boolean => status.authenticated === true || KEYLESS_ACCOUNTS.includes(id) || (ACP_ACCOUNTS.includes(id) && status.authenticated !== false)
-    return accountEnabled(settings, id) && statuses.some((status) => status.id === id && status.installed && signedIn(status))
+    // An enabled provider is offered even before sign-in; the composer asks for sign-in when it needs one.
+    return accountEnabled(settings, id) && statuses.some((status) => status.id === id && status.installed)
   })
 }
 

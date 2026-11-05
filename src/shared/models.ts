@@ -851,6 +851,8 @@ export const AgentModel: AgentModelSpec[] = [
 
 /** The first entry is the default Image Generation Model. */
 export const ImageModel: ImageModelSpec[] = [
+  { DisplayName: 'GPT Image 2.6 Sunburst', ID: 'openai/gpt-image-2.6-sunburst', Subscription: 'Default' },
+  { DisplayName: 'GPT Image 2.6 Flare', ID: 'openai/gpt-image-2.6-flare', Subscription: 'Default' },
   { DisplayName: 'GPT Image 2.5 Sunburst', ID: 'openai/gpt-image-2.5-sunburst', Subscription: 'Default' },
   { DisplayName: 'GPT Image 2.5 Flare', ID: 'openai/gpt-image-2.5-flare', Subscription: 'Default' },
   { DisplayName: 'Nano Banana 2.1', ID: 'google/gemini-nano-banana-2.1', Subscription: 'Default' },

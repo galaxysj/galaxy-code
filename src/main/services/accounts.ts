@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { basename } from 'node:path'
 import { ACCOUNT_LABELS, ACP_ACCOUNTS, type AccountId, type AccountStatus } from '@shared/types'
-import { acpAgent, acpBaseEnv, acpBinary, acpCommand, acpLaunch, acpSignedIn } from '../engines/acp'
+import { acpAgent, acpBaseEnv, acpBinary, acpCommand, acpLaunch, acpSignedIn, probeAcpOptions } from '../engines/acp'
 import { RpcProcess } from '../engines/jsonrpc'
 import { codexBinary, startCodexProcess } from '../engines/codex'
 import { store } from '../store'
@@ -50,21 +50,42 @@ async function authState(id: AccountId, binary: string): Promise<{ authenticated
   return { authenticated: null, detail: null }
 }
 
+/**
+ * Whether an ACP agent with no status command is signed in, found by opening a session as the composer does:
+ * it opens when signed in and asks for sign-in when not. The probe is cached, so this costs one start per agent.
+ */
+const unknownSince = new Map<AccountId, number>()
+
+async function probedSignIn(id: AccountId): Promise<boolean | null> {
+  const known = acpSignedIn.get(id)
+  if (known !== undefined) return known
+  // Status checks run on every window focus; an agent that failed for another reason is not restarted each time.
+  if (Date.now() - (unknownSince.get(id) ?? 0) < 60000) return null
+  const probe = probeAcpOptions(id, homedir()).then(() => true, () => {
+    const state = acpSignedIn.get(id) ?? null
+    if (state === null) unknownSince.set(id, Date.now())
+    return state
+  })
+  // A slow agent leaves the state unknown rather than holding up every other account.
+  return Promise.race([probe, new Promise<null>((done) => setTimeout(() => done(null), 20000))])
+}
+
 export async function accountStatuses(): Promise<AccountStatus[]> {
   return Promise.all(
     ['claude', 'codex', ...ACP_ACCOUNTS].map(async (id): Promise<AccountStatus> => {
       const binary = await binaryFor(id)
       // A registry release downloads when the agent first starts, never during a status check.
       if (acpAgent(id)?.RegistryId && !store.settings.accounts[id]?.binaryPath.trim()) {
-        return { id, installed: true, binary, version: null, authenticated: acpSignedIn.get(id) ?? null, detail: binary ? null : 'Downloads on first use' }
+        // Only a release already downloaded is started to check its sign-in.
+        return { id, installed: true, binary, version: null, authenticated: binary ? await probedSignIn(id) : (acpSignedIn.get(id) ?? null), detail: binary ? null : 'Downloads on first use' }
       }
       if (!binary) return { id, installed: false, binary: null, version: null, authenticated: null, detail: null }
       // A package runner stands in for an agent that is not installed; asking it for a version would answer for the runner.
       const runner = (await acpCommand(id))?.prefix.length ? acpAgent(id)?.Runner?.Command : acpAgent(id)?.Registry ? /^(npx|uvx)(\.cmd)?$/.exec(basename(binary))?.[1] : undefined
-      if (runner) return { id, installed: true, binary, version: null, authenticated: acpSignedIn.get(id) ?? null, detail: `Runs with ${runner}` }
+      if (runner) return { id, installed: true, binary, version: null, authenticated: await probedSignIn(id), detail: `Runs with ${runner}` }
       const [ver, auth] = await Promise.all([version(binary), authState(id, binary)])
-      // Agents with no status command report what they last showed.
-      return { id, installed: true, binary, version: ver, ...auth, authenticated: auth.authenticated ?? acpSignedIn.get(id) ?? null }
+      // Agents with no status command are started once to see whether they ask for sign-in.
+      return { id, installed: true, binary, version: ver, ...auth, authenticated: auth.authenticated ?? (ACP_ACCOUNTS.includes(id) ? await probedSignIn(id) : null) }
     })
   )
 }

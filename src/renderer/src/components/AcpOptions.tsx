@@ -1,4 +1,4 @@
-import { Brain, Check, ChevronDown, CircleAlert, Cpu, ListTodo, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
+import { Brain, Check, ChevronDown, CircleAlert, Cpu, ListTodo, LogIn, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { EFFORT_LABELS, type AcpConfigOption } from '@shared/types'
 import { cn } from '../lib/utils'
@@ -123,7 +123,9 @@ export function AcpOptions(): ReactNode {
   const load = useStore((s) => s.loadAcpOptions)
   const setOption = useStore((s) => s.setAcpOption)
   const chatId = useChatId()
+  const notify = useStore((s) => s.notify)
   const agentId = acp?.agentId
+  const [signingIn, setSigningIn] = useState(false)
 
   useEffect(() => {
     if (agentId) void load(agentId, false, chatId)
@@ -144,6 +146,41 @@ export function AcpOptions(): ReactNode {
       return (
         <span className="flex h-7 items-center gap-1.5 px-2 text-[12.5px] text-subtle">
           <Spinner size={12} /> Loading {model?.name ?? 'agent'} options
+        </span>
+      )
+    }
+    if (acp.signIn) {
+      // The agent loaded but wants a sign-in first: offer that instead of an error.
+      const signIn = async (): Promise<void> => {
+        setSigningIn(true)
+        try {
+          const result = await window.galaxy.accounts.login(acp.agentId)
+          notify(result.message, result.ok ? 'info' : 'error')
+        } finally {
+          setSigningIn(false)
+        }
+      }
+      return (
+        <span className="flex h-7 min-w-0 items-center gap-0.5">
+          <button
+            type="button"
+            disabled={signingIn}
+            title={`Sign in to ${model?.name ?? 'the agent'} to use it`}
+            onClick={() => void signIn()}
+            className="flex h-7 min-w-0 items-center gap-1.5 rounded-lg px-2 text-[12.5px] text-muted transition-colors hover:bg-hover hover:text-fg"
+          >
+            {signingIn ? <Spinner size={12} /> : <LogIn size={13} className="shrink-0 text-subtle" />}
+            <span className="truncate">Sign in to {model?.name ?? 'agent'}</span>
+          </button>
+          <button
+            type="button"
+            title="Check again after signing in"
+            aria-label="Check again"
+            onClick={() => void load(acp.agentId, true, chatId)}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-subtle transition-colors hover:bg-hover hover:text-fg"
+          >
+            <RefreshCw size={12} />
+          </button>
         </span>
       )
     }
