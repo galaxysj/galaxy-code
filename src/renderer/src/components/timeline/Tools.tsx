@@ -643,7 +643,9 @@ function FileEditCard({ item, diff, ctx }: { item: ToolItem; diff: FileDiff; ctx
   const [open, toggle] = useDisclosure(false, `${outputMode}:complete`)
   const Icon = KIND_ICON[item.tool]
   const preview = !open && outputMode === 'preview'
-  const verb = diff.created ? 'Created' : diff.deleted ? 'Deleted' : 'Edited'
+  // Before approval, or after it was declined, nothing happened, so the card names what it would do.
+  const awaiting = item.status === 'awaiting' || item.status === 'denied'
+  const verb = diff.created ? (awaiting ? 'Create' : 'Created') : diff.deleted ? (awaiting ? 'Delete' : 'Deleted') : awaiting ? 'Edit' : 'Edited'
   const where = relativeTo(ctx.root, diff.path, homeDir)
   return (
     <div className="my-1.5 overflow-hidden rounded-xl border border-line-strong bg-elev">
@@ -691,32 +693,6 @@ function LiveEditLines({ item, icon }: { item: ToolItem; icon: ReactNode }): Rea
   )
 }
 
-/** One file of an edit being written in Default density: a spinner and the file name, its card ending where the next file starts. */
-function LiveEditCard({ path, diff, text, preview, follow }: { path: string | null; diff?: FileDiff; text?: string; preview: boolean; follow: boolean }): ReactNode {
-  const viewport = useRef<HTMLDivElement>(null)
-  const following = useRef(true)
-  useLayoutEffect(() => {
-    if (follow && following.current && viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight
-  }, [diff, text, follow])
-  const body = diff ? <DiffView diff={diff} maxHeight={null} monochrome /> : text ? <pre className="selectable whitespace-pre-wrap break-words px-3 font-mono text-[13.2px] text-fg">{text}</pre> : null
-  return (
-    <div className="my-1.5 overflow-hidden rounded-xl border border-line-strong bg-elev">
-      <div className="flex h-9 min-w-0 items-center gap-2 px-3 text-[13.8px] font-[450] text-muted" title={path ?? undefined}>
-        <span className="flex w-4 shrink-0 justify-center"><Spinner size={13} /></span>
-        <span className="shimmer min-w-0 truncate">{path ? basename(path) : 'Preparing changes…'}</span>
-      </div>
-      {preview && body && (
-        <div className="activity-output-surface activity-reveal explore-viewport relative border-t border-line">
-          <div ref={viewport} className="max-h-[78px] overflow-auto overscroll-contain py-2" onScroll={(event) => {
-            const target = event.currentTarget
-            following.current = target.scrollHeight - target.scrollTop - target.clientHeight < 24
-          }}>{body}</div>
-        </div>
-      )}
-    </div>
-  )
-}
-
 function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): ReactNode {
   const openFile = useStore((s) => s.openFile)
   const homeDir = useStore((s) => s.homeDir)
@@ -729,6 +705,8 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
   const patchViewport = useRef<HTMLDivElement>(null)
   const followPatch = useRef(true)
   const Icon = KIND_ICON[item.tool]
+  // While it is written, the card shows only the spinner and the name of the file being written.
+  const writing = live ? editFileStats(item).at(-1)?.path : undefined
   const inputPreview = useMemo(() => {
     const input = (item.input ?? {}) as Record<string, unknown>
     if (diffs.length > 0 || isNoChange(item)) return null
@@ -742,16 +720,9 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
     if (live && preview && followPatch.current && patchViewport.current) patchViewport.current.scrollTop = patchViewport.current.scrollHeight
   }, [diffs, inputPreview, live, preview])
 
-  // While it is written, each file gets its own card with only a spinner and its name; a new file starts a new card.
-  if (live && !attemptedTitle(item)) {
-    const showPreview = outputMode === 'preview' || outputMode === 'foreground'
-    const files = diffs.length ? diffs.map((diff) => ({ path: diff.path, diff, text: undefined })) : editFileStats(item).map((file) => ({ path: file.path, diff: undefined, text: file.text }))
-    if (!files.length) return <LiveEditCard path={null} preview={false} follow={false} />
-    return <>{files.map((file, index) => <LiveEditCard key={file.path} path={file.path} diff={file.diff} text={file.text} preview={showPreview} follow={index === files.length - 1} />)}</>
-  }
-
-  // A finished patch that touched several files shows one card per file instead of a single "Edited 12 files".
-  if (!live && item.status === 'done' && diffs.length > 1) {
+  // A finished patch that touched several files shows one card per file instead of a single "Edited 12 files", and so
+  // does one waiting for approval or declined, whose diffs were previewed before it would run.
+  if (!live && (item.status === 'done' || item.status === 'awaiting' || item.status === 'denied') && diffs.length > 1) {
     return <>{diffs.map((diff) => <FileEditCard key={diff.path} item={item} diff={diff} ctx={ctx} />)}</>
   }
 
@@ -760,7 +731,8 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
       <div className="px-3 py-1">
       <Row
         icon={<Icon size={13.5} className="text-subtle" />}
-        title={attemptedTitle(item) ?? (live ? '' : editedTitle(item, diffs))}
+        title={attemptedTitle(item) ?? (live ? (writing ? basename(writing) : 'Preparing changes…') : editedTitle(item, diffs))}
+        plain={live}
         hint={failureReason(item)}
         detail={live ? undefined : item.tool === 'memory' ? item.detail : item.detail && item.detail !== basename(item.detail) ? item.detail : undefined}
         live={live}
