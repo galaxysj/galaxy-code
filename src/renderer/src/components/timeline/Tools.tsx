@@ -170,7 +170,12 @@ function OutputBlock({ text, follow, maxHeight = 300, command, highlight }: { te
     <pre ref={ref} onScroll={(event) => {
       const el = event.currentTarget
       following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
-    }} className={cn('selectable overflow-auto overscroll-contain whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12.7px] leading-[1.55]', highlight ? 'text-fg' : 'text-muted')} style={{ maxHeight }}>
+    }} className={cn(
+      'selectable whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12.7px] leading-[1.55]',
+      // Only a block with a height limit scrolls on its own; an unbounded one never holds the wheel, so the chat scrolls over it.
+      maxHeight === 'none' ? 'overflow-visible' : 'overflow-auto overscroll-contain',
+      highlight ? 'text-fg' : 'text-muted'
+    )} style={{ maxHeight }}>
       {html === null ? text : <code dangerouslySetInnerHTML={{ __html: html }} />}
     </pre>
   )
@@ -413,7 +418,8 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
         <span className="flex w-4 shrink-0 justify-center">{isLive(item) ? <Spinner size={13} /> : <ToolIcon item={item} icon={Icon} />}</span>
         <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(item.tool === 'bash' && item.status !== 'error' ? `${isLive(item) ? 'Running' : 'Ran'} ${toolActivityTitle(item)}` : toolActivityTitle(item))}</span>
         {expandable && <ChevronRight size={13} className={cn('-ml-1 shrink-0 text-subtle opacity-0 transition-all group-hover/line:opacity-100', open && 'rotate-90 opacity-100')} />}
-        {!isTerminalRead(item) && !isToolOutputRead(item) && item.detail && (item.tool === 'browser' || item.detail !== basename(item.detail)) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
+        {/* A command shows only once its line is opened, at the top of the output. */}
+        {item.tool !== 'bash' && !isTerminalRead(item) && !isToolOutputRead(item) && item.detail && (item.tool === 'browser' || item.detail !== basename(item.detail)) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
         {item.meta?.matches !== undefined && item.tool !== 'read' && <span className="shrink-0 text-[12.1px] text-subtle">{plural(item.meta.matches, 'match', 'matches')}</span>}
         <StatusMark item={item} />
       </button>
@@ -501,7 +507,7 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
         <div className={cn('relative mb-1.5 min-h-0 overflow-hidden', live && 'explore-viewport')}>
           <div
             ref={activity}
-            className={cn('py-1', live && 'max-h-48 overflow-y-auto overscroll-contain')}
+            className={cn('py-1', live && 'max-h-48 overflow-y-auto')}
             onScroll={(event) => {
               const target = event.currentTarget
               following.current = { itemId: latestItemId, enabled: target.scrollHeight - target.scrollTop - target.clientHeight < 24 }
