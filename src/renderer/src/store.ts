@@ -1065,7 +1065,7 @@ export function useRunConfig(): {
     model,
     subscription,
     effort: model ? normalizeEffort(model, source.effort) : null,
-    ultra: !!model?.ultraEffort && source.ultra,
+    ultra: settings.ultraMode !== false && !!model?.ultraEffort && source.ultra,
     fast: !!model?.fastMode && source.fast,
     ultrafast: !!model?.ultrafastMode && source.fast && source.ultrafast === true,
     context: model && source.context && model.contextOptions?.includes(source.context) ? source.context : model?.contextWindow ?? null,

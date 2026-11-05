@@ -495,6 +495,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const [mentionFiles, setMentionFiles] = useState<ProjectFileEntry[]>([])
   const [mentionApps, setMentionApps] = useState<InstalledApp[]>([])
   const computerUse = useStore((s) => s.settings.computerUse)
+  const ultraMode = useStore((s) => s.settings.ultraMode !== false)
   const [mentionIndex, setMentionIndex] = useState(0)
   useEffect(() => {
     if (settingsOpen) {
@@ -1230,7 +1231,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
             {acp && <AcpOptions />}
           </div>
           <div className="composer-actions ml-auto flex min-w-0 max-w-full items-center">
-            <span ref={modelSlot} className="composer-model flex min-w-0 items-center"><ModelPicker noUltra={mode === 'multitask'} /></span>
+            <span ref={modelSlot} className="composer-model flex min-w-0 items-center"><ModelPicker noUltra={mode === 'multitask' || !ultraMode} /></span>
             {running && !canSend ? (
               <button
                 type="button"

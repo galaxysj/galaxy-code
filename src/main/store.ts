@@ -66,6 +66,7 @@ function defaultSettings(): Settings {
     instantCommit: false,
     instantPush: false,
     modelPickerStyle: 'default',
+    ultraMode: true,
     commitMessageModelId: null,
     autoApprovalModelId: null,
     disabledProviders: [],

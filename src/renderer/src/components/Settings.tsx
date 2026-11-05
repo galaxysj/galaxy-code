@@ -191,6 +191,9 @@ function GeneralSection(): ReactNode {
               ]}
             />
           </RowItem>
+          <RowItem label="Ultra mode" hint="Offer Ultra as the last effort level.">
+            <Switch checked={settings.ultraMode !== false} onChange={(ultraMode) => void update({ ultraMode })} label="Ultra mode" />
+          </RowItem>
         </Card>
       </Section>
       <Section title="Git">

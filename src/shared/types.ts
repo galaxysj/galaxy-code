@@ -248,6 +248,8 @@ export interface Settings {
   instantPush: boolean
   /** 'default' lists models with an options menu beside it; 'slider' is the effort slider. */
   modelPickerStyle: 'default' | 'slider'
+  /** Offers Ultra as the last effort stop in the composer. Off hides it and runs saved Ultra chats without it. */
+  ultraMode: boolean
   /** ID from CommitMessageModel in models.ts. */
   commitMessageModelId: string | null
   /** ID from AutoApprovalModel in models.ts. */
