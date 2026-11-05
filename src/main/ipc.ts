@@ -25,7 +25,7 @@ import { manager } from './agent/manager'
 import { initReviewRepository, readReview, reviewCommits } from './services/review'
 import { accountStatuses, loginAccount } from './services/accounts'
 import { probeAcpOptions } from './engines/acp'
-import { installRegistryAgent, registryAgents } from './services/acpRegistry'
+import { installRegistryAgent, registryAgents, missingRegistryIcons } from './services/acpRegistry'
 import { browser } from './services/browser'
 import { computer } from './services/computer'
 import { terminals } from './services/terminal'
@@ -152,6 +152,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
   }
   const emitSettings = (): void => emitUi({ type: 'settings', settings: store.settings, secrets: store.secretState() })
   const emitProjects = (): void => emitUi({ type: 'projects', projects: store.projects })
+
+  // Registry agents added before icons were saved get theirs once the registry loads.
+  void missingRegistryIcons(store.settings.acpAgents).then((icons) => {
+    if (!icons.size) return
+    // Applied to the list as it is now, in case agents changed while the icons loaded.
+    const acpAgents = store.settings.acpAgents.map((agent) => {
+      const icon = icons.get(agent.id)
+      return icon && agent.registry && !agent.registry.icon ? { ...agent, registry: { ...agent.registry, icon } } : agent
+    })
+    store.saveSettings({ acpAgents })
+    emitSettings()
+  }, () => {})
 
   manager.connect(emitChat, emitUi)
   browser.windowForChat = chatWindow

@@ -61,6 +61,7 @@ import { LiveMarkdown } from './LiveMarkdown'
 import { Markdown } from './Markdown'
 import { SUBSCRIPTION_LABELS } from './ModelPicker'
 import { Resizer, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from './Resizer'
+import { RegistryIcon } from './SubscriptionIcon'
 import { Button, Dropdown, IconButton, MenuItem, MenuSeparator, Modal, Popover, Segmented, Spinner, Switch, TextInput, type DropdownOption } from './ui'
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu; dividerBefore?: boolean; beta?: boolean }[] = [
@@ -1377,7 +1378,7 @@ function AcpAddMenu({ library, onLibrary, onRegistry, onCustom }: { library: Acp
           listed.map((agent) => (
             <MenuItem
               key={agent.id}
-              icon={installing === agent.id ? <Spinner size={12} /> : undefined}
+              icon={installing === agent.id ? <Spinner size={12} /> : agent.icon ? <RegistryIcon src={agent.icon} size={13} /> : undefined}
               label={agent.name}
               hint={agent.distribution === 'binary' ? 'Download' : agent.distribution}
               disabled={installing !== null}

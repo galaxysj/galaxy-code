@@ -1,5 +1,6 @@
 import { UserRound } from 'lucide-react'
 import { useId, type ReactNode } from 'react'
+import { AcpAgents } from '@shared/acp-registry'
 import type { ModelBrand } from '@shared/models'
 import { SUBSCRIPTION_ACCOUNT, type AccountId, type Subscription } from '@shared/types'
 
@@ -32,6 +33,12 @@ const LOGOS: Record<AccountId, Logo> = {
   }
 }
 
+/** An ACP registry icon. Registry icons draw in currentColor, so it is a mask filled with the text color. */
+export function RegistryIcon({ src, size = 13.5 }: { src: string; size?: number }): ReactNode {
+  const mask = `url("${src}") center / contain no-repeat`
+  return <span aria-hidden="true" className="inline-block shrink-0 bg-current" style={{ width: size, height: size, mask, WebkitMask: mask }} />
+}
+
 /** Galaxy Code's mark in one color: a rounded square with the app icon's stars cut out. */
 function GalaxyLogo({ size }: { size: number }): ReactNode {
   const maskId = useId()
@@ -62,8 +69,12 @@ function GalaxyLogo({ size }: { size: number }): ReactNode {
 /** The provider logo for a subscription. Galaxy gets the app's own mark, agents without a logo a generic account icon. */
 export function SubscriptionIcon({ subscription, size = 13.5 }: { subscription: Subscription | null | undefined; size?: number }): ReactNode {
   if (subscription === 'Default') return <GalaxyLogo size={size} />
-  const logo = subscription ? LOGOS[SUBSCRIPTION_ACCOUNT[subscription]] : undefined
-  if (!logo) return <UserRound size={size} className="shrink-0" />
+  const account = subscription ? SUBSCRIPTION_ACCOUNT[subscription] : undefined
+  const logo = account ? LOGOS[account] : undefined
+  if (!logo) {
+    const icon = account ? AcpAgents.find((agent) => agent.ID === account)?.Icon : undefined
+    return icon ? <RegistryIcon src={icon} size={size} /> : <UserRound size={size} className="shrink-0" />
+  }
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill={logo.color ?? 'currentColor'} fillRule="evenodd" className="shrink-0" aria-hidden="true">
       <path d={logo.path} />

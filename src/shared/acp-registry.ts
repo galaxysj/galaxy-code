@@ -64,6 +64,8 @@ export interface AcpAgentSpec {
   Custom?: boolean
   /** Installed from the public ACP registry. */
   Registry?: boolean
+  /** The registry's icon as a data URL, drawn in currentColor. */
+  Icon?: string
 }
 
 export const AcpLibrary: AcpAgentSpec[] = [

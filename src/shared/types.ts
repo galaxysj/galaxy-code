@@ -115,7 +115,7 @@ export interface AcpAgentConfig {
   /** ID of the AcpLibrary entry this agent runs; the fields above then come from the library. */
   library?: string
   /** The ACP registry entry this agent was installed from. */
-  registry?: { id: string; version: string; description?: string }
+  registry?: { id: string; version: string; description?: string; icon?: string }
 }
 
 /** An agent in the public ACP registry that can run on this computer. */
@@ -124,6 +124,7 @@ export interface AcpRegistryAgent {
   name: string
   version: string
   description: string
+  /** The registry's SVG icon as a data URL; it draws in currentColor. */
   icon?: string
   website?: string
   /** How it runs here: a downloaded binary, or a package fetched by npx or uvx. */
@@ -785,7 +786,8 @@ function customAcpSpec(agent: AcpAgentConfig): AcpAgentSpec {
     Args: agent.args,
     Env: agent.env,
     Custom: true,
-    ...(agent.registry ? { Registry: true } : {})
+    ...(agent.registry ? { Registry: true } : {}),
+    ...(agent.registry?.icon ? { Icon: agent.registry.icon } : {})
   }
 }
 

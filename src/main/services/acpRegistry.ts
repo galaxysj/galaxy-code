@@ -36,6 +36,31 @@ interface RegistryEntry {
 }
 
 let cached: { at: number; agents: RegistryEntry[] } | null = null
+const icons = new Map<string, Promise<string | undefined>>()
+
+/**
+ * A registry icon as a data URL, since the renderer only loads images from data URLs.
+ * Registry icons are small SVGs drawn in currentColor; anything else is skipped.
+ */
+export function registryIcon(url: string | undefined): Promise<string | undefined> {
+  if (!url || !/^https:\/\//.test(url)) return Promise.resolve(undefined)
+  let icon = icons.get(url)
+  if (!icon) {
+    icon = fetch(url, { signal: AbortSignal.timeout(10000) })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const svg = (await res.text()).trim()
+        if (svg.length > 64 * 1024 || !/^(<\?xml[^>]*>\s*)?<svg[\s>]/i.test(svg)) return undefined
+        return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`
+      })
+      .catch(() => {
+        icons.delete(url)
+        return undefined
+      })
+    icons.set(url, icon)
+  }
+  return icon
+}
 
 function cacheFile(): string {
   return join(app.getPath('userData'), 'acp-registry.json')
@@ -77,19 +102,36 @@ async function load(fresh: boolean): Promise<RegistryEntry[]> {
 /** Registry agents that can run on this machine, apart from ones Galaxy Code already runs on its own. */
 export async function registryAgents(fresh = false): Promise<AcpRegistryAgent[]> {
   const agents = await load(fresh)
-  return agents.flatMap((entry) => {
+  const listed = agents.flatMap((entry) => {
     const distribution = distributionOf(entry)
     if (!distribution || !entry.id || !entry.name || DUPLICATE_REGISTRY_IDS.has(entry.id)) return []
-    return [{
+    return [{ entry, distribution }]
+  })
+  return Promise.all(listed.map(async ({ entry, distribution }) => {
+    const icon = await registryIcon(entry.icon)
+    return {
       id: entry.id,
       name: entry.name,
       version: entry.version,
       description: entry.description ?? '',
-      ...(entry.icon ? { icon: entry.icon } : {}),
+      ...(icon ? { icon } : {}),
       ...(entry.website || entry.repository ? { website: entry.website ?? entry.repository } : {}),
       distribution
-    }]
-  })
+    }
+  }))
+}
+
+/** Icons for registry agents added before icons were saved, keyed by agent id. */
+export async function missingRegistryIcons(agents: AcpAgentConfig[]): Promise<Map<string, string>> {
+  const found = new Map<string, string>()
+  const missing = agents.filter((agent) => agent.registry && !agent.registry.icon)
+  if (!missing.length) return found
+  const entries = await load(false).catch(() => [] as RegistryEntry[])
+  await Promise.all(missing.map(async (agent) => {
+    const icon = await registryIcon(entries.find((entry) => entry.id === agent.registry!.id)?.icon)
+    if (icon) found.set(agent.id, icon)
+  }))
+  return found
 }
 
 /** Downloads and unpacks a binary release into the app's data folder, checking its digest when the registry has one. */
@@ -180,6 +222,7 @@ export async function installRegistryAgent(id: string): Promise<AcpAgentConfig> 
   const entry = (await load(false)).find((agent) => agent.id === id)
   if (!entry) throw new Error(`${id} is not in the ACP registry.`)
   if (DUPLICATE_REGISTRY_IDS.has(entry.id)) throw new Error(`${entry.name} is already built into Galaxy Code.`)
-  const registry = { id: entry.id, version: entry.version, ...(entry.description ? { description: entry.description } : {}) }
+  const icon = await registryIcon(entry.icon)
+  const registry = { id: entry.id, version: entry.version, ...(entry.description ? { description: entry.description } : {}), ...(icon ? { icon } : {}) }
   return { id: `acp_${entry.id.replace(/[^A-Za-z0-9_-]/g, '_')}`, name: entry.name, registry, ...(await launchOf(entry)) }
 }
