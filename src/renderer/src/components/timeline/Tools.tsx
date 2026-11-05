@@ -36,7 +36,7 @@ import { EXPLORE_KINDS, type AskQuestion, type FileDiff, type Item, type Reasoni
 import { basename, cn, formatBytes, formatDuration, pageHost, plural, relativeTo } from '../../lib/utils'
 import { attemptedTitle, editStats, isNoChange, isTerminalRead, isToolOutputRead, readPath, thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
 import { useStore } from '../../store'
-import { DiffStat, DiffView, LiveDiffStat } from '../DiffView'
+import { DiffStat, DiffView } from '../DiffView'
 import { Markdown } from '../Markdown'
 import { FileIcon as FileTypeIcon } from '../ProjectFiles'
 import { Button, Spinner, TabFavicon } from '../ui'
@@ -135,15 +135,16 @@ function Row({ icon, title, detail, trailing, live, open, onToggle, dim, plain, 
     >
       <span className="flex w-4 shrink-0 justify-center">{live ? <Spinner size={13} /> : icon}</span>
       <span className={cn('min-w-0 shrink truncate', live && 'shimmer')}>{plain ? title : leadWord(title)}</span>
-      {detail && <span className="min-w-0 flex-1 truncate font-mono text-[12.7px] text-subtle">{detail}</span>}
-      {!detail && <span className="flex-1" />}
-      {trailing}
+      {/* Right after the title, as on the Worked for line. */}
       {onToggle && (
         <ChevronRight
           size={13}
-          className={cn('shrink-0 text-subtle opacity-0 transition-all group-hover/row:opacity-100', open && 'rotate-90 opacity-100')}
+          className={cn('-ml-1 shrink-0 text-subtle opacity-0 transition-all group-hover/row:opacity-100', open && 'rotate-90 opacity-100')}
         />
       )}
+      {detail && <span className="min-w-0 flex-1 truncate font-mono text-[12.7px] text-subtle">{detail}</span>}
+      {!detail && <span className="flex-1" />}
+      {trailing}
     </button>
     </span>
   )
@@ -406,13 +407,14 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
         type="button"
         disabled={!action}
         onClick={action}
-        className={cn('flex h-7 w-full min-w-0 items-center gap-2 text-left text-[13.8px] font-[450] text-muted', action && 'hover:text-fg')}
+        aria-expanded={expandable ? open : undefined}
+        className={cn('group/line flex h-7 w-full min-w-0 items-center gap-2 text-left text-[13.8px] font-[450] text-muted', action && 'hover:text-fg')}
       >
         <span className="flex w-4 shrink-0 justify-center">{isLive(item) ? <Spinner size={13} /> : <ToolIcon item={item} icon={Icon} />}</span>
         <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(item.tool === 'bash' && item.status !== 'error' ? `${isLive(item) ? 'Running' : 'Ran'} ${toolActivityTitle(item)}` : toolActivityTitle(item))}</span>
+        {expandable && <ChevronRight size={13} className={cn('-ml-1 shrink-0 text-subtle opacity-0 transition-all group-hover/line:opacity-100', open && 'rotate-90 opacity-100')} />}
         {!isTerminalRead(item) && !isToolOutputRead(item) && item.detail && (item.tool === 'browser' || item.detail !== basename(item.detail)) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
         {item.meta?.matches !== undefined && item.tool !== 'read' && <span className="shrink-0 text-[12.1px] text-subtle">{plural(item.meta.matches, 'match', 'matches')}</span>}
-        {editing && item.status !== 'error' && !isNoChange(item) && <LiveDiffStat {...editStats(item)} live={isLive(item)} />}
         <StatusMark item={item} />
       </button>
       {(open || preview) && expandable && (
@@ -483,8 +485,6 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
   const compact = useStore((s) => s.settings.toolDensity === 'compact')
   const lastTool = tools[tools.length - 1]
   const GroupIcon = compact && (lastTool?.tool === 'edit' || lastTool?.tool === 'create') ? KIND_ICON[lastTool.tool] : compact && lastTool?.tool === 'bash' ? SquareTerminal : Search
-  // Compact folds edits into the group, so its row carries their line counts as they are written.
-  const edits = tools.filter((tool) => (tool.tool === 'edit' || tool.tool === 'create') && tool.status !== 'error' && !isNoChange(tool)).map(editStats).reduce((sum, stat) => ({ added: sum.added + stat.added, removed: sum.removed + stat.removed }), { added: 0, removed: 0 })
   const failures = tools.filter((tool) => tool.status === 'error')
   return (
     <div className="explore-group" title={failures.length && failures.length === tools.length ? failures.map((tool) => `${toolActivityTitle({ ...tool, status: 'done' })}: ${failureReason(tool)}`).join('\n') : undefined}>
@@ -494,7 +494,7 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
         live={live}
         open={open}
         onToggle={toggle}
-        trailing={failed ? <StatusMark item={tools[0]} /> : edits.added || edits.removed ? <LiveDiffStat added={edits.added} removed={edits.removed} live={live} /> : null}
+        trailing={failed ? <StatusMark item={tools[0]} /> : null}
       />
       {(open || shown) && (
         <div className="fold" data-open={open && shown} inert={!open}>
