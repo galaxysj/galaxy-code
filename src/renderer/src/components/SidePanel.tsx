@@ -1,3 +1,5 @@
+import { artifactTitle, isDocumentArtifact, isTasksArtifact, parseFrontMatter, parseTaskMarkdown, userEditable } from '@shared/artifacts'
+import { TaskMark } from './TaskMark'
 import hljs from 'highlight.js/lib/common'
 import { unavailableAccounts } from '@shared/catalog'
 import { Terminal } from '@xterm/xterm'
@@ -16,10 +18,12 @@ import {
   Eye,
   FileDiff as FileDiffIcon,
   FileQuestion,
+  File as FileIcon,
   FileText,
   FolderOpen,
   Globe,
   Hammer,
+  ListTodo,
   MessageSquareDiff,
   MessagesSquare,
   GitBranch,
@@ -223,8 +227,8 @@ function SourceView({ content, path, line }: { content: string; path: string; li
   )
 }
 
-/** Plans written in Plan mode live directly in .galaxy/plans. */
-const PLAN_FILE = /[/\\]\.galaxy[/\\]plans[/\\][^/\\]+\.md$/i
+/** The plan written in Plan mode is plan.md in the chat's artifacts folder. */
+const PLAN_FILE = /[/\\]\.galaxy[/\\][^/\\]+[/\\]artifacts[/\\]plan\.md$/i
 
 /** Sends the saved plan to the agent, without a mode, so it starts carrying it out. */
 async function buildPlan(path: string, root: string | null): Promise<void> {
@@ -298,7 +302,18 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
   const isMarkdown = /\.(md|mdx|markdown)$/i.test(file.path)
   const isHtml = /\.html?$/i.test(file.path)
   const isSvg = view?.mime === 'image/svg+xml'
-  const hasPreview = isMarkdown || isSvg
+  /** The agent's task list: shown as it is, never editable here. */
+  const tasksFile = isTasksArtifact(file.path)
+  /** A document the agent wrote: its front matter is hidden, and `user-editable: false` makes it read-only. */
+  const document = isDocumentArtifact(file.path) && view?.kind === 'text'
+  const front = document ? parseFrontMatter(view?.content ?? '') : null
+  const locked = document && !userEditable(view?.content ?? '')
+  const hasPreview = (isMarkdown || isSvg) && !tasksFile && !locked
+  // The document's name is its tab title.
+  useEffect(() => {
+    const name = front?.meta.name
+    if (document && name) useStore.getState().updatePanelTab(file.path, { customTitle: name })
+  }, [document, front?.meta.name, file.path])
 
   return (
     <div className={cn('flex h-full flex-col', !visible && 'hidden')}>
@@ -365,9 +380,24 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
           <div className="flex h-full items-center justify-center overflow-auto p-6" style={{ background: 'repeating-conic-gradient(var(--bg-hover) 0% 25%, transparent 0% 50%) 50% / 18px 18px' }}>
             <img src={view.dataUrl} alt={view.name} className="max-h-full max-w-full rounded object-contain shadow-pop" draggable={false} />
           </div>
+        ) : tasksFile && view.kind === 'text' ? (
+          <div className="h-full overflow-y-auto px-6 py-5">
+            <div className="space-y-2">
+              {parseTaskMarkdown(view.content ?? '').map((task, index) => (
+                <div key={index} className="flex items-start gap-2.5 text-[13.5px] leading-[1.5]" style={{ paddingLeft: (task.depth ?? 0) * 20 }}>
+                  <TaskMark status={task.status} className="mt-[3px]" />
+                  <span className={cn('selectable min-w-0', task.status === 'completed' ? 'text-subtle line-through decoration-line-strong' : task.status === 'in_progress' ? 'font-medium text-fg' : 'text-muted')}>{task.content}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : document && locked ? (
+          <div className="h-full overflow-y-auto px-6 py-5">
+            <Markdown text={front?.body ?? ''} root={file.path.slice(0, file.path.lastIndexOf('/'))} html />
+          </div>
         ) : isMarkdown && mode === 'preview' && view.kind === 'text' && !view.truncated ? (
           <div className="flex h-full flex-col">
-            <LiveMarkdown key={`${file.path}:${file.nonce}:${reload}:${editStamp}`} initial={view.content ?? ''} onChange={editLive} onSave={saveLive} />
+            <LiveMarkdown key={`${file.path}:${file.nonce}:${reload}:${editStamp}`} initial={front ? front.body : view.content ?? ''} onChange={(text) => editLive((front?.raw ?? '') + text)} onSave={(text) => saveLive((front?.raw ?? '') + text)} />
           </div>
         ) : isMarkdown && mode === 'preview' ? (
           <div className="h-full overflow-y-auto px-6 py-5">
@@ -924,7 +954,7 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
   }, [tabs])
   const icons = { browser: Globe, file: FileText, files: FolderOpen, terminal: SquareTerminal, review: GitCompare, agent: PanelRight, side: MessagesSquare }
   const contextTab = tabs.find((entry) => entry.id === context?.id)
-  const titleFor = (entry: PanelTab): string => entry.customTitle ?? (entry.type === 'browser' ? browserStates[entry.id]?.title || (browserStates[entry.id]?.url ? browserStates[entry.id].url : 'New tab') : entry.type === 'side' && chats[entry.chatId] && chats[entry.chatId].title !== 'New chat' ? chats[entry.chatId].title : entry.title)
+  const titleFor = (entry: PanelTab): string => (entry.type === 'file' && ['Plan', 'Task'].includes(artifactTitle(entry.path) ?? '') ? artifactTitle(entry.path) : null) ?? entry.customTitle ?? (entry.type === 'browser' ? browserStates[entry.id]?.title || (browserStates[entry.id]?.url ? browserStates[entry.id].url : 'New tab') : entry.type === 'side' && chats[entry.chatId] && chats[entry.chatId].title !== 'New chat' ? chats[entry.chatId].title : entry.title)
   const commitRename = (): void => { if (renaming && renameValue.trim()) updateTab(renaming, { customTitle: renameValue.trim() }); setRenaming(null) }
   const act = (action: () => void): void => { setContext(null); action() }
   useEffect(() => {
@@ -953,7 +983,7 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
       <div className="relative flex h-[46px] shrink-0 items-center gap-1.5 bg-bg px-2">
         <div ref={strip} className="panel-tab-strip no-drag relative flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1.5 px-px" style={{ maxWidth: tabs.reduce((width, tab) => width + (tab.pinned ? 58 : 224), 0) }}>
           {tabs.map((entry) => {
-            const Icon = icons[entry.type]
+            const Icon = entry.type === 'file' && artifactTitle(entry.path) ? (artifactTitle(entry.path) === 'Plan' ? FileText : artifactTitle(entry.path) === 'Task' ? ListTodo : FileIcon) : icons[entry.type]
             const title = titleFor(entry)
             const active = activeTab === entry.id
             return (

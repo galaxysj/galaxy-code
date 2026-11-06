@@ -1,3 +1,4 @@
+import { TASKS_ARTIFACT } from '@shared/artifacts'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -20,7 +21,6 @@ import {
   memoryTool,
   openTool,
   presentTool,
-  taskTool,
   webFetchTool,
   webSearchTool
 } from './galaxy'
@@ -112,7 +112,6 @@ export const ALL_TOOLS: ToolDef[] = [
   listTabsTool,
   messageTool,
   askTool,
-  taskTool,
   presentTool,
   openTool,
   memoryTool,
@@ -120,39 +119,46 @@ export const ALL_TOOLS: ToolDef[] = [
 ]
 
 /** Tools Galaxy Code lends to account CLIs. */
-export const BRIDGE_TOOLS: ToolDef[] = [agentTool, messageTool, editTool, lintTool, waitTool, eventTool, browserTool, computerTool, listTabsTool, askTool, taskTool, presentTool, openTool, memoryTool, imageGenerationTool]
+export const BRIDGE_TOOLS: ToolDef[] = [agentTool, messageTool, editTool, lintTool, waitTool, eventTool, browserTool, computerTool, listTabsTool, askTool, presentTool, openTool, memoryTool, imageGenerationTool]
 
-/** Where Plan mode keeps its plans: in the user's home, never inside the project. */
-export const PLANS_DIR = join(homedir(), '.galaxy', 'plans')
+/** Where a chat keeps its artifacts: in the user's home, never inside the project. */
+export const artifactsDir = (chatId: string): string => join(homedir(), '.galaxy', chatId, 'artifacts')
+
+/** The one file Plan mode writes. A new plan rewrites it instead of adding another file. */
+export const PLAN_FILE = 'plan.md'
 
 function planPaths(tool: ToolDef, input: Record<string, unknown>, cwd: string): string[] {
   return patchFiles(parseEditPatch(str(input, 'patch', true), cwd), cwd)
 }
 
-/** Edit limited to Markdown files directly inside ~/.galaxy/plans. Those writes need no approval. */
-function planOnly(tool: ToolDef): ToolDef {
+/** Edit limited to Markdown files directly in the chat's artifacts folder (plan.md, task.md and documents). Those writes need no approval. */
+function artifactOnly(tool: ToolDef, mode: string): ToolDef {
   return {
     ...tool,
-    description: `${tool.description}\n\nPlan mode: paths resolve inside ${PLANS_DIR}/, and only Markdown files directly in it can be written, such as add-login.md.`,
+    description: `${tool.description}\n\n${mode} mode: paths resolve inside the chat's artifacts folder, and only Markdown files directly in it can be written, such as ${PLAN_FILE}, ${TASKS_ARTIFACT} or a document like how-to.md. Use *** Add File to create one and *** Update File to revise it.`,
     approval: undefined,
     async execute(input, ctx) {
-      // Plans live outside the project, so relative paths resolve against the plans folder.
-      const paths = planPaths(tool, input, PLANS_DIR)
-      const outside = paths.filter((path) => dirname(path) !== PLANS_DIR || !/\.md$/i.test(path))
-      if (outside.length) throw new Error(`Plan mode can only write Markdown files in ${PLANS_DIR}/. Not allowed: ${outside.join(', ')}`)
-      await mkdir(PLANS_DIR, { recursive: true })
-      const result = await tool.execute(input, { ...ctx, cwd: PLANS_DIR })
-      const plan = paths.at(-1)
-      if (plan && ctx.session.agentId === 'main') ctx.session.emitUi({ type: 'open-file', chatId: ctx.session.id, path: plan })
+      // The plan lives outside the project, so relative paths resolve against the chat's artifacts folder.
+      const dir = artifactsDir(ctx.session.id)
+      const paths = planPaths(tool, input, dir)
+      const outside = paths.filter((path) => dirname(path) !== dir || !/\.md$/i.test(path))
+      if (outside.length) throw new Error(`${mode} mode can only write Markdown files in ${dir}/. Not allowed: ${outside.join(', ')}`)
+      await mkdir(dir, { recursive: true })
+      const result = await tool.execute(input, { ...ctx, cwd: dir })
+      // Every artifact the patch wrote opens, the plan last so it is the tab in front.
+      if (ctx.session.agentId === 'main') {
+        const opened = [...new Set(paths)].sort((a, b) => Number(a === join(dir, PLAN_FILE)) - Number(b === join(dir, PLAN_FILE)))
+        for (const path of opened) ctx.session.emitUi({ type: 'open-file', chatId: ctx.session.id, path })
+      }
       return result
     }
   }
 }
 
-/** Ask answers from what it can read. Plan reads and writes only its plan files. */
+/** Ask answers from what it can read. Ask and Plan write only artifacts. */
 export function toolsForMode(mode: Exclude<AgentMode, 'multitask'>): ToolDef[] {
-  if (mode === 'ask') return [...EXPLORE_TOOLS, askTool, exploreOnly(agentTool), messageTool]
-  return [...EXPLORE_TOOLS, planOnly(editTool), askTool, exploreOnly(agentTool), messageTool]
+  if (mode === 'ask') return [...EXPLORE_TOOLS, artifactOnly(editTool, 'Ask'), askTool, exploreOnly(agentTool), messageTool]
+  return [...EXPLORE_TOOLS, artifactOnly(editTool, 'Plan'), askTool, exploreOnly(agentTool), messageTool]
 }
 
 /** The Agent tool as Ask and Plan offer it: it only starts Explore subagents, which cannot change anything. */

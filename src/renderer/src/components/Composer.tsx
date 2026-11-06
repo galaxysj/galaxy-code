@@ -1,11 +1,9 @@
+import { TaskMark } from './TaskMark'
 import {
   AppWindow,
   ArrowUp,
   Check,
   ChevronDown,
-  CircleCheck,
-  CircleDashed,
-  CircleDot,
   CircleQuestionMark,
   File as FileIcon,
   Folder,
@@ -328,7 +326,7 @@ const COMPACT_MODEL_MAX = 260
 
 const MODES: Record<AgentMode, { label: string; command: string; description: string; placeholder: string; icon: typeof Globe; tone: string }> = {
   ask: { label: 'Ask', command: 'ask', description: 'Answer questions with read-only tools. Nothing is changed.', placeholder: 'Ask questions', icon: CircleQuestionMark, tone: 'var(--green)' },
-  plan: { label: 'Plan', command: 'plan', description: 'Research and write a plan to ~/.galaxy/plans before building.', placeholder: 'Describe what to plan', icon: FileText, tone: 'var(--orange)' },
+  plan: { label: 'Plan', command: 'plan', description: 'Research and write a plan before building.', placeholder: 'Describe what to plan', icon: FileText, tone: 'var(--orange)' },
   multitask: { label: 'Multitask', command: 'multitask', description: 'Split the request into tasks that subagents work on in parallel.', placeholder: 'Describe the tasks', icon: MessageCircle, tone: 'var(--purple)' }
 }
 
@@ -1354,7 +1352,7 @@ function CurrentTask({ chat, items }: { chat: Chat; items: Item[] | undefined })
   if (chat.status !== 'running' && chat.status !== 'awaiting') return null
   const list = items ?? []
   const lastUser = list.findLastIndex((item) => item.kind === 'user' && !item.parentId)
-  const plan = list.slice(lastUser + 1).findLast((item): item is ToolItem => item.kind === 'tool' && item.tool === 'task' && !item.parentId && !!item.meta?.tasks?.length)
+  const plan = list.slice(lastUser + 1).findLast((item): item is ToolItem => item.kind === 'tool' && !item.parentId && !!item.meta?.tasks?.length)
   const tasks = plan?.meta?.tasks ?? []
   const current = tasks.find((task) => task.status === 'in_progress') ?? tasks.find((task) => task.status === 'pending')
   if (!current) return null
@@ -1366,8 +1364,8 @@ function CurrentTask({ chat, items }: { chat: Chat; items: Item[] | undefined })
       <span className="shrink-0 text-[11.5px] tabular-nums text-subtle">{done}/{tasks.length}</span>
       <div className="pointer-events-none absolute bottom-full left-0 z-30 mb-1 w-full max-w-[520px] rounded-xl border border-line bg-elev p-2.5 opacity-0 shadow-pop transition-opacity group-hover/task:pointer-events-auto group-hover/task:opacity-100">
         {tasks.map((task, index) => (
-          <div key={index} className="flex items-start gap-2 py-1 text-[12.5px] leading-snug">
-            {task.status === 'completed' ? <CircleCheck size={13} className="mt-0.5 shrink-0 text-ok" /> : task.status === 'in_progress' ? <CircleDot size={13} className="mt-0.5 shrink-0 text-fg" /> : <CircleDashed size={13} className="mt-0.5 shrink-0 text-subtle" />}
+          <div key={index} className="flex items-start gap-2 py-1 text-[12.5px] leading-snug" style={{ paddingLeft: (task.depth ?? 0) * 16 }}>
+            <TaskMark status={task.status} size={13} className="mt-0.5" />
             <span className={cn('min-w-0', task.status === 'completed' ? 'text-subtle line-through' : task.status === 'in_progress' ? 'text-fg' : 'text-muted')}>{task.content}</span>
           </div>
         ))}

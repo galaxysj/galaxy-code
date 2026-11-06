@@ -1,5 +1,6 @@
+import { isDocumentArtifact, keepLockedMeta, userEditable } from '@shared/artifacts'
 import { unavailableAccounts } from '@shared/catalog'
-import { mkdir, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import { CompletionModel, InlineModel, usableUtilityModels } from '@shared/models'
 import { store } from '../store'
@@ -45,6 +46,14 @@ export interface InlineEditRequest {
 export async function saveFile(path: string, content: string): Promise<void> {
   const target = expandHome(path)
   await mkdir(dirname(target), { recursive: true })
+  // A document artifact keeps its `user-editable` line however it is edited by hand, and a locked one is not written at all.
+  if (isDocumentArtifact(target)) {
+    const previous = await readFile(target, 'utf8').catch(() => null)
+    if (previous !== null) {
+      if (!userEditable(previous)) throw new Error('The agent locked this document, so it cannot be edited here.')
+      content = keepLockedMeta(previous, content)
+    }
+  }
   await writeFile(target, content, 'utf8')
 }
 

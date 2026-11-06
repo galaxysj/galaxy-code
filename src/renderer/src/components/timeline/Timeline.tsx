@@ -488,7 +488,7 @@ export function Timeline({ chat, items, root }: TimelineProps): ReactNode {
         else children.set(item.parentId, [item])
       } else {
         top.push(item)
-        if (item.kind === 'tool' && item.tool === 'task' && item.meta?.tasks?.length) latestTaskId = item.id
+        if (item.kind === 'tool' && item.meta?.tasks?.length) latestTaskId = item.id
       }
     }
     const ctx: TimelineContext = {

@@ -510,6 +510,8 @@ export interface AskQuestion {
 export interface TaskEntry {
   content: string
   status: 'pending' | 'in_progress' | 'completed'
+  /** Nesting under another task in the task file; unset for a top-level task. */
+  depth?: number
 }
 
 export interface FileDiff {
@@ -520,6 +522,8 @@ export interface FileDiff {
   patch: string
   created?: boolean
   deleted?: boolean
+  /** The name in a document artifact's front matter, shown in place of the file name. */
+  title?: string
 }
 
 export interface PresentedFile {

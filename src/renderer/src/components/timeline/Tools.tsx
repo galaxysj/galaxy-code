@@ -1,3 +1,4 @@
+import { artifactTitle } from '@shared/artifacts'
 import {
   FileOutput,
   Bot,
@@ -284,7 +285,10 @@ function exploreSummary(all: ToolItem[], verb = 'Explored'): string {
   const web = items.filter((i) => i.tool === 'websearch').length
   const pages = items.filter((i) => i.tool === 'webfetch' || i.tool === 'browser').length
   const commands = items.filter((i) => i.tool === 'bash').length
-  const edited = new Set(items.filter((i) => i.tool === 'edit' || i.tool === 'create').flatMap((i) => { const { paths } = editStats(i); return paths.length ? paths : [i.id] })).size
+  const editedPaths = new Set(items.filter((i) => i.tool === 'edit' || i.tool === 'create').flatMap((i) => { const { paths } = editStats(i); return paths.length ? paths : [i.id] }))
+  // Files in the chat's artifacts folder are counted apart: "updated 2 artifacts".
+  const artifacts = [...editedPaths].filter((path) => artifactTitle(path)).length
+  const edited = editedPaths.size - artifacts
   const others = items.filter((i) => !EXPLORE_KINDS.includes(i.tool) && !['bash', 'edit', 'create', 'browser'].includes(i.tool)).length
   const parts = [
     files && plural(files, 'file'),
@@ -301,7 +305,7 @@ function exploreSummary(all: ToolItem[], verb = 'Explored'): string {
   // A single item names what it was rather than counting to one. Waits are not listed, so they do not make it two.
   const listed = items.filter((i) => i.tool !== 'wait')
   const single = listed.length === 1 ? listed[0] : null
-  if (single && reads.length === 1) parts[0] = terminals ? 'terminal' : outputs ? 'tool output' : basename(readPath(reads[0])) || 'file'
+  if (single && reads.length === 1) parts[0] = terminals ? 'terminal' : outputs ? 'tool output' : artifactTitle(readPath(reads[0])) ?? (basename(readPath(reads[0])) || 'file')
   else if (single && skills) parts[0] = `${single.meta?.skill} skill`
   else if (single && searches) parts[0] = single.meta?.query ? JSON.stringify(single.meta.query) : 'search'
   else if (single && lists) parts[0] = basename(String((single.input as { path?: unknown } | null)?.path ?? '').replace(/\/+$/, '')).replace(/^\.$/, '') || 'folder'
@@ -313,6 +317,7 @@ function exploreSummary(all: ToolItem[], verb = 'Explored'): string {
     commands && `${done ? 'ran' : 'running'} ${singleCommand ? singleCommand.charAt(0).toLowerCase() + singleCommand.slice(1) : plural(commands, 'command')}`,
     // A group never names the file it edited, even when there is one: "edited a file".
     edited && `${done ? 'edited' : 'editing'} ${edited === 1 ? 'a file' : plural(edited, 'file')}`,
+    artifacts && `${done ? 'updated' : 'updating'} ${plural(artifacts, 'artifact')}`,
     others && `${done ? 'used' : 'using'} ${others === 1 && single ? single.name : plural(others, 'tool')}`
   ].filter((part): part is string => !!part)
   // Waits sit in the group without being listed; on their own the group reads "Waited".
@@ -397,8 +402,10 @@ function ExploreLine({ item }: { item: ToolItem }): ReactNode {
 
 function ExploreItemLine({ item }: { item: ToolItem }): ReactNode {
   const openFile = useStore((s) => s.openFile)
-  const Icon = isTerminalRead(item) ? SquareTerminal : isToolOutputRead(item) ? FileOutput : KIND_ICON[item.tool]
   const path = isTerminalRead(item) || isToolOutputRead(item) ? undefined : item.tool === 'read' && typeof (item.input as { path?: string; file_path?: string })?.path === 'string' ? (item.input as { path: string }).path : (item.input as { file_path?: string })?.file_path
+  // An artifact reads by its name, Plan or Task, and keeps its own icon, whether it is read or edited.
+  const readArtifact = item.tool === 'read' && path ? artifactTitle(path) : null
+  const Icon = isTerminalRead(item) ? SquareTerminal : isToolOutputRead(item) ? FileOutput : (readArtifact ? artifactIcon((path as string)) : artifactsIcon(item.meta?.diffs?.map((diff) => diff.path) ?? [])) ?? KIND_ICON[item.tool]
   const url = item.meta?.url
   const results = item.meta?.results
   // Medium and Compact have no Tool output setting: their lines stay closed until clicked.
@@ -423,11 +430,11 @@ function ExploreItemLine({ item }: { item: ToolItem }): ReactNode {
         className={cn('group/line flex h-7 w-full min-w-0 items-center gap-2 text-left text-[13.8px] font-[450] text-muted', action && 'hover:text-fg')}
       >
         <span className="flex w-4 shrink-0 justify-center">{isLive(item) ? <Spinner size={13} /> : <ToolIcon item={item} icon={Icon} />}</span>
-        <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(item.tool === 'bash' && item.status !== 'error' ? `${isLive(item) ? 'Running' : 'Ran'} ${toolActivityTitle(item)}` : editing && diffs.length && !attemptedTitle(item) ? editedTitle(item, diffs) : toolActivityTitle(item))}</span>
+        <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(readArtifact ? `${isLive(item) ? 'Reading' : 'Read'} ${readArtifact}` : item.tool === 'bash' && item.status !== 'error' ? `${isLive(item) ? 'Running' : 'Ran'} ${toolActivityTitle(item)}` : editing && diffs.length && !attemptedTitle(item) ? editedTitle(item, diffs) : toolActivityTitle(item))}</span>
         {editing && diffs.length > 0 && !isNoChange(item) && <DiffStat added={diffs[0].added} removed={diffs[0].removed} />}
         {expandable && <ChevronRight size={13} className={cn('-ml-1 shrink-0 text-subtle opacity-0 transition-all group-hover/line:opacity-100', open && 'rotate-90 opacity-100')} />}
         {/* A command shows only once its line is opened, at the top of the output. */}
-        {item.tool !== 'bash' && !isTerminalRead(item) && !isToolOutputRead(item) && item.detail && (item.tool === 'browser' || item.detail !== basename(item.detail)) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
+        {item.tool !== 'bash' && !readArtifact && !isTerminalRead(item) && !isToolOutputRead(item) && item.detail && (item.tool === 'browser' || item.detail !== basename(item.detail)) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
         {item.meta?.matches !== undefined && item.tool !== 'read' && <span className="shrink-0 text-[12.1px] text-subtle">{plural(item.meta.matches, 'match', 'matches')}</span>}
         <StatusMark item={item} />
       </button>}
@@ -498,7 +505,7 @@ export const ExploreGroup = memo(function ExploreGroup({ items, disclosureKey, a
   // Compact folds edits and commands in too, so the icon follows the group's latest action: edit, terminal or search.
   const compact = useStore((s) => s.settings.toolDensity === 'compact')
   const lastTool = tools[tools.length - 1]
-  const GroupIcon = compact && (lastTool?.tool === 'edit' || lastTool?.tool === 'create') ? KIND_ICON[lastTool.tool] : compact && lastTool?.tool === 'bash' ? SquareTerminal : Search
+  const GroupIcon = compact && (lastTool?.tool === 'edit' || lastTool?.tool === 'create') ? (artifactsIcon(editStats(lastTool).paths) ?? KIND_ICON[lastTool.tool]) : compact && lastTool?.tool === 'bash' ? SquareTerminal : Search
   const failures = tools.filter((tool) => tool.status === 'error')
   return (
     <div className="explore-group" title={failures.length && failures.length === tools.length ? failures.map((tool) => `${toolActivityTitle({ ...tool, status: 'done' })}: ${failureReason(tool)}`).join('\n') : undefined}>
@@ -629,9 +636,37 @@ function BashTool({ item }: { item: ToolItem; ctx: TimelineContext }): ReactNode
   )
 }
 
+/** An artifact's title in a card: the name in a document's front matter when the edit carried one. */
+function diffTitle(diff: FileDiff): string | null {
+  return artifactTitle(diff.path) && (diff.title ?? artifactTitle(diff.path))
+}
+
+/** Each artifact has its own icon: Plan a text file, Task a list, any other artifact the plain File icon. */
+function artifactIcon(path: string): typeof Wrench | null {
+  const title = artifactTitle(path)
+  return !title ? null : title === 'Plan' ? FileText : title === 'Task' ? ListTodo : FileIcon
+}
+
+/** The icon for edits that touch only artifacts: the shared one when they agree, else a plain file. Null when any edited file is not an artifact. */
+function artifactsIcon(paths: string[]): typeof Wrench | null {
+  const icons = paths.map(artifactIcon)
+  if (!icons.length || icons.some((icon) => !icon)) return null
+  return icons.every((icon) => icon === icons[0]) ? icons[0] : FileIcon
+}
+
+/** Whether a patch touched several files and all of them are artifacts. */
+function allArtifacts(diffs: FileDiff[] | undefined): boolean {
+  return !!diffs && diffs.length > 1 && diffs.every((diff) => artifactTitle(diff.path))
+}
+
 /** A finished edit says what it did: Created, Deleted or Edited, then the file or the file count. */
 function editedTitle(item: ToolItem, diffs: FileDiff[]): string {
   if (!diffs.length) return item.title
+  // Artifacts always read Updated, whether the patch created, changed or replaced them.
+  const pendingArtifacts = item.status === 'awaiting' || item.status === 'denied' ? 'Update' : 'Updated'
+  if (diffs.length > 1 && diffs.every((diff) => artifactTitle(diff.path))) return `${pendingArtifacts} ${plural(diffs.length, 'artifact')}`
+  const artifact = diffs.length === 1 ? diffTitle(diffs[0]) : null
+  if (artifact) return `${pendingArtifacts} ${artifact}`
   // Waiting for approval or declined, nothing happened, so it names what it would do: Create, Delete or Edit.
   const pending = item.status === 'awaiting' || item.status === 'denied'
   const verb = diffs.every((diff) => diff.created) ? (pending ? 'Create' : 'Created') : diffs.every((diff) => diff.deleted) ? (pending ? 'Delete' : 'Deleted') : pending ? 'Edit' : 'Edited'
@@ -643,19 +678,20 @@ function FileEditCard({ item, diff, ctx }: { item: ToolItem; diff: FileDiff; ctx
   const homeDir = useStore((s) => s.homeDir)
   const outputMode = useStore((s) => s.settings.terminalOutput)
   const [open, toggle] = useDisclosure(false, `${outputMode}:complete`)
-  const Icon = KIND_ICON[item.tool]
+  const Icon = artifactIcon(diff.path) ?? KIND_ICON[item.tool]
   const preview = !open && outputMode === 'preview'
   // Before approval, or after it was declined, nothing happened, so the card names what it would do.
   const awaiting = item.status === 'awaiting' || item.status === 'denied'
-  const verb = diff.created ? (awaiting ? 'Create' : 'Created') : diff.deleted ? (awaiting ? 'Delete' : 'Deleted') : awaiting ? 'Edit' : 'Edited'
+  const artifact = diffTitle(diff)
+  const verb = artifact ? (awaiting ? 'Update' : 'Updated') : diff.created ? (awaiting ? 'Create' : 'Created') : diff.deleted ? (awaiting ? 'Delete' : 'Deleted') : awaiting ? 'Edit' : 'Edited'
   const where = relativeTo(ctx.root, diff.path, homeDir)
   return (
     <div className="my-1.5 overflow-hidden rounded-xl border border-line-strong bg-elev">
       <div className="px-3 py-1">
         <Row
           icon={<Icon size={13.5} className="text-subtle" />}
-          title={`${verb} ${basename(diff.path)}`}
-          detail={where !== basename(diff.path) ? where : undefined}
+          title={`${verb} ${artifact ?? basename(diff.path)}`}
+          detail={!artifact && where !== basename(diff.path) ? where : undefined}
           open={open}
           onToggle={toggle}
           trailing={
@@ -706,7 +742,7 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
   const [open, toggle] = useDisclosure(false, `${outputMode}:${live ? 'editing' : 'complete'}`)
   const patchViewport = useRef<HTMLDivElement>(null)
   const followPatch = useRef(true)
-  const Icon = KIND_ICON[item.tool]
+  const Icon = artifactsIcon(item.meta?.diffs?.map((diff) => diff.path) ?? []) ?? KIND_ICON[item.tool]
   // While it is written, the card shows only the spinner and the name of the file being written.
   const writing = live ? editFileStats(item).at(-1)?.path : undefined
   const inputPreview = useMemo(() => {
@@ -724,7 +760,7 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
 
   // A finished patch that touched several files shows one card per file instead of a single "Edited 12 files", and so
   // does one waiting for approval or declined, whose diffs were previewed before it would run.
-  if (!live && (item.status === 'done' || item.status === 'awaiting' || item.status === 'denied') && diffs.length > 1) {
+  if (!live && (item.status === 'done' || item.status === 'awaiting' || item.status === 'denied') && diffs.length > 1 && !allArtifacts(diffs)) {
     return <>{diffs.map((diff) => <FileEditCard key={diff.path} item={item} diff={diff} ctx={ctx} />)}</>
   }
 
@@ -736,7 +772,7 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
         title={attemptedTitle(item) ?? (live ? (writing ? basename(writing) : 'Preparing changes…') : editedTitle(item, diffs))}
         plain={live}
         hint={failureReason(item)}
-        detail={live ? undefined : item.tool === 'memory' ? item.detail : item.detail && item.detail !== basename(item.detail) ? item.detail : undefined}
+        detail={live || artifactsIcon(diffs.map((diff) => diff.path)) ? undefined : item.tool === 'memory' ? item.detail : item.detail && item.detail !== basename(item.detail) ? item.detail : undefined}
         live={live}
         open={open}
         onToggle={live || isNoChange(item) ? undefined : toggle}
@@ -931,7 +967,7 @@ function TaskTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
       {open && (
         <div className="mb-2 ml-6 space-y-[3px] rounded-lg border border-line bg-inset px-3 py-2.5">
           {tasks.map((task, index) => (
-            <div key={index} className="flex items-start gap-2 text-[13.8px] leading-[1.45]">
+            <div key={index} className="flex items-start gap-2 text-[13.8px] leading-[1.45]" style={{ paddingLeft: (task.depth ?? 0) * 16 }}>
               <span className="mt-[2px]"><TaskIcon status={task.status} /></span>
               <span className={cn('selectable min-w-0', task.status === 'completed' ? 'text-subtle line-through decoration-line-strong' : task.status === 'in_progress' ? 'text-fg' : 'text-muted')}>
                 {task.content}
@@ -1083,7 +1119,7 @@ export function PresentTool({ item }: { item: ToolItem }): ReactNode {
           return (
             <div key={file.path} className="group/file flex w-full items-center gap-3 rounded-lg border border-line px-4 py-3">
               <div className="flex min-w-0 flex-1 items-center gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-line bg-hover"><FileTypeIcon name={file.name} size={16} /></span>
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-line bg-hover">{artifactTitle(file.path) ? <FileIcon size={16} className="text-fg" /> : <FileTypeIcon name={file.name} size={16} />}</span>
                 <button type="button" onClick={() => openFile(file.path)} className="min-w-0 flex-1 text-left" title={file.path}>
                   <span className="block truncate text-[14.3px] font-medium text-fg">{file.name}</span>
                   <span className="block text-[12.1px] text-subtle">{formatBytes(file.size)}</span>

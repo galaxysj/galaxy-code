@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type { Attachment, Effort, FileDiff, ToolItem } from '@shared/types'
 import { buildSystemPrompt, gatherContext } from '../agent/prompt'
@@ -18,7 +17,6 @@ import { completeStringFields, streamedEditInput } from './claude'
 import { makeDiff } from '../tools/diff'
 
 const MAX_STEPS = 250
-const PLAN_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789'
 /** Context window for models whose size models.ts does not give. */
 const DEFAULT_CONTEXT_WINDOW = 200_000
 
@@ -341,14 +339,9 @@ async function loop(options: LoopOptions): Promise<string> {
   return finalText
 }
 
-/** Eight random lowercase letters and digits that keep plan file names unique. */
-function planId(): string {
-  return Array.from(randomBytes(8), (byte) => PLAN_ID_CHARS[byte % PLAN_ID_CHARS.length]).join('')
-}
-
 /** Runs a turn against OpenRouter (or the BYOK endpoint) with Galaxy Code's own tools. */
 export async function runNative(session: Session, turn: Turn): Promise<void> {
-  const ctx = await gatherContext(session, { permissionMode: turn.permissionMode, modelName: turn.model.name, ultra: turn.ultra && !turn.mode, mode: turn.mode, planId: turn.mode === 'plan' ? planId() : undefined })
+  const ctx = await gatherContext(session, { permissionMode: turn.permissionMode, modelName: turn.model.name, ultra: turn.ultra && !turn.mode, mode: turn.mode })
   const history = (session.doc.engine.history ?? []) as ChatMessage[]
   session.doc.engine.history = history
   repairHistory(history)

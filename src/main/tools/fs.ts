@@ -1,13 +1,14 @@
 import { spawn } from 'node:child_process'
 import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { basename, join, sep } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { basename, dirname, join, sep } from 'node:path'
 import { rgPath as bundledRgPath } from '@vscode/ripgrep'
-import type { ToolItem } from '@shared/types'
+import { artifactName, frontMatterProblem, isDocumentArtifact, isTasksArtifact, parseFrontMatter, parseTaskMarkdown } from '@shared/artifacts'
+import type { FileDiff, ToolItem } from '@shared/types'
 import { outsideReadApproval } from '../agent/approval'
 import { skillNameForPath } from '../services/skills'
 import { displayPath, exists, isImagePath, looksBinary, mimeOf, resolvePath, truncateEnd } from '../util'
-import { applyEditPatch, parseEditPatch, patchFiles, previewEditPatch } from './patch'
+import { applyEditPatch, parseEditPatch, patchFiles, plannedContents, previewEditPatch } from './patch'
 import { bool, num, plural, str, ToolInputError, type ToolDef } from './types'
 
 const rgPath = bundledRgPath.replace(/app\.asar([/\\])/, 'app.asar.unpacked$1')
@@ -296,6 +297,9 @@ Update File hunks use a space for unchanged context, - for removed lines and + f
   approval(input, ctx) {
     const patch = str(input, 'patch', true)
     const operations = parseEditPatch(patch, ctx.cwd).operations
+    // Markdown in the chat's artifacts folder (the task list, documents) is the agent's own work product, so writing it needs no approval.
+    const files = patchFiles({ operations }, ctx.cwd)
+    if (files.length > 0 && files.every((path) => /\.md$/i.test(artifactName(path) ?? '') && path.startsWith(join(homedir(), '.galaxy') + sep))) return null
     const outside = patchFiles({ operations }, ctx.cwd).some((path) => path !== ctx.cwd && !path.startsWith(ctx.cwd + sep))
     return {
       action: {
@@ -312,15 +316,29 @@ Update File hunks use a space for unchanged context, - for removed lines and + f
   },
   async execute(input, ctx) {
     const patch = str(input, 'patch', true)
-    const proposed = await previewEditPatch(patch, ctx.cwd)
+    for (const path of patchFiles(parseEditPatch(patch, ctx.cwd), ctx.cwd)) if (artifactName(path)) await mkdir(dirname(path), { recursive: true })
+    // A document artifact must carry a name and user-editable, and its name becomes the title the user sees.
+    const planned = await plannedContents(patch, ctx.cwd)
+    const titles = new Map<string, string>()
+    for (const [path, content] of planned) {
+      if (content === null || !isDocumentArtifact(path)) continue
+      const problem = frontMatterProblem(content)
+      if (problem) throw new ToolInputError(`${basename(path)}: ${problem}`)
+      titles.set(path, parseFrontMatter(content).meta.name.trim())
+    }
+    const named = (list: FileDiff[]): FileDiff[] => list.map((diff) => (titles.has(diff.path) ? { ...diff, title: titles.get(diff.path) } : diff))
+    const proposed = named(await previewEditPatch(patch, ctx.cwd))
     const item = ctx.session.item<ToolItem>(ctx.itemId)
     ctx.session.update<ToolItem>(ctx.itemId, { meta: { ...item?.meta, diffs: proposed } })
-    const diffs = await applyEditPatch(patch, ctx.cwd, ctx.signal)
+    const diffs = named(await applyEditPatch(patch, ctx.cwd, ctx.signal))
     // A patch whose result matches the files as they are writes nothing. The agent should know that, and it is not an edit to show.
     if (!diffs.length) return { text: 'No changes: the patch leaves every file as it already was. Read the file before trying again.', meta: { diffs } }
+    // The task file also becomes the user's task list above the composer.
+    const taskFile = diffs.find((diff) => isTasksArtifact(diff.path) && !diff.deleted)
+    const tasks = taskFile ? parseTaskMarkdown(await readFile(taskFile.path, 'utf8').catch(() => '')) : undefined
     return {
       text: `Applied patch to ${plural(diffs.length, 'file')}.${diffs.length ? '\n' + diffs.map((diff) => `${diff.created ? 'A' : diff.deleted ? 'D' : 'M'} ${diff.path}`).join('\n') : ''}`,
-      meta: { diffs }
+      meta: { diffs, ...(tasks?.length ? { tasks } : {}) }
     }
   }
 }

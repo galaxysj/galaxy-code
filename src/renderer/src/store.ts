@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
 import { create } from 'zustand'
+import { artifactTitle } from '@shared/artifacts'
 import { AUTO_MODEL, availableSubscriptions, defaultModel, findModel, needsCredits, normalizeEffort, resolveImageModels, resolveModels } from '@shared/catalog'
 import {
   acpAgentFor,
@@ -817,7 +818,7 @@ export const useStore = create<State>((set, get) => {
         const openFiles = existing
           ? s.openFiles.map((f) => (f.path === path ? { ...f, line, nonce: f.nonce + 1 } : f))
           : [...s.openFiles, { path, line, nonce: 0 }]
-        const panelTabs = s.panelTabs.some((tab) => tab.id === path) ? s.panelTabs : [...s.panelTabs, { id: path, type: 'file' as const, path, title: path.split('/').pop() ?? path }]
+        const panelTabs = s.panelTabs.some((tab) => tab.id === path) ? s.panelTabs : [...s.panelTabs, { id: path, type: 'file' as const, path, title: artifactTitle(path) ?? path.split('/').pop() ?? path }]
         return { openFiles, panelTabs, panelOpen: true, panelTab: path }
       })
     },

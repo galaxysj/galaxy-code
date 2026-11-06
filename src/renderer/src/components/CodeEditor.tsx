@@ -1,4 +1,5 @@
 import { diffLines } from 'diff'
+import { isDocumentArtifact, parseFrontMatter } from '@shared/artifacts'
 import { unavailableAccounts } from '@shared/catalog'
 import { CornerDownLeft, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -256,6 +257,20 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onTextChange, o
       editor.revealPositionInCenterIfOutsideViewport(at)
       editor.trigger('galaxy', 'editor.action.inlineSuggest.trigger', {})
     }, 'galaxyJump && !galaxyEditSuggestion && !inlineSuggestionVisible && !suggestWidgetVisible')
+    // A document the agent wrote keeps its `user-editable` line: an edit that changes or removes it is undone at once.
+    const lockedLine = isDocumentArtifact(path) ? /^user-editable\s*:.*$/im.exec(parseFrontMatter(initial).raw)?.[0] ?? null : null
+    let restoring = false
+    const guard = model.onDidChangeContent(() => {
+      if (!lockedLine || restoring) return
+      if (/^user-editable\s*:.*$/im.exec(parseFrontMatter(model.getValue()).raw)?.[0] === lockedLine) return
+      restoring = true
+      try {
+        editor.trigger('galaxy', 'undo', null)
+      } finally {
+        restoring = false
+      }
+      useStore.getState().notify('The user-editable line is set by the agent and cannot be changed.', 'info')
+    })
     const keys = editor.onKeyDown((event) => {
       if (event.keyCode !== monaco.KeyCode.Tab && event.keyCode !== monaco.KeyCode.Shift) clearJump()
     })
@@ -287,6 +302,7 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onTextChange, o
     })
 
     return () => {
+      guard.dispose()
       keys.dispose()
       tracker.dispose()
       suggestions.dispose()

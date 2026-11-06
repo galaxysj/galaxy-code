@@ -1,9 +1,10 @@
+import { isDocumentArtifact, parseFrontMatter } from '@shared/artifacts'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { resolveImageModels } from '@shared/catalog'
-import type { AskQuestion, PresentedFile, TaskEntry } from '@shared/types'
+import type { AskQuestion, PresentedFile } from '@shared/types'
 import { browser, type BrowserAction } from '../services/browser'
 import { memoryPath, updateMemory, type MemoryAction } from '../services/memory'
 import { generateImage } from '../services/openrouter'
@@ -378,50 +379,6 @@ export const askTool: ToolDef = {
   }
 }
 
-function parseTasks(input: Record<string, unknown>): TaskEntry[] {
-  const raw = input.tasks
-  if (!Array.isArray(raw)) throw new ToolInputError('`tasks` must be an array')
-  return raw.map((entry) => {
-    const task = (entry ?? {}) as Record<string, unknown>
-    const status = task.status === 'completed' || task.status === 'in_progress' ? task.status : 'pending'
-    return { content: String(task.content ?? task.title ?? '').trim(), status } as TaskEntry
-  }).filter((t) => t.content)
-}
-
-export const taskTool: ToolDef = {
-  name: 'Task',
-  kind: 'task',
-  description:
-    'Create or update the task list for the current work. Each call replaces the whole list, so always send every task with its current status. Use it for work with more complex steps: write the list before starting, keep exactly one task in_progress, and mark each task completed as soon as it is done. Skip it for simple requests.',
-  parameters: {
-    type: 'object',
-    properties: {
-      tasks: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            content: { type: 'string', description: 'What needs doing, in the imperative.' },
-            status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] }
-          },
-          required: ['content', 'status']
-        }
-      }
-    },
-    required: ['tasks']
-  },
-  present(input) {
-    const tasks = Array.isArray(input.tasks) ? (input.tasks as { status?: string }[]) : []
-    const done = tasks.filter((t) => t.status === 'completed').length
-    return { title: done === 0 ? `Planned ${plural(tasks.length, 'task')}` : `Updated tasks (${done}/${tasks.length} done)` }
-  },
-  async execute(input) {
-    const tasks = parseTasks(input)
-    const done = tasks.filter((t) => t.status === 'completed').length
-    return { text: `Task list updated: ${done} of ${tasks.length} completed.`, meta: { tasks } }
-  }
-}
-
 export const presentTool: ToolDef = {
   name: 'Present',
   kind: 'present',
@@ -449,7 +406,11 @@ export const presentTool: ToolDef = {
       const abs = resolvePath(ctx.cwd, p)
       const info = await stat(abs).catch(() => null)
       if (!info || !info.isFile()) missing.push(p)
-      else files.push({ path: abs, name: basename(abs), mime: mimeOf(abs), size: info.size })
+      else {
+        // A document artifact is presented under the name in its front matter.
+        const title = isDocumentArtifact(abs) ? parseFrontMatter(await readFile(abs, 'utf8').catch(() => '')).meta.name?.trim() : ''
+        files.push({ path: abs, name: title || basename(abs), mime: mimeOf(abs), size: info.size })
+      }
     }
     if (files.length === 0) throw new Error(`None of the files exist: ${missing.join(', ')}`)
     return {

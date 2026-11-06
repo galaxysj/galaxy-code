@@ -225,17 +225,19 @@ function StopSlider({ stops, index, label, ariaLabel, ultra, labels, onSelect }:
 }
 
 /** Models that cannot run while OpenRouter has nothing left to spend. */
-function useCreditLock(): { locked: boolean; isLocked(model: ResolvedModel): boolean } {
+function useCreditLock(): { locked: boolean; note: boolean; isLocked(model: ResolvedModel): boolean } {
   const locked = useStore((s) => s.creditsLocked)
   const secrets = useStore((s) => s.secrets)
   const settings = useStore((s) => s.settings)
-  return { locked, isLocked: (model) => locked && needsCredits(model, secrets, settings) }
+  // With a BYOK key or custom provider connected the user still has models to use, so the plain description stays.
+  const byok = settings.customProviders.length > 0 || Object.keys(secrets.providerKeys).some((id) => !settings.disabledProviders.includes(id as ProviderId))
+  return { locked, note: locked && !byok, isLocked: (model) => locked && needsCredits(model, secrets, settings) }
 }
 
 const CREDIT_LOCK_NOTE = "You've used all your credits. Add a BYOK key or credits to keep using other models."
 
 function ModelList({ models, acp, current, subscription, allowUltra, onPick, onBack, onClose }: { models: ResolvedModel[]; acp: boolean; current: ResolvedModel | null; subscription: Subscription | null; allowUltra: boolean; onPick(key: string): void; onBack(): void; onClose(): void }): ReactNode {
-  const { locked, isLocked } = useCreditLock()
+  const { note, isLocked } = useCreditLock()
   const hasKey = useStore((s) => s.secrets.openRouterKey || s.settings.customProviders.length > 0 || Object.keys(s.secrets.providerKeys).some((id) => !s.settings.disabledProviders.includes(id as ProviderId)))
   const [query, setQuery] = useState('')
 
@@ -264,7 +266,7 @@ function ModelList({ models, acp, current, subscription, allowUltra, onPick, onB
         />
       </div>
       <div className="max-h-[300px] overflow-y-auto p-1">
-        {locked && <p className="px-2 pb-2 pt-1 text-[11.5px] leading-snug text-subtle">{CREDIT_LOCK_NOTE}</p>}
+        {note && <p className="px-2 pb-2 pt-1 text-[11.5px] leading-snug text-subtle">{CREDIT_LOCK_NOTE}</p>}
         {subscription === 'Default' && !query.trim() && (
           <button
             type="button"
@@ -475,7 +477,7 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
   const label = auto ? autoTier(model) : !model ? '' : optionSummary(model, { effort, ultra, fast, ultrafast, context }, !noUltra)
   // With Auto on there is no search box, so a search left from before must not keep the list open.
   const needle = auto ? '' : query.trim().toLowerCase()
-  const { locked, isLocked } = useCreditLock()
+  const { locked, note, isLocked } = useCreditLock()
   const visible = models.filter((m) => m.enabled && !m.auto && !isLocked(m) && m.subscription === subscription && (!needle || m.name.toLowerCase().includes(needle) || m.id.toLowerCase().includes(needle)))
   const current = { effort, ultra, fast, ultrafast }
   // Open the options around the Edit row, kept within the list's height.
@@ -520,7 +522,7 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
               {/* With Auto on, the slider picks Free or an OpenRouter Auto Router tier. */}
               {auto && <>
                 {!locked && model && <div className="pb-1 pt-1"><AutoTabs model={model} onPick={config.pick} /></div>}
-                <p className="pb-2 pt-1 text-[11.5px] leading-snug text-subtle">{locked ? CREDIT_LOCK_NOTE : model?.description}</p>
+                <p className="pb-2 pt-1 text-[11.5px] leading-snug text-subtle">{note ? CREDIT_LOCK_NOTE : model?.description}</p>
               </>}
             </div>
           )}
@@ -599,6 +601,7 @@ export function ModelPicker({ noUltra = false }: { noUltra?: boolean }): ReactNo
 /** The Slider style: one model, with an effort slider. */
 function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
   const creditsLocked = useStore((s) => s.creditsLocked)
+  const { note: creditNote } = useCreditLock()
   const anchor = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const [listing, setListing] = useState(false)
@@ -710,7 +713,7 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
               </button>
             </div>
             {auto && !creditsLocked && <div className="mt-2.5"><AutoSlider model={model} onPick={config.pick} /></div>}
-            {(creditsLocked || model.description) && <p className="mt-2 px-1 text-center text-[11.5px] leading-snug text-subtle">{creditsLocked ? CREDIT_LOCK_NOTE : model.description}</p>}
+            {(creditNote || model.description) && <p className="mt-2 px-1 text-center text-[11.5px] leading-snug text-subtle">{creditNote ? CREDIT_LOCK_NOTE : model.description}</p>}
             {hasEffort && (
               <div className="mt-2.5" title={ultra ? `Ultra orchestrates parallel subagents at ${EFFORT_LABELS[model.ultraEffort as Effort].toLowerCase()} effort` : undefined}>
                 <EffortSlider model={model} effort={effort} ultra={ultra} allowUltra={!noUltra} onChange={(next) => config.setOptions(next)} />

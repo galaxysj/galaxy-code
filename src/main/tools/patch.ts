@@ -65,6 +65,11 @@ async function planEditPatch(patch: string, cwd: string): Promise<{ before: Map<
   return { before, contents }
 }
 
+/** Every file's content after the patch, without writing: null for a deleted file. */
+export async function plannedContents(patch: string, cwd: string): Promise<Map<string, string | null>> {
+  return (await planEditPatch(patch, cwd)).contents
+}
+
 export async function previewEditPatch(patch: string, cwd: string): Promise<FileDiff[]> {
   const { before, contents } = await planEditPatch(patch, cwd)
   return [...before].flatMap(([path, original]) => {
