@@ -868,7 +868,6 @@ export const ImageModel: ImageModelSpec[] = [
 export const CompletionModel: AccountUtilityModelSpec[] = [
   { DisplayName: 'Haiku', ID: '~anthropic/claude-haiku-latest', Subscription: 'Default' },
   { DisplayName: 'Luna', ID: '~openai/gpt-luna-latest', Subscription: 'Default' },
-  { DisplayName: 'Mercury 3', ID: 'inception/mercury-3', Subscription: 'Default' },
   { DisplayName: 'Auto', ID: 'openrouter/free', Subscription: 'Default' },
   { DisplayName: 'Haiku 5.5', ID: 'claude-haiku-5-5', Subscription: 'Claude' },
   { DisplayName: 'GPT-6 Luna', ID: 'gpt-6-luna', Subscription: 'Codex' }
