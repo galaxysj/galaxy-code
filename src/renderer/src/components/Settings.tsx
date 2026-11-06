@@ -5,6 +5,7 @@ import {
   Gauge,
   Boxes,
   Check,
+  ChevronDown,
   CircleAlert,
   Cpu,
   Globe,
@@ -62,7 +63,7 @@ import { Markdown } from './Markdown'
 import { SUBSCRIPTION_LABELS } from './ModelPicker'
 import { Resizer, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from './Resizer'
 import { AccountIcon, RegistryIcon } from './SubscriptionIcon'
-import { Button, Dropdown, IconButton, MenuItem, MenuSeparator, Modal, Popover, Segmented, Spinner, Switch, TextInput, type DropdownOption } from './ui'
+import { Button, Dropdown, IconButton, MenuItem, MenuSeparator, Modal, Segmented, Spinner, Switch, TextInput, type DropdownOption } from './ui'
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu; dividerBefore?: boolean; beta?: boolean }[] = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
@@ -1285,10 +1286,11 @@ function AgentsSection(): ReactNode {
   const { agents, add, remove } = useAgentEditing()
   const [editing, setEditing] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [others, setOthers] = useState(false)
+  /** The custom agent form, shown inside the Add agent modal. */
+  const [custom, setCustom] = useState(false)
   const anchor = useRef<HTMLSpanElement>(null)
   const removedBuiltIns = BUILT_IN_ACCOUNTS.filter((id) => settings.removedAccounts?.includes(id))
-  // A custom agent may already use a library agent's name, which keeps that one out.
-  const missing = AcpLibrary.filter((entry) => !AcpAgents.some((agent) => agent.ID === entry.ID || agent.DisplayName.toLowerCase() === entry.DisplayName.toLowerCase()))
   const subscriptions = SUBSCRIPTION_IDS.filter((id) => BUILT_IN_ACCOUNTS.includes(id) ? !removedBuiltIns.includes(id) : AcpAgents.some((agent) => agent.ID === id))
   const ids = [...subscriptions, ...AcpAgents.filter((agent) => !SUBSCRIPTION_IDS.includes(agent.ID)).map((agent) => agent.ID)]
 
@@ -1315,31 +1317,73 @@ function AgentsSection(): ReactNode {
               <Plus size={13} /> Add agent
             </Button>
           </span>
-          <Popover open={menuOpen} onClose={() => setMenuOpen(false)} anchor={anchor} placement="bottom-end" className="w-[300px] p-1">
-            {removedBuiltIns.map((id) => (
-              <MenuItem key={id} icon={<AccountIcon id={id} />} label={ACCOUNT_LABELS[id]} onClick={() => {
-                setMenuOpen(false)
-                void update({ removedAccounts: (settings.removedAccounts ?? []).filter((entry) => entry !== id) })
-              }} />
-            ))}
-            {missing.map((entry) => (
-              <MenuItem key={entry.ID} icon={<AccountIcon id={entry.ID} />} label={entry.DisplayName} hint={entry.Keyless ? 'Free models' : undefined} onClick={() => {
-                setMenuOpen(false)
-                add(libraryAcpAgent(entry))
-              }} />
-            ))}
-            {removedBuiltIns.length + missing.length > 0 && <MenuSeparator />}
-            <AcpAddMenu
-              onRegistry={(agent) => {
-                setMenuOpen(false)
-                add(agent)
-              }}
-              onCustom={() => {
-                setMenuOpen(false)
-                setEditing('new')
-              }}
-            />
-          </Popover>
+          {menuOpen && (
+            <Modal onClose={() => { setMenuOpen(false); setOthers(false); setCustom(false) }} className="w-[420px]" backdrop="bg-black/20">
+              <div className="flex max-h-[80vh] flex-col">
+                <div className="px-5 pb-3 pt-5">
+                  <div className="text-[14px] font-semibold text-fg">Add an agent</div>
+                  <div className="mt-0.5 text-[12px] text-muted">Sign in with a subscription you already have.</div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
+                  {custom ? (
+                    <CustomAcpEditor
+                      initial={null}
+                      taken={takenBy(null)}
+                      onSave={(agent) => { save(agent); setMenuOpen(false); setOthers(false); setCustom(false) }}
+                      onCancel={() => setCustom(false)}
+                    />
+                  ) : <>
+                  <div className="grid grid-cols-3 gap-2.5">
+                    {SUBSCRIPTION_IDS.map((id) => {
+                      const entry = AcpLibrary.find((library) => library.ID === id)
+                      const added = subscriptions.includes(id)
+                      const name = ACCOUNT_LABELS[id] ?? entry?.DisplayName ?? id
+                      return (
+                        <button
+                          key={id}
+                          type="button"
+                          disabled={added}
+                          onClick={() => {
+                            setMenuOpen(false)
+                            setOthers(false)
+                            if (BUILT_IN_ACCOUNTS.includes(id)) void update({ removedAccounts: (settings.removedAccounts ?? []).filter((removed) => removed !== id) })
+                            else if (entry) add(libraryAcpAgent(entry))
+                          }}
+                          className={cn('relative flex flex-col items-center gap-2 rounded-xl border border-line bg-elev px-2 py-4 text-[12px] transition-colors', added ? 'opacity-45' : 'hover:bg-hover')}
+                        >
+                          <AccountIcon id={id} size={26} />
+                          <span className="max-w-full truncate text-fg">{name}</span>
+                          {added && <Check size={12} className="absolute right-2 top-2 text-muted" />}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    aria-expanded={others}
+                    onClick={() => setOthers(!others)}
+                    className="mt-3 flex h-8 w-full items-center justify-between rounded-lg px-2 text-[12.5px] text-muted transition-colors hover:bg-hover hover:text-fg"
+                  >
+                    <span>Others…</span>
+                    <ChevronDown size={13} className={cn('transition-transform', others && 'rotate-180')} />
+                  </button>
+                  {others && (
+                    <div className="activity-reveal mt-1 rounded-xl border border-line p-1">
+                      <AcpAddMenu
+                        onRegistry={(agent) => {
+                          setMenuOpen(false)
+                          setOthers(false)
+                          add(agent)
+                        }}
+                        onCustom={() => setCustom(true)}
+                      />
+                    </div>
+                  )}
+                  </>}
+                </div>
+              </div>
+            </Modal>
+          )}
         </div>
       }
     >

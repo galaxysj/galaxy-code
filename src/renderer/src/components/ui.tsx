@@ -319,9 +319,11 @@ interface ModalProps {
   onClose(): void
   children: ReactNode
   className?: string
+  /** Backdrop class, for a lighter dim than the default. */
+  backdrop?: string
 }
 
-export function Modal({ onClose, children, className }: ModalProps): ReactNode {
+export function Modal({ onClose, children, className, backdrop }: ModalProps): ReactNode {
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose()
@@ -331,7 +333,7 @@ export function Modal({ onClose, children, className }: ModalProps): ReactNode {
   }, [onClose])
   return createPortal(
     <div
-      className="fade-in no-drag fixed inset-0 z-40 flex items-center justify-center bg-black/45 p-8"
+      className={cn('fade-in no-drag fixed inset-0 z-40 flex items-center justify-center p-8', backdrop ?? 'bg-black/45')}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose()
       }}
