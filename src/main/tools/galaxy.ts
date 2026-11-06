@@ -2,7 +2,7 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { ImageModel } from '@shared/models'
+import { resolveImageModels } from '@shared/catalog'
 import type { AskQuestion, PresentedFile, TaskEntry } from '@shared/types'
 import { browser, type BrowserAction } from '../services/browser'
 import { memoryPath, updateMemory, type MemoryAction } from '../services/memory'
@@ -532,9 +532,10 @@ export const memoryTool: ToolDef = {
 /** The image model chosen in Settings, or the first built-in one. */
 function activeImageModel(): { id: string; name: string } {
   const key = store.settings.imageModelKey
-  const chosen = ImageModel.find((m) => `${m.Subscription}:${m.ID}` === key) ?? ImageModel[0]
+  const models = resolveImageModels(store.settings)
+  const chosen = models.find((m) => m.key === key) ?? models[0]
   if (!chosen) throw new Error('No image model is configured')
-  return { id: chosen.ID, name: chosen.DisplayName }
+  return { id: chosen.id, name: chosen.name }
 }
 
 export const imageGenerationTool: ToolDef = {

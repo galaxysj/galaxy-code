@@ -61,13 +61,13 @@ export interface CustomModel {
   subscription: Subscription
 }
 
-export type CustomProviderApi = 'chat' | 'responses' | 'decisions'
+export type CustomProviderApi = 'chat' | 'responses' | 'decisions' | 'images'
 
 /** An OpenAI-compatible API the user added in Settings. Its key lives with the other provider keys. */
 export interface CustomProvider {
   id: string
   name: string
-  /** The format it speaks. Decisions APIs only serve Auto approval, so their models never reach the model picker. Unset means chat. */
+  /** The format it speaks. Decisions APIs only serve Auto approval and Images APIs only the ImageGeneration tool, so their models never reach the model picker. Unset means chat. */
   api?: CustomProviderApi
   /** Up to and including the version path, such as https://api.example.com/v1. */
   baseUrl: string

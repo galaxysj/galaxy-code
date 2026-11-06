@@ -43,6 +43,8 @@ export interface AgentModelSpec {
   Off?: boolean
   /** Speed preselected the first time the model is picked. Fast needs FastMode, Ultrafast needs UltrafastMode. Defaults to 'Standard'. */
   DefaultSpeed?: 'Standard' | 'Fast' | 'Ultrafast'
+  /** true marks a free model; it counts toward the Auto usage and is not stopped by the credit limit. */
+  Free?: boolean
   /** Context window in tokens. History is compacted when a prompt reaches 90% of it. Unset falls back to 200,000. */
   ContextWindow?: number
   /** Context sizes to choose from in the model picker, such as [300_000, 1_000_000]. Picking one sets where history is compacted. Unset shows no choice. */
@@ -78,8 +80,53 @@ export function utilityModelLabel(model: AccountUtilityModelSpec): string {
   return model.Subscription === 'Default' ? model.DisplayName : `${model.DisplayName} (${model.Subscription})`
 }
 
+/**
+ * Auto's slider. Free is OpenRouter's free router; every other stop is OpenRouter's Auto Router limited to the models listed here.
+ * Entries are OpenRouter ids and may use wildcards, such as 'anthropic/*'. Edit the lists to change what a stop can route to.
+ */
+export const AutoTiers: { ID: string; DisplayName: string; Description: string; Models: string[] }[] = [
+  {
+    ID: 'cost',
+    DisplayName: 'Cost',
+    Description: 'Routes each request to a low-cost model.',
+    Models: ['~anthropic/claude-haiku-latest', '~openai/gpt-luna-latest', '~z-ai/glm-flash-latest', '~deepseek/deepseek-flash-latest']
+  },
+  {
+    ID: 'balanced',
+    DisplayName: 'Balanced',
+    Description: 'Routes each request to a model that balances quality and cost.',
+    Models: ['~openai/gpt-terra-latest', '~anthropic/claude-sonnet-latest', '~deepseek/deepseek-pro-latest', '~google/gemini-flash-latest', '~moonshotai/kimi-latest', 'meta/muse-spark-1.3']
+  },
+  {
+    ID: 'performance',
+    DisplayName: 'Performance',
+    Description: 'Routes each request to a top-performing model.',
+    Models: ['~anthropic/claude-opus-latest', '~openai/gpt-sol-latest', '~google/gemini-pro-latest', '~z-ai/glm-latest', 'moonshotai/kimi-k3.1-pro', 'meta/muse-wonder']
+  },
+  {
+    ID: 'ultimate',
+    DisplayName: 'Ultimate',
+    Description: 'Routes each request to the most capable models available.',
+    Models: ['~openai/gpt-astra-latest', '~anthropic/claude-fable-latest']
+  }
+]
+
 export const AgentModel: AgentModelSpec[] = [
+  
+  //stealth
+  {
+    DisplayName: 'Crouton Alpha',
+    ID: 'stealth/crouton-alpha',
+    Subscription: 'Default',
+    Efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    DefaultEffort: 'high',
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Free: true
+  },  
+  
   // OpenRouter claude
+  
   {
     DisplayName: 'Sonnet 5.5',
     ID: 'anthropic/claude-sonnet-5.5',

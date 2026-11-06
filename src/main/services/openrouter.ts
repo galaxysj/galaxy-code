@@ -2,7 +2,7 @@ import { shell } from 'electron'
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { AUTO_MODEL, BYOK_PROVIDERS, byokProvider, directEffort, directModelId, parseCustomModel, type ByokProvider, type ProviderId } from '@shared/catalog'
+import { AUTO_MODEL, autoTierModels, isAutoId, BYOK_PROVIDERS, byokProvider, directEffort, directModelId, parseCustomModel, type ByokProvider, type ProviderId } from '@shared/catalog'
 import { resolveAutoApprovalModel, TitleModel, type Effort } from '@shared/models'
 import type { CustomProvider } from '@shared/types'
 import { store } from '../store'
@@ -61,7 +61,7 @@ function routeFor(model: string): Route {
   const custom = parseCustomModel(model)
   if (custom) {
     const provider = customProvider(custom.providerId)
-    if (!provider || provider.api === 'decisions') throw new Error(`The custom provider for ${custom.model} is no longer available for chats. Pick another model.`)
+    if (!provider || provider.api === 'decisions' || provider.api === 'images') throw new Error(`The custom provider for ${custom.model} is no longer available for chats. Pick another model.`)
     return { base: customBase(provider), headers: directHeaders(provider, store.providerKey(provider.id)), model: custom.model, provider: { id: provider.id }, api: provider.api ?? 'chat' }
   }
   const provider = byokProvider(model)
@@ -416,15 +416,17 @@ async function streamResponses(route: Route, req: StreamRequest): Promise<Stream
 export async function streamChat(req: StreamRequest): Promise<StreamResult> {
   const route = await resolveRoute(req.model)
   // With nothing left to spend the chat carries on with Auto, which is free, instead of stopping.
-  if (!route.provider && !route.renewHeaders && req.model !== AUTO_MODEL.id && !parseCustomModel(req.model) && await creditsLocked()) return streamChat({ ...req, model: AUTO_MODEL.id })
+  if (!route.provider && !route.renewHeaders && !isAutoId(req.model) && !parseCustomModel(req.model) && await creditsLocked()) return streamChat({ ...req, model: AUTO_MODEL.id })
   if (route.api === 'responses') return streamResponses(route, req)
   const direct = route.provider
   // Auto runs on free models, so the credit limit does not stop it. Premium and every paid model still stop at the limit.
-  if (!direct && req.model !== AUTO_MODEL.id) await assertCreditLimit()
+  if (!direct && !isAutoId(req.model)) await assertCreditLimit()
+  const tier = direct ? null : autoTierModels(req.model)
   const body: Record<string, unknown> = {
-    model: route.model,
+    model: tier ? 'openrouter/auto' : route.model,
     messages: direct ? directMessages(direct, req.messages) : withCacheMarkers(req.model, req.messages),
     stream: true,
+    ...(tier ? { plugins: [{ id: 'auto-router', allowed_models: tier }] } : {}),
     ...(direct ? { stream_options: { include_usage: true } } : { usage: { include: true } })
   }
   if (req.tools?.length) {
@@ -551,7 +553,7 @@ export async function withAutoFallback<T>(model: string, run: (model: string) =>
   try {
     return await run(model)
   } catch (err) {
-    if (model === AUTO_MODEL.id || model.startsWith(CHATGPT_PREFIX) || parseCustomModel(model) || byokProvider(model) || !store.openRouterKey || !isCreditFailure(err)) throw err
+    if (isAutoId(model) || model.startsWith(CHATGPT_PREFIX) || parseCustomModel(model) || byokProvider(model) || !store.openRouterKey || !isCreditFailure(err)) throw err
     try {
       return await run(AUTO_MODEL.id)
     } catch {
@@ -562,7 +564,7 @@ export async function withAutoFallback<T>(model: string, run: (model: string) =>
 
 export async function complete(model: string, messages: ChatMessage[], signal?: AbortSignal, extra: Record<string, unknown> = {}): Promise<string> {
   const route = await resolveRoute(model)
-  if (!route.provider && !route.renewHeaders && model !== AUTO_MODEL.id) await assertCreditLimit()
+  if (!route.provider && !route.renewHeaders && !isAutoId(model)) await assertCreditLimit()
   if (route.renewHeaders) {
     // The ChatGPT backend only streams.
     const result = await streamResponses(route, { model, messages, signal: signal ?? new AbortController().signal, onText: () => {}, onReasoning: () => {} })
@@ -619,14 +621,19 @@ export async function generateImage(
   prompt: string,
   options: { aspectRatio?: string; references?: string[]; signal?: AbortSignal } = {}
 ): Promise<GeneratedImage[]> {
-  const body: Record<string, unknown> = { model, prompt }
-  if (options.aspectRatio) body.aspect_ratio = options.aspectRatio
+  const custom = parseCustomModel(model)
+  const provider = custom ? customProvider(custom.providerId) : undefined
+  if (custom && (!provider || provider.api !== 'images')) throw new Error('The custom provider for this image model is no longer available. Pick another image model.')
+  if (provider && options.references?.length) throw new Error(`${provider.name} generates images from a prompt only, so reference images are not supported`)
+  const body: Record<string, unknown> = { model: custom ? custom.model : model, prompt }
+  if (provider) body.n = 1
+  else if (options.aspectRatio) body.aspect_ratio = options.aspectRatio
   if (options.references?.length) {
     body.input_references = options.references.map((url) => ({ type: 'image_url', image_url: { url } }))
   }
-  const res = await fetch(`${OPENROUTER_API}/images`, {
+  const res = await fetch(provider ? `${customBase(provider)}/images/generations` : `${OPENROUTER_API}/images`, {
     method: 'POST',
-    headers: authHeaders(),
+    headers: provider ? directHeaders(provider, store.providerKey(provider.id)) : authHeaders(),
     body: JSON.stringify(body),
     signal: options.signal
   })

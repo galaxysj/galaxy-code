@@ -52,7 +52,7 @@ import {
   type UsageReport,
   type UsageWindow
 } from '@shared/types'
-import { AUTO_MODEL, BYOK_PROVIDERS, customModelId, parseCustomModel, unavailableAccounts, type ByokProvider } from '@shared/catalog'
+import { isAutoId, BYOK_PROVIDERS, customModelId, resolveImageModels, unavailableAccounts, type ByokProvider } from '@shared/catalog'
 import { AcpAgents, AcpLibrary } from '@shared/acp-registry'
 import { AutoApprovalModel, CommitMessageModel, CompletionModel, InlineModel, resolveAutoApprovalModel, usableUtilityModels, utilityModelLabel } from '@shared/models'
 import { cn, tildify } from '../lib/utils'
@@ -263,15 +263,25 @@ const MODEL_SUBSCRIPTIONS = SUBSCRIPTIONS.filter((sub) => !acpAgentFor(sub))
 function ModelsSection(): ReactNode {
   const settings = useStore((s) => s.settings)
   const models = useStore((s) => s.models)
-  const imageModels = useStore((s) => s.imageModels)
   const update = useStore((s) => s.updateSettings)
   const notify = useStore((s) => s.notify)
+  // Rebuilt from settings so a custom Images provider's models show up as soon as it is added.
+  const imageModels = resolveImageModels(settings)
   const completionModels = usableUtilityModels(CompletionModel, settings.accounts, unavailableAccounts(settings))
   const inlineModels = usableUtilityModels(InlineModel, settings.accounts, unavailableAccounts(settings))
   const [name, setName] = useState('')
   const [id, setId] = useState('')
   const [subscription, setSubscription] = useState<Subscription>('Default')
   const [adding, setAdding] = useState(false)
+  /** Under Galaxy: 'openrouter', a built-in provider's id, or 'custom:<id>' for a custom provider. */
+  const [provider, setProvider] = useState('openrouter')
+  const customApis = settings.customProviders.filter((entry) => entry.enabled && entry.api !== 'decisions')
+  const providerOptions: DropdownOption<string>[] = [
+    { value: 'openrouter', label: 'OpenRouter' },
+    ...BYOK_PROVIDERS.map((entry) => ({ value: entry.id, label: entry.name })),
+    ...customApis.map((entry) => ({ value: `custom:${entry.id}`, label: entry.name }))
+  ]
+  const providerValue = providerOptions.some((option) => option.value === provider) ? provider : 'openrouter'
 
   const toggle = (key: string, enabled: boolean): void => {
     if (models.find((m) => m.key === key)?.defaultOff) {
@@ -288,9 +298,13 @@ function ModelsSection(): ReactNode {
   }
 
   const add = (): void => {
-    const modelId = id.trim()
-    const display = name.trim() || modelId
-    if (!modelId) return
+    const typed = id.trim()
+    const display = name.trim() || typed
+    if (!typed) return
+    // Under Galaxy the provider decides how the id is written: a built-in provider's prefix, or the custom provider's own form.
+    const builtIn = subscription === 'Default' ? BYOK_PROVIDERS.find((entry) => entry.id === providerValue) : undefined
+    const custom = subscription === 'Default' && providerValue.startsWith('custom:') ? providerValue.slice('custom:'.length) : null
+    const modelId = builtIn ? (typed.startsWith(builtIn.prefix) ? typed : builtIn.prefix + typed) : custom ? customModelId(custom, typed) : typed
     if (models.some((m) => m.id === modelId && m.subscription === subscription)) {
       notify('That model is already in the list', 'error')
       return
@@ -390,6 +404,12 @@ function ModelsSection(): ReactNode {
                   options={MODEL_SUBSCRIPTIONS.map((sub) => ({ value: sub, label: SUBSCRIPTION_LABELS[sub] ?? sub }))}
                 />
               </label>
+              {subscription === 'Default' && (
+                <label className="flex items-center gap-3">
+                  <span className="w-24 shrink-0 text-[12px] text-muted">Provider</span>
+                  <Select<string> label="Provider" value={providerValue} onChange={setProvider} className="max-w-none flex-1" options={providerOptions} />
+                </label>
+              )}
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <Button size="sm" onClick={() => setAdding(false)}>Cancel</Button>
@@ -411,7 +431,7 @@ function ModelsSection(): ReactNode {
                       <span className="ml-2 font-mono text-[11px] text-subtle">{model.id}</span>
                     </div>
                     {model.custom && <span className="shrink-0 rounded bg-hover px-1.5 py-px text-[10.5px] text-muted">Custom</span>}
-                    {model.custom && !parseCustomModel(model.id) && (
+                    {model.custom && settings.customModels.some((entry) => entry.id === model.id && entry.subscription === model.subscription) && (
                       <IconButton label="Remove model" size="sm" onClick={() => remove(model.id, model.subscription)}>
                         <Trash2 size={12.5} />
                       </IconButton>
@@ -613,12 +633,12 @@ function CreditLimit({ max }: { max: number }): ReactNode {
 function AutoUsage({ rows, freeTier }: { rows: AnalyticsRow[] | null; freeTier: boolean }): ReactNode {
   const limit = freeTier ? 50 : 1000
   const today = dayKey(new Date())
-  const count = (rows ?? []).filter((row) => row.day === today && row.modelKey === AUTO_MODEL.key).reduce((sum, row) => sum + row.calls, 0)
+  const count = (rows ?? []).filter((row) => row.day === today && isAutoId(row.modelKey.slice(row.modelKey.indexOf(':') + 1))).reduce((sum, row) => sum + row.calls, 0)
   const used = Math.min(100, (count / limit) * 100)
   return (
     <div className="px-3.5 py-3">
       <div className="flex items-baseline justify-between gap-3">
-        <span className="text-[12.5px] text-fg">Daily Auto Usage</span>
+        <span className="text-[12.5px] text-fg">Auto & Free models</span>
         <span className="text-[12px] tabular-nums text-muted">{Math.round(used)}% used</span>
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-hover">
@@ -781,7 +801,8 @@ function ProviderKeyRow({ provider }: { provider: ByokProvider }): ReactNode {
 const CUSTOM_APIS: DropdownOption<CustomProviderApi>[] = [
   { value: 'chat', label: 'Chat Completions' },
   { value: 'responses', label: 'Responses' },
-  { value: 'decisions', label: 'Decisions' }
+  { value: 'decisions', label: 'Decisions' },
+  { value: 'images', label: 'Images' }
 ]
 
 const parseModels = (text: string): string[] => [...new Set(text.split(',').map((model) => model.trim()).filter(Boolean))]
@@ -817,13 +838,15 @@ function CustomProviderRow({ provider, onChange, onRemove }: { provider: CustomP
         </div>
       </RowItem>
       <div className="space-y-2 px-3.5 pb-3">
-        <TextInput
-          value={models}
-          onChange={(event) => setModels(event.target.value)}
-          onBlur={() => onChange({ models: parseModels(models) })}
-          placeholder="Model ids, separated by commas"
-          className="font-mono text-[12px]"
-        />
+        {(provider.api === 'decisions' || provider.api === 'images') && (
+          <TextInput
+            value={models}
+            onChange={(event) => setModels(event.target.value)}
+            onBlur={() => onChange({ models: parseModels(models) })}
+            placeholder="Model ids, separated by commas"
+            className="font-mono text-[12px]"
+          />
+        )}
         <div className="flex gap-2">
           <TextInput
             type="password"
@@ -865,7 +888,7 @@ function CustomProviders(): ReactNode {
     if (!name.trim() || !validUrl) return
     const id = crypto.randomUUID().slice(0, 8)
     if (key.trim()) await window.galaxy.settings.setProviderKey(id, key.trim())
-    await update({ customProviders: [...providers, { id, name: name.trim(), api, baseUrl: baseUrl.trim(), models: parseModels(models), enabled: true }] })
+    await update({ customProviders: [...providers, { id, name: name.trim(), api, baseUrl: baseUrl.trim(), models: api === 'decisions' || api === 'images' ? parseModels(models) : [], enabled: true }] })
     setName('')
     setBaseUrl('')
     setApi('chat')
@@ -884,7 +907,7 @@ function CustomProviders(): ReactNode {
   return (
     <Section
       title="Custom"
-      description="Any OpenAI-format API. Models appear under Galaxy."
+      description="Any OpenAI-format API. Add its models under Settings > Models."
       action={
         <IconButton label="Add a custom provider" active={adding} onClick={() => setAdding(!adding)}>
           <Plus size={15} />
@@ -907,10 +930,10 @@ function CustomProviders(): ReactNode {
               <TextInput aria-label="Base URL" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" className="min-w-0 flex-1 font-mono text-[12px]" />
               <Select<CustomProviderApi> label="API format" value={api} onChange={setApi} options={CUSTOM_APIS} className="w-[150px] shrink-0" />
             </div>
-            <label className="flex items-center gap-3">
+            {(api === 'decisions' || api === 'images') && <label className="flex items-center gap-3">
               <span className="w-24 shrink-0 text-[12px] text-muted">Model IDs</span>
               <TextInput value={models} onChange={(event) => setModels(event.target.value)} placeholder="Separated by commas" className="flex-1 font-mono text-[12px]" />
-            </label>
+            </label>}
             <label className="flex items-center gap-3">
               <span className="w-24 shrink-0 text-[12px] text-muted">API key</span>
               <TextInput

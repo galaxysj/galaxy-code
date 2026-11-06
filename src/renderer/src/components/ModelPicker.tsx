@@ -1,5 +1,5 @@
 import { Check, ChevronDown, ChevronLeft, ChevronRight, RotateCcw, Search, Settings2, Sparkles, Zap } from 'lucide-react'
-import { AUTO_MODEL, needsCredits, PREMIUM_MODEL, type ProviderId } from '@shared/catalog'
+import { AUTO_MODEL, AUTO_TIER_MODELS, needsCredits, PREMIUM_MODEL, type ProviderId } from '@shared/catalog'
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { AcpLibrary } from '@shared/acp-registry'
 import { EFFORT_LABELS, type AcpConfigOption, type Effort, type ResolvedModel, type Subscription } from '@shared/types'
@@ -40,18 +40,122 @@ interface EffortSliderProps {
 
 /** A pill slider over the model's efforts. Ultra, when the model has it, is the final stop. */
 function EffortSlider({ model, effort, ultra, allowUltra, onChange }: EffortSliderProps): ReactNode {
-  const track = useRef<HTMLDivElement>(null)
   const stops = useMemo<Stop[]>(() => [...model.efforts, ...(model.ultraEffort && allowUltra ? (['ultra'] as const) : [])], [model, allowUltra])
-  const last = stops.length - 1
-  const index = ultra ? last : Math.max(0, stops.indexOf(effort ?? model.defaultEffort ?? model.efforts[0]))
+  const index = ultra ? stops.length - 1 : Math.max(0, stops.indexOf(effort ?? model.defaultEffort ?? model.efforts[0]))
+  const label = ultra ? 'Ultra' : EFFORT_LABELS[stops[index] as Effort]
+  return (
+    <StopSlider
+      stops={stops}
+      index={index}
+      label={label}
+      ariaLabel="Reasoning effort"
+      ultra={ultra}
+      onSelect={(stop) => (stop === 'ultra' ? onChange({ ultra: true }) : onChange({ effort: stop as Effort, ultra: false }))}
+    />
+  )
+}
 
+/** The stop Auto is on, shown after its name like an effort: Free, Cost, Balanced and so on. */
+function autoTier(model: ResolvedModel | null): string {
+  if (!model?.auto) return ''
+  return model.key === AUTO_MODEL.key ? 'Free' : model.key === PREMIUM_MODEL.key ? 'Balanced' : model.name
+}
+
+/** Auto's slider: Free, then the router tiers from AutoTiers in models.ts. */
+function AutoSlider({ model, onPick }: { model: ResolvedModel; onPick(key: string): void }): ReactNode {
+  const entries = [{ key: AUTO_MODEL.key, name: 'Free' }, ...AUTO_TIER_MODELS]
+  const found = entries.findIndex((entry) => entry.key === model.key)
+  // The unrestricted router Auto used to offer sits where Balanced is.
+  const index = found >= 0 ? found : Math.max(0, entries.findIndex((entry) => entry.name === 'Balanced'))
+  return <StopSlider stops={entries.map((entry) => entry.key)} index={index} label={entries[index].name} ariaLabel="Auto routing" ultra={false} labels={entries.map((entry) => entry.name)} onSelect={onPick} />
+}
+
+/** Auto's stops as a card that slides along a bar of dots, built like StopSlider: the card follows the pointer and glides between stops. */
+function AutoTabs({ model, onPick }: { model: ResolvedModel; onPick(key: string): void }): ReactNode {
+  const entries = [{ key: AUTO_MODEL.key, name: 'Free' }, ...AUTO_TIER_MODELS]
+  const found = entries.findIndex((entry) => entry.key === model.key)
+  const index = found >= 0 ? found : entries.findIndex((entry) => entry.name === 'Balanced')
+  const last = entries.length - 1
+  const track = useRef<HTMLDivElement>(null)
+  const CARD_WIDTH = 84
+  const CARD_HEIGHT = 22
+  const PAD = 2
+  /** The card's centre travels between these insets, so the dots on both sides stay visible beside it. */
+  const inset = PAD + CARD_WIDTH / 2
+  const step = `((100% - ${CARD_WIDTH + PAD * 2}px) / ${last})`
+  /** Left edge of the card, and of each dot's slot: dots past the card shift right by the card's width less one step. */
+  const cardLeft = `calc(${PAD}px + ${step} * ${index})`
+  const dotAt = (i: number): string => `calc(${PAD}px + ${step} * ${i + 0.5}${i > index ? ` + ${CARD_WIDTH}px - ${step}` : ''})`
+
+  const fromPointer = (event: PointerEvent): void => {
+    const el = track.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left - inset) / (rect.width - inset * 2)))
+    const next = Math.round(ratio * last)
+    if (next !== index) onPick(entries[next].key)
+  }
+
+  const onKey = (event: KeyboardEvent): void => {
+    const step = event.key === 'ArrowRight' || event.key === 'ArrowUp' ? 1 : event.key === 'ArrowLeft' || event.key === 'ArrowDown' ? -1 : 0
+    if (!step) return
+    event.preventDefault()
+    onPick(entries[Math.max(0, Math.min(last, index + step))].key)
+  }
+
+  return (
+    <div
+      ref={track}
+      role="slider"
+      tabIndex={0}
+      aria-label="Auto routing"
+      aria-valuemin={0}
+      aria-valuemax={last}
+      aria-valuenow={index}
+      aria-valuetext={entries[index].name}
+      onKeyDown={onKey}
+      onPointerDown={(event) => {
+        event.currentTarget.setPointerCapture(event.pointerId)
+        fromPointer(event)
+      }}
+      onPointerMove={(event) => {
+        if (event.buttons === 1) fromPointer(event)
+      }}
+      className="relative w-full cursor-pointer touch-none select-none rounded-md bg-hover outline-none"
+      style={{ height: CARD_HEIGHT + 4 }}
+    >
+      {entries.map((entry, i) => (
+        <span key={entry.key} title={entry.name} className="slider-thumb absolute top-1/2 -translate-x-1/2 -translate-y-1/2 text-[12px] leading-none text-subtle" style={{ left: dotAt(i) }}>·</span>
+      ))}
+      <span
+        className="slider-thumb absolute top-1/2 flex -translate-y-1/2 items-center justify-center rounded-[5px] bg-elev text-[12px] text-fg shadow-[0_0_0_1px_var(--border)]"
+        style={{ left: cardLeft, width: CARD_WIDTH, height: CARD_HEIGHT }}
+      >
+        {entries[index].name}
+      </span>
+    </div>
+  )
+}
+
+interface StopSliderProps {
+  stops: string[]
+  index: number
+  label: string
+  ariaLabel: string
+  ultra: boolean
+  /** Names shown on hover for each stop. */
+  labels?: string[]
+  onSelect(stop: string): void
+}
+
+function StopSlider({ stops, index, label, ariaLabel, ultra, labels, onSelect }: StopSliderProps): ReactNode {
+  const track = useRef<HTMLDivElement>(null)
+  const last = stops.length - 1
   const select = useCallback(
     (next: number) => {
-      const stop = stops[Math.max(0, Math.min(last, next))]
-      if (stop === 'ultra') onChange({ ultra: true })
-      else onChange({ effort: stop, ultra: false })
+      onSelect(stops[Math.max(0, Math.min(last, next))])
     },
-    [stops, last, onChange]
+    [stops, last, onSelect]
   )
 
   const fromPointer = (event: PointerEvent): void => {
@@ -75,14 +179,13 @@ function EffortSlider({ model, effort, ultra, allowUltra, onChange }: EffortSlid
 
   // Stops are spread between the insets, so the thumb sits flush inside both ends.
   const at = (i: number): string => (last === 0 ? `calc(100% - ${INSET}px)` : `calc(${INSET}px + (100% - ${INSET * 2}px) * ${i / last})`)
-  const label = ultra ? 'Ultra' : EFFORT_LABELS[stops[index] as Effort]
 
   return (
     <div
       ref={track}
       role="slider"
       tabIndex={0}
-      aria-label="Reasoning effort"
+      aria-label={ariaLabel}
       aria-valuemin={0}
       aria-valuemax={last}
       aria-valuenow={index}
@@ -105,9 +208,10 @@ function EffortSlider({ model, effort, ultra, allowUltra, onChange }: EffortSlid
       {stops.map((stop, i) => (
         <span
           key={stop}
+          title={labels?.[i]}
           className={cn(
             'absolute top-1/2 h-[4px] w-[4px] -translate-x-1/2 -translate-y-1/2 rounded-full',
-            i < index ? 'bg-white/55' : i === index ? 'bg-transparent' : stop === 'ultra' ? 'bg-ultra' : 'bg-fg/30'
+            i <= index ? 'bg-transparent' : stop === 'ultra' ? 'bg-ultra' : 'bg-fg/30'
           )}
           style={{ left: at(i) }}
         />
@@ -247,16 +351,6 @@ function MenuRow({ label, checked, onClick, className }: { label: ReactNode; che
   )
 }
 
-/** A checkable row under Auto that switches it to the Premium router. */
-function PremiumRow({ checked, onChange, className }: { checked: boolean; onChange(on: boolean): void; className?: string }): ReactNode {
-  return (
-    <button type="button" role="checkbox" aria-checked={checked} onClick={() => onChange(!checked)} className={cn('flex h-7 items-center gap-2 rounded-md px-2 text-left text-[12px] transition-colors hover:bg-hover', checked ? 'text-fg' : 'text-muted', className)}>
-      <span className={cn('flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border', checked ? 'border-accent bg-accent text-on-accent' : 'border-line-strong')}>{checked && <Check size={10} strokeWidth={3} />}</span>
-      <span className="min-w-0 flex-1 truncate">Premium</span>
-    </button>
-  )
-}
-
 /** The Default style: every model in a list, with the picked model's context, effort and options in a menu beside it. */
 type RunOptionsPatch = { effort?: Effort | null; ultra?: boolean; fast?: boolean; ultrafast?: boolean; context?: number | null }
 
@@ -342,6 +436,9 @@ function usePickerSource(): ReturnType<typeof useRunConfig> & {
   }
 }
 
+/** The last model picked by hand, so turning Auto off goes back to it instead of the top of the list. */
+let lastManualKey: string | null = null
+
 function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
   const anchor = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
@@ -373,8 +470,9 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
   const { model, models, subscription, effort, fast, ultrafast, context } = config
   const ultra = config.ultra && !noUltra
   const auto = !!model?.auto
+  if (model && !auto) lastManualKey = model.key
   // Effort and speed in words, such as "High Fast", instead of the slider style's icons.
-  const label = !model || auto ? '' : optionSummary(model, { effort, ultra, fast, ultrafast, context }, !noUltra)
+  const label = auto ? autoTier(model) : !model ? '' : optionSummary(model, { effort, ultra, fast, ultrafast, context }, !noUltra)
   // With Auto on there is no search box, so a search left from before must not keep the list open.
   const needle = auto ? '' : query.trim().toLowerCase()
   const { locked, isLocked } = useCreditLock()
@@ -406,7 +504,7 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
         onClick={() => { setEditing(null); setOpen((value) => !value) }}
         className={cn('flex h-7 min-w-0 items-center gap-1.5 rounded-lg px-2 text-[12.5px] text-muted transition-colors hover:bg-hover hover:text-fg', open && 'bg-hover text-fg', ultra && 'aurora-ring')}
       >
-        <span className="truncate">{model?.name ?? 'Select a model'}</span>
+        <span className="truncate">{model ? (model.auto ? 'Auto' : model.name) : 'Select a model'}</span>
         {label && <span className={cn('shrink-0', ultra ? 'aurora-text font-medium' : 'text-subtle')}>{label}</span>}
         <ChevronDown size={12} className={cn('picker-chevron shrink-0 text-subtle', open && 'rotate-180')} />
       </button>
@@ -417,11 +515,11 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
             <div className="shrink-0 border-b border-line px-3 text-[12px]">
               <div className="flex h-8 items-center justify-between">
                 <span>Auto</span>
-                <Switch checked={auto} onChange={(on) => config.pick(on ? AUTO_MODEL.key : (visible[0]?.key ?? AUTO_MODEL.key))} label="Auto" />
+                <Switch checked={auto} onChange={(on) => config.pick(on ? AUTO_MODEL.key : ((visible.find((m) => m.key === lastManualKey) ?? visible[0])?.key ?? AUTO_MODEL.key))} label="Auto" />
               </div>
-              {/* With Auto on, Premium swaps the free router for OpenRouter's Auto Router. */}
+              {/* With Auto on, the slider picks Free or an OpenRouter Auto Router tier. */}
               {auto && <>
-                {!locked && <PremiumRow checked={model?.key === PREMIUM_MODEL.key} onChange={(on) => config.pick(on ? PREMIUM_MODEL.key : AUTO_MODEL.key)} className="-mx-2 w-[calc(100%+1rem)]" />}
+                {!locked && model && <div className="pb-1 pt-1"><AutoTabs model={model} onPick={config.pick} /></div>}
                 <p className="pb-2 pt-1 text-[11.5px] leading-snug text-subtle">{locked ? CREDIT_LOCK_NOTE : model?.description}</p>
               </>}
             </div>
@@ -514,7 +612,7 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
 
   const auto = !!model?.auto
   const hasEffort = !!model && !auto && model.efforts.length > 0
-  const label = !model ? '' : auto ? model.name : ultra ? 'Ultra' : effort ? EFFORT_LABELS[effort] : 'Standard'
+  const label = !model ? '' : auto ? autoTier(model) : ultra ? 'Ultra' : effort ? EFFORT_LABELS[effort] : 'Standard'
   // Reset goes back to the model's DefaultSpeed from models.ts.
   const defaultFast = !!model?.fastMode && (model.defaultSpeed === 'Fast' || model.defaultSpeed === 'Ultrafast')
   const defaultUltrafast = defaultFast && !!model?.ultrafastMode && model.defaultSpeed === 'Ultrafast'
@@ -553,8 +651,8 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
         )}
       >
         {!auto && speedIcon}
-        <span className="truncate">{model?.name ?? 'Select a model'}</span>
-        {model && !auto && (ultra || effort) && <span className={cn('shrink-0', ultra ? 'aurora-text font-medium' : 'text-subtle')}>{label}</span>}
+        <span className="truncate">{model ? (model.auto ? 'Auto' : model.name) : 'Select a model'}</span>
+        {model && (auto || ultra || effort) && <span className={cn('shrink-0', ultra ? 'aurora-text font-medium' : 'text-subtle')}>{label}</span>}
         <ChevronDown size={12} className={cn('picker-chevron shrink-0 text-subtle', open && 'rotate-180')} />
       </button>
       <Popover open={open} onClose={close} anchor={anchor} placement="top-end" offset={8} className={cn('overflow-hidden rounded-2xl!', listing || !model ? 'w-[264px]' : 'w-[228px]')}>
@@ -611,7 +709,7 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
                 <RotateCcw size={13} />
               </button>
             </div>
-            {auto && !creditsLocked && <PremiumRow checked={model.key === PREMIUM_MODEL.key} onChange={(on) => config.pick(on ? PREMIUM_MODEL.key : AUTO_MODEL.key)} className="mt-2 w-full" />}
+            {auto && !creditsLocked && <div className="mt-2.5"><AutoSlider model={model} onPick={config.pick} /></div>}
             {(creditsLocked || model.description) && <p className="mt-2 px-1 text-center text-[11.5px] leading-snug text-subtle">{creditsLocked ? CREDIT_LOCK_NOTE : model.description}</p>}
             {hasEffort && (
               <div className="mt-2.5" title={ultra ? `Ultra orchestrates parallel subagents at ${EFFORT_LABELS[model.ultraEffort as Effort].toLowerCase()} effort` : undefined}>

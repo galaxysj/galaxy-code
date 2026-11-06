@@ -1,5 +1,5 @@
 import { AcpAgents } from './acp-registry'
-import { AgentModel, ImageModel, type AgentModelSpec, type Effort } from './models'
+import { AgentModel, AutoTiers, ImageModel, type AgentModelSpec, type Effort } from './models'
 import { ACP_ACCOUNTS, SUBSCRIPTION_ACCOUNT, SUBSCRIPTIONS, type AccountId, type AccountStatus, type CustomModel, type ResolvedImageModel, type ResolvedModel, type SecretState, type Settings, type Subscription } from './types'
 
 const EFFORT_ORDER: Effort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
@@ -67,9 +67,14 @@ export function hasModelKey(secrets: SecretState, settings: Pick<Settings, 'disa
   return secrets.openRouterKey || (!!provider && !!secrets.providerKeys[provider.id] && !settings.disabledProviders.includes(provider.id))
 }
 
+/** Whether a model id is Auto itself or a model marked Free in models.ts. Both run without credits and count toward the Auto usage. */
+export function isAutoId(id: string): boolean {
+  return id === 'openrouter/free' || AgentModel.some((m) => m.ID === id && m.Free === true)
+}
+
 /** Whether a model runs on OpenRouter credits. Auto is free, and accounts, custom providers and models on their own provider's key pay elsewhere. */
 export function needsCredits(model: Pick<ResolvedModel, 'id' | 'subscription'>, secrets: SecretState, settings: Pick<Settings, 'disabledProviders'>): boolean {
-  if (model.subscription !== 'Default' || model.id === 'openrouter/free' || parseCustomModel(model.id)) return false
+  if (model.subscription !== 'Default' || isAutoId(model.id) || parseCustomModel(model.id)) return false
   const provider = byokProvider(model.id)
   return !provider || !secrets.providerKeys[provider.id] || settings.disabledProviders.includes(provider.id)
 }
@@ -158,6 +163,23 @@ export const PREMIUM_MODEL: ResolvedModel = {
   description: 'Picks the best model for each request automatically.'
 }
 
+/** Prefix of a tier's id. The id after it names a stop in AutoTiers, and the request goes to openrouter/auto limited to that stop's models. */
+export const AUTO_TIER_PREFIX = 'openrouter/auto:'
+
+/** The models an Auto tier id may route to, or null when the id is not a tier. */
+export function autoTierModels(id: string): string[] | null {
+  return id.startsWith(AUTO_TIER_PREFIX) ? (AutoTiers.find((tier) => tier.ID === id.slice(AUTO_TIER_PREFIX.length))?.Models ?? null) : null
+}
+
+/** The stops above Free on Auto's slider, in order. */
+export const AUTO_TIER_MODELS: ResolvedModel[] = AutoTiers.map((tier) => ({
+  ...PREMIUM_MODEL,
+  key: modelKey('Default', AUTO_TIER_PREFIX + tier.ID),
+  name: tier.DisplayName,
+  id: AUTO_TIER_PREFIX + tier.ID,
+  description: tier.Description
+}))
+
 /** ACP agents pick their model inside the session, so each gets one entry that stands for the agent. */
 function fromAcpAgent(name: string): ResolvedModel {
   return {
@@ -187,10 +209,11 @@ export function resolveModels(settings: Pick<Settings, 'customModels' | 'customP
   for (const model of [
     AUTO_MODEL,
     PREMIUM_MODEL,
+    ...AUTO_TIER_MODELS,
     ...AgentModel.map((spec) => fromSpec(spec, disabled, enabled)),
     ...AcpAgents.map((agent) => fromAcpAgent(agent.DisplayName)),
     ...settings.customModels.filter((custom) => !ACP_ACCOUNTS.includes(SUBSCRIPTION_ACCOUNT[custom.subscription] ?? '')).map((custom) => fromCustom(custom, disabled)),
-    ...settings.customProviders.filter((provider) => provider.enabled && provider.api !== 'decisions').flatMap((provider) => provider.models.map((model) => fromCustom({ name: model, id: customModelId(provider.id, model), subscription: 'Default' }, disabled)))
+    ...settings.customProviders.filter((provider) => provider.enabled && provider.api !== 'decisions' && provider.api !== 'images').flatMap((provider) => provider.models.map((model) => fromCustom({ name: model, id: customModelId(provider.id, model), subscription: 'Default' }, disabled)))
   ]) {
     if (seen.has(model.key)) continue
     seen.add(model.key)
@@ -199,13 +222,18 @@ export function resolveModels(settings: Pick<Settings, 'customModels' | 'customP
   return out
 }
 
-export function resolveImageModels(): ResolvedImageModel[] {
-  return ImageModel.map((spec) => ({
+/** The built-in image models, then the models of each enabled custom provider that speaks the Images API. */
+export function resolveImageModels(settings?: Pick<Settings, 'customProviders'>): ResolvedImageModel[] {
+  const builtIn = ImageModel.map((spec) => ({
     key: modelKey(spec.Subscription, spec.ID),
     name: spec.DisplayName,
     id: spec.ID,
     subscription: spec.Subscription
   }))
+  const custom = (settings?.customProviders ?? [])
+    .filter((provider) => provider.enabled && provider.api === 'images')
+    .flatMap((provider) => provider.models.map((model) => ({ key: modelKey('Default', customModelId(provider.id, model)), name: `${model} (${provider.name})`, id: customModelId(provider.id, model), subscription: 'Default' as const })))
+  return [...builtIn, ...custom]
 }
 
 export function findModel(models: ResolvedModel[], key: string | null | undefined): ResolvedModel | null {

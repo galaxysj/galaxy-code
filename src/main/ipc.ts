@@ -226,7 +226,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
         projects: store.projects,
         chats: store.chatList(),
         models: resolveModels(store.settings),
-        imageModels: resolveImageModels(),
+        imageModels: resolveImageModels(store.settings),
         mcp: mcp.statuses(),
         platform: process.platform,
         homeDir: homedir(),
