@@ -2005,6 +2005,9 @@ function BrowserSection(): ReactNode {
           <RowItem label="Browser control" hint="Let agents open pages, click and type.">
             <Switch checked={settings.browserAgentControl} onChange={(browserAgentControl) => void update({ browserAgentControl })} label="Browser control" />
           </RowItem>
+          <RowItem label="Save screenshots" hint="After each browser action, keep a PNG with the cursor and glow in the chat's artifacts folder.">
+            <Switch checked={settings.saveBrowserScreenshots !== false} onChange={(saveBrowserScreenshots) => void update({ saveBrowserScreenshots })} label="Save screenshots" />
+          </RowItem>
         </Card>
       </Section>
       <Section title="Site data" description="Stored only in the built-in browser. Your default browser is not affected.">

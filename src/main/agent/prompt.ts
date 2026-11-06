@@ -49,7 +49,7 @@ export async function gatherContext(
     readMemory(projectPath),
     listSkills(projectPath),
     readFile(join(artifactsDir, TASKS_ARTIFACT), 'utf8').catch(() => ''),
-    readdir(artifactsDir).catch(() => [] as string[])
+    readdir(artifactsDir, { withFileTypes: true }).then((entries) => entries.filter((entry) => entry.isFile()).map((entry) => entry.name)).catch(() => [] as string[])
   ])
 
   let instructions: PromptContext['instructions'] = null

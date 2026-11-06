@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { dialog, session, WebContentsView, type BrowserWindow, type WebContents } from 'electron'
 import type { Rect } from '@shared/api'
 import type { BrowserDataKind, BrowserSearchEngine, BrowserState } from '@shared/types'
@@ -476,7 +479,7 @@ class BrowserService {
     const wc = this.view?.webContents
     if (!wc || wc.isDestroyed()) return 0
     try {
-      return Number(await wc.executeJavaScriptInIsolatedWorld(1001, [{ code: agentCursorScript(update) }])) || 0
+      return Number(await wc.executeJavaScriptInIsolatedWorld(1001, [{ code: agentCursorScript({ ...update, glow: true }) }])) || 0
     } catch {
       // Navigation may replace the page during an animation; cursor visuals must not fail the tool.
       return 0
@@ -605,6 +608,12 @@ class BrowserService {
     const params = { key: keyCode, modifiers, windowsVirtualKeyCode: virtualKey }
     await this.command('Input.dispatchKeyEvent', { ...params, type: text ? 'keyDown' : 'rawKeyDown', ...(text ? { text, unmodifiedText: text } : {}) })
     await this.command('Input.dispatchKeyEvent', { ...params, type: 'keyUp' })
+  }
+
+  /** The page at full size as a PNG, with the agent cursor and glow it shows. */
+  async capturePng(): Promise<Buffer | null> {
+    const image = await this.ensureView().webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })
+    return image.isEmpty() ? null : image.toPNG()
   }
 
   private async capture(): Promise<{ mime: string; base64: string }> {
@@ -877,6 +886,21 @@ class BrowserTabs {
     if (kind === 'cache') await data.clearCache()
     else await data.clearStorageData()
   }
+  private shotCount = 0
+  /** Keeps a PNG of the page after an action in the chat's artifacts folder, when Settings asks for it. Never fails the action. */
+  private async saveShot(chatId: string, tab: BrowserService, action: string): Promise<void> {
+    if (store.settings.saveBrowserScreenshots === false) return
+    try {
+      const png = await tab.capturePng()
+      if (!png) return
+      const dir = join(homedir(), '.galaxy', chatId, 'artifacts', 'screenshots')
+      await mkdir(dir, { recursive: true })
+      await writeFile(join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${String(++this.shotCount).padStart(3, '0')}-${action}.png`), png)
+    } catch {
+      // A screenshot is a record for the user, not part of the action.
+    }
+  }
+
   async act(chatId: string, action: BrowserAction, signal?: AbortSignal): Promise<BrowserResult> {
     if (action.action === 'create') {
       action = { ...action, action: 'navigate', url: action.url || 'about:blank', tabIndex: undefined, background: action.background ?? false }
@@ -912,6 +936,7 @@ class BrowserTabs {
     const background = action.action !== 'navigate' || action.background !== false
     this.registerTab(chatId, id, background)
     const result = await tab.act(action, signal)
+    await this.saveShot(chatId, tab, action.action)
     const tabIndex = this.tabIds(window).indexOf(id) + 1
     return { ...result, tabId: id, tabIndex, url: tab.state().url, text: `Tab index: ${tabIndex}\n${action.action === 'navigate' ? `Background: ${background}\n` : ''}${result.text}` }
   }

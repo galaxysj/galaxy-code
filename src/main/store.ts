@@ -83,6 +83,7 @@ function defaultSettings(): Settings {
     browserSearchEngine: 'duckduckgo',
     browserBlockPopups: false,
     browserAgentControl: true,
+    saveBrowserScreenshots: true,
     computerUse: false,
     appContext: true,
     appContextShortcut: 'CommandOrControl+Shift+7',

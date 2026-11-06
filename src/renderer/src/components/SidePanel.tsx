@@ -318,7 +318,7 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
   return (
     <div className={cn('flex h-full flex-col', !visible && 'hidden')}>
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line pl-3 pr-2">
-        <span className="min-w-0 truncate font-mono text-[11.5px] text-muted" title={file.path}>
+        <span className="min-w-0 truncate font-mono text-[11.5px] text-muted" title={artifactTitle(file.path) ? undefined : file.path}>
           {relativeTo(root, file.path, homeDir)}
         </span>
         {completing && (
@@ -915,7 +915,7 @@ function ReviewPane({ tab, visible }: { tab: WorkspaceTab; visible: boolean }): 
           : noCommits ? <div className="text-[12px] text-subtle">No commits yet.</div>
           : displayedDiffs.length ? displayedDiffs.map((diff) => <div key={diff.path} className="mb-3 overflow-clip rounded-lg border border-line">
               <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-line bg-bg px-3 py-2 text-[12px]">
-                <button type="button" onClick={() => useStore.getState().openFile(diff.path)} className="min-w-0 flex-1 truncate text-left hover:text-link" title={diff.path}>{relativeTo(tab.cwd, diff.path, '')}</button>
+                <button type="button" onClick={() => useStore.getState().openFile(diff.path)} className="min-w-0 flex-1 truncate text-left hover:text-link" title={artifactTitle(diff.path) ? undefined : diff.path}>{relativeTo(tab.cwd, diff.path, '')}</button>
                 {diff.created && <span className="text-[11px] text-ok">new</span>}
                 {diff.deleted && <span className="text-[11px] text-danger">deleted</span>}
                 <DiffStat added={diff.added} removed={diff.removed} />

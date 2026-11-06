@@ -721,9 +721,10 @@ function LiveEditLines({ item, icon }: { item: ToolItem; icon: ReactNode }): Rea
   return (
     <>
       {lines.map((file, index) => (
-        <div key={file?.path ?? index} className="flex h-7 min-w-0 items-center gap-2 text-[13.8px] font-[450] text-muted" title={file?.path}>
-          <span className="flex w-4 shrink-0 justify-center">{index === 0 ? <Spinner size={13} /> : icon}</span>
-          <span className="shimmer min-w-0 truncate">{leadWord(file ? `${verb} ${baseName(file.path)}` : verb)}</span>
+        <div key={file?.path ?? index} className="flex h-7 min-w-0 items-center gap-2 text-[13.8px] font-[450] text-muted" title={file && !artifactTitle(file.path) ? file.path : undefined}>
+          {/* Every file being written spins, not only the first. */}
+          <span className="flex w-4 shrink-0 justify-center">{file || index === 0 ? <Spinner size={13} /> : icon}</span>
+          <span className="shimmer min-w-0 truncate">{leadWord(file ? `${verb} ${artifactTitle(file.path) ?? baseName(file.path)}` : verb)}</span>
           {file && <LiveDiffStat added={file.added} removed={file.removed} live />}
         </div>
       ))}
@@ -1120,7 +1121,7 @@ export function PresentTool({ item }: { item: ToolItem }): ReactNode {
             <div key={file.path} className="group/file flex w-full items-center gap-3 rounded-lg border border-line px-4 py-3">
               <div className="flex min-w-0 flex-1 items-center gap-3">
                 <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-line bg-hover">{artifactTitle(file.path) ? <FileIcon size={16} className="text-fg" /> : <FileTypeIcon name={file.name} size={16} />}</span>
-                <button type="button" onClick={() => openFile(file.path)} className="min-w-0 flex-1 text-left" title={file.path}>
+                <button type="button" onClick={() => openFile(file.path)} className="min-w-0 flex-1 text-left" title={artifactTitle(file.path) ? undefined : file.path}>
                   <span className="block truncate text-[14.3px] font-medium text-fg">{file.name}</span>
                   <span className="block text-[12.1px] text-subtle">{formatBytes(file.size)}</span>
                 </button>

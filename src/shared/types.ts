@@ -274,6 +274,8 @@ export interface Settings {
   browserBlockPopups: boolean
   /** Off makes the Browser and ListTabs tools fail for every agent. */
   browserAgentControl: boolean
+  /** Save a PNG of the page after each browser action the agent takes, into the chat's artifacts folder. */
+  saveBrowserScreenshots: boolean
   /** Off makes the Computer tool fail for every agent. */
   computerUse: boolean
   /** Lets a global shortcut attach the front app's tree and screenshot to the message box. */

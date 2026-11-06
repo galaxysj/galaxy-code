@@ -2,6 +2,8 @@ export interface CursorUpdate {
   action: 'center' | 'move' | 'click' | 'press' | 'release' | 'show' | 'hide'
   x?: number
   y?: number
+  /** Also frame the page in a blue glow, for the browser view. Computer use leaves it off. */
+  glow?: boolean
 }
 
 // Runs in an isolated world inside the native browser view, above page content.
@@ -33,6 +35,7 @@ export function agentCursorScript(update: CursorUpdate): string {
         shadow.append(el);
         return el;
       };
+      const glow = node({ inset: '0', opacity: '0', transition: 'opacity 260ms ease', borderRadius: '0', boxShadow: 'inset 0 0 0 2px rgba(37,139,255,.55), inset 0 0 22px 4px rgba(37,139,255,.38), inset 0 0 60px 8px rgba(37,139,255,.16)', zIndex: '1' });
       const cursor = node({ left: '0', top: '0', width: size + 'px', height: size + 'px', opacity: '0', transition: 'opacity 180ms ease', willChange: 'transform', zIndex: '2' });
       const glyph = document.createElement('div');
       Object.assign(glyph.style, { width: size + 'px', height: size + 'px', transformOrigin: hotspot + 'px ' + hotspot + 'px', pointerEvents: 'none' });
@@ -70,7 +73,8 @@ export function agentCursorScript(update: CursorUpdate): string {
       });
       globalThis[key] = {
         host,
-        hide() { cursor.style.opacity = '0'; },
+        hide() { cursor.style.opacity = '0'; glow.style.opacity = '0'; },
+        glow(on) { glow.style.opacity = on ? '1' : '0'; },
         center() { return this.move(innerWidth / 2, innerHeight / 2, false, true); },
         move(x, y, animate = true, keepCentered = false) {
           waitingAtCenter = keepCentered;
@@ -117,6 +121,7 @@ export function agentCursorScript(update: CursorUpdate): string {
       };
     }
     const api = globalThis[key];
+    if (update.glow) api.glow(true);
     if (update.action === 'center') return api.center();
     if (update.action === 'click') { api.click(update.x, update.y); return 0; }
     if (update.action === 'press') { api.press(update.x, update.y); return 0; }
