@@ -79,6 +79,23 @@ export function watchShell(id: string, onChange: (exited: boolean) => void): () 
   return () => { shell.listeners.delete(listener) }
 }
 
+/** This chat's background commands, with the log file each writes to, for the list above the input. */
+export function listShells(chatId: string): { id: string; name: string; log: string; exited: boolean; code: number | null }[] {
+  return [...shells.values()].filter((shell) => shell.chatId === chatId).map((shell) => ({ id: shell.id, name: shell.name, log: shell.log, exited: shell.exited, code: shell.code }))
+}
+
+/** Stops one of this chat's background commands, or all of them when no id is given. Output already written stays readable. */
+export function stopShells(chatId: string, id?: string): void {
+  for (const shell of shells.values()) {
+    if (shell.chatId === chatId && (!id || shell.id === id) && !shell.exited) killTree(shell.child)
+  }
+}
+
+/** How many background commands this chat has running. */
+export function runningShellCount(chatId: string): number {
+  return [...shells.values()].filter((shell) => shell.chatId === chatId && !shell.exited).length
+}
+
 export function killBackgroundProcesses(): void {
   for (const shell of shells.values()) if (!shell.exited) killTree(shell.child, 'SIGKILL')
   shells.clear()

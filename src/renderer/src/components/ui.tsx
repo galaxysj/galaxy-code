@@ -7,6 +7,7 @@ import {
   useState,
   useSyncExternalStore,
   type ButtonHTMLAttributes,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject
 } from 'react'
@@ -24,18 +25,80 @@ export function Spinner({ size = 14, className }: { size?: number; className?: s
   return <Loader2 size={size} className={cn('spin shrink-0', className)} />
 }
 
+/**
+ * A hover tip that shows the same way everywhere: after a short pause, just below and to the right of the pointer
+ * (flipped to the other side near a window edge), gone when the pointer leaves, the element is pressed or loses focus. Spread `bind` on the element and
+ * render `tip` beside it. Native title tooltips are slow, inconsistent and missing on some elements, so the app uses this instead.
+ */
+export function useTooltip(text: string | undefined): {
+  bind: { onPointerEnter(event: ReactPointerEvent<HTMLElement>): void; onPointerLeave(): void; onPointerDown(): void; onBlur(): void }
+  tip: ReactNode
+} {
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null)
+  const timer = useRef<number | undefined>(undefined)
+  const latest = useRef(text)
+  latest.current = text
+  const hide = useCallback((): void => {
+    window.clearTimeout(timer.current)
+    setAt(null)
+  }, [])
+  useEffect(() => hide, [hide])
+  // A native browser view sits above all HTML, so while a tip is showing it counts as a popover and the page steps aside.
+  const showing = at !== null
+  useLayoutEffect(() => {
+    if (!showing) return
+    openPopovers++
+    popoverListeners.forEach((listener) => listener())
+    return () => {
+      openPopovers--
+      popoverListeners.forEach((listener) => listener())
+    }
+  }, [showing])
+  const bind = {
+    onPointerEnter(event: ReactPointerEvent<HTMLElement>): void {
+      if (event.pointerType === 'touch') return
+      const { clientX, clientY } = event
+      window.clearTimeout(timer.current)
+      timer.current = window.setTimeout(() => setAt({ x: clientX, y: clientY }), 350)
+    },
+    onPointerLeave: hide,
+    onPointerDown: hide,
+    onBlur: hide
+  }
+  const left = at ? at.x > window.innerWidth - 280 : false
+  const above = at ? at.y > window.innerHeight - 56 : false
+  const tip = at && latest.current
+    ? createPortal(
+        <div
+          role="tooltip"
+          className="fade-in pointer-events-none fixed z-[70] max-w-[260px] rounded-md bg-fg px-2 py-1 text-[11.5px] leading-snug text-bg shadow-pop"
+          style={{ left: left ? at.x - 12 : at.x + 12, top: above ? at.y - 14 : at.y + 18, transform: `translate(${left ? '-100%' : '0'}, ${above ? '-100%' : '0'})` }}
+        >
+          {latest.current}
+        </div>,
+        document.body
+      )
+    : null
+  return { bind, tip }
+}
+
 interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   label: string
   active?: boolean
   size?: 'sm' | 'md'
 }
 
-export function IconButton({ label, active, size = 'md', className, children, ...rest }: IconButtonProps): ReactNode {
+export function IconButton({ label, active, size = 'md', className, children, onPointerEnter, onPointerLeave, onPointerDown, onBlur, ...rest }: IconButtonProps): ReactNode {
+  const { bind, tip } = useTooltip(label)
   return (
+    <>
     <button
       type="button"
-      title={label}
       aria-label={label}
+      onPointerEnter={(event) => { bind.onPointerEnter(event); onPointerEnter?.(event) }}
+      onPointerLeave={(event) => { bind.onPointerLeave(); onPointerLeave?.(event) }}
+      onPointerDown={(event) => { bind.onPointerDown(); onPointerDown?.(event) }}
+      onBlur={(event) => { bind.onBlur(); onBlur?.(event) }}
       className={cn(
         'no-drag relative z-10 inline-flex shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-35',
         size === 'sm' ? 'h-6 w-6' : 'h-7 w-7',
@@ -46,6 +109,8 @@ export function IconButton({ label, active, size = 'md', className, children, ..
     >
       {children}
     </button>
+    {tip}
+    </>
   )
 }
 

@@ -1,8 +1,9 @@
-import { artifactTitle } from '@shared/artifacts'
+import { artifactTitle, isScreenshotArtifact } from '@shared/artifacts'
 import {
   FileOutput,
   Bot,
   Brain,
+  Camera,
   Check,
   ChevronRight,
   CircleCheck,
@@ -427,7 +428,7 @@ function ExploreItemLine({ item }: { item: ToolItem }): ReactNode {
         disabled={!action}
         onClick={action}
         aria-expanded={expandable ? open : undefined}
-        className={cn('group/line flex h-7 w-full min-w-0 items-center gap-2 text-left text-[13.8px] font-[450] text-muted', action && 'hover:text-fg')}
+        className={cn('group/line flex h-7 w-full min-w-0 items-center gap-2 text-left text-[13.8px] font-[450] text-muted disabled:pointer-events-none', action && 'hover:text-fg')}
       >
         <span className="flex w-4 shrink-0 justify-center">{isLive(item) ? <Spinner size={13} /> : <ToolIcon item={item} icon={Icon} />}</span>
         <span className={cn('min-w-0 truncate', isLive(item) && 'shimmer')}>{leadWord(readArtifact ? `${isLive(item) ? 'Reading' : 'Read'} ${readArtifact}` : item.tool === 'bash' && item.status !== 'error' ? `${isLive(item) ? 'Running' : 'Ran'} ${toolActivityTitle(item)}` : editing && diffs.length && !attemptedTitle(item) ? editedTitle(item, diffs) : toolActivityTitle(item))}</span>
@@ -435,6 +436,8 @@ function ExploreItemLine({ item }: { item: ToolItem }): ReactNode {
         {expandable && <ChevronRight size={13} className={cn('-ml-1 shrink-0 text-subtle opacity-0 transition-all group-hover/line:opacity-100', open && 'rotate-90 opacity-100')} />}
         {/* A command shows only once its line is opened, at the top of the output. */}
         {item.tool !== 'bash' && !readArtifact && !isTerminalRead(item) && !isToolOutputRead(item) && item.detail && (item.tool === 'browser' || item.detail !== basename(item.detail)) && <span className="min-w-0 flex-1 truncate font-mono text-[12.1px] text-subtle">{item.detail}</span>}
+        {/* A command left running in the background says so, in the same faint text as its full card. */}
+        {item.tool === 'bash' && item.meta?.background && <span className="shrink-0 text-[12.1px] text-subtle">background</span>}
         {item.meta?.matches !== undefined && item.tool !== 'read' && <span className="shrink-0 text-[12.1px] text-subtle">{plural(item.meta.matches, 'match', 'matches')}</span>}
         <StatusMark item={item} />
       </button>}
@@ -644,7 +647,7 @@ function diffTitle(diff: FileDiff): string | null {
 /** Each artifact has its own icon: Plan a text file, Task a list, any other artifact the plain File icon. */
 function artifactIcon(path: string): typeof Wrench | null {
   const title = artifactTitle(path)
-  return !title ? null : title === 'Plan' ? FileText : title === 'Task' ? ListTodo : FileIcon
+  return !title ? null : title === 'Plan' ? FileText : title === 'Task' ? ListTodo : title.startsWith('Screenshot') ? Camera : FileIcon
 }
 
 /** The icon for edits that touch only artifacts: the shared one when they agree, else a plain file. Null when any edited file is not an artifact. */
@@ -1120,9 +1123,9 @@ export function PresentTool({ item }: { item: ToolItem }): ReactNode {
           return (
             <div key={file.path} className="group/file flex w-full items-center gap-3 rounded-lg border border-line px-4 py-3">
               <div className="flex min-w-0 flex-1 items-center gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-line bg-hover">{artifactTitle(file.path) ? <FileIcon size={16} className="text-fg" /> : <FileTypeIcon name={file.name} size={16} />}</span>
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-line bg-hover">{artifactTitle(file.path) ? (isScreenshotArtifact(file.path) ? <Camera size={16} className="text-fg" /> : <FileIcon size={16} className="text-fg" />) : <FileTypeIcon name={file.name} size={16} />}</span>
                 <button type="button" onClick={() => openFile(file.path)} className="min-w-0 flex-1 text-left" title={artifactTitle(file.path) ? undefined : file.path}>
-                  <span className="block truncate text-[14.3px] font-medium text-fg">{file.name}</span>
+                  <span className="block truncate text-[14.3px] font-medium text-fg">{isScreenshotArtifact(file.path) ? artifactTitle(file.path) : file.name}</span>
                   <span className="block text-[12.1px] text-subtle">{formatBytes(file.size)}</span>
                 </button>
               </div>

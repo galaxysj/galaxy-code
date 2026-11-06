@@ -1,4 +1,4 @@
-import { artifactTitle, isDocumentArtifact, isTasksArtifact, parseFrontMatter, parseTaskMarkdown, userEditable } from '@shared/artifacts'
+import { artifactTitle, isDocumentArtifact, isScreenshotArtifact, isTasksArtifact, parseFrontMatter, parseTaskMarkdown, userEditable } from '@shared/artifacts'
 import { TaskMark } from './TaskMark'
 import hljs from 'highlight.js/lib/common'
 import { unavailableAccounts } from '@shared/catalog'
@@ -18,6 +18,7 @@ import {
   Eye,
   FileDiff as FileDiffIcon,
   FileQuestion,
+  Camera,
   File as FileIcon,
   FileText,
   FolderOpen,
@@ -166,8 +167,8 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
           <ExternalLink size={13.5} />
         </IconButton>
       </div>
-      <div className="relative min-h-0 flex-1 p-1.5">
-        <div ref={host} className="h-full w-full overflow-hidden rounded-lg">
+      <div className="relative min-h-0 flex-1">
+        <div ref={host} className="h-full w-full overflow-hidden">
           {frame && hasPage && <img src={frame} alt="" draggable={false} className="h-full w-full" />}
           {!hasPage && (
             <div className="flex h-full flex-col items-center justify-center gap-5 px-5 text-center">
@@ -302,6 +303,13 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
   const isMarkdown = /\.(md|mdx|markdown)$/i.test(file.path)
   const isHtml = /\.html?$/i.test(file.path)
   const isSvg = view?.mime === 'image/svg+xml'
+  /** A background process's output: shown read-only and kept current while it runs. */
+  const processLog = /[/\\]galaxy-code[/\\]bg-[^/\\]+\.log$/.test(file.path)
+  useEffect(() => {
+    if (!processLog) return
+    const timer = window.setInterval(() => setReload((n) => n + 1), 1500)
+    return () => window.clearInterval(timer)
+  }, [processLog])
   /** The agent's task list: shown as it is, never editable here. */
   const tasksFile = isTasksArtifact(file.path)
   /** A document the agent wrote: its front matter is hidden, and `user-editable: false` makes it read-only. */
@@ -403,6 +411,8 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
           <div className="h-full overflow-y-auto px-6 py-5">
             <Markdown text={view.content ?? ''} root={file.path.slice(0, file.path.lastIndexOf('/'))} html />
           </div>
+        ) : processLog && view.kind === 'text' ? (
+          <SourceView content={view.content ?? ''} path={file.path} line={file.line} />
         ) : view.kind === 'text' && !view.truncated ? (
           <CodeEditor path={file.path} initial={view.content ?? ''} line={file.line} onDirtyChange={isMarkdown ? undefined : setDirty} onTextChange={isMarkdown ? editLive : undefined} onSaved={isMarkdown ? savedLive : undefined} onCompletingChange={setCompleting} />
         ) : (
@@ -954,7 +964,7 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
   }, [tabs])
   const icons = { browser: Globe, file: FileText, files: FolderOpen, terminal: SquareTerminal, review: GitCompare, agent: PanelRight, side: MessagesSquare }
   const contextTab = tabs.find((entry) => entry.id === context?.id)
-  const titleFor = (entry: PanelTab): string => (entry.type === 'file' && ['Plan', 'Task'].includes(artifactTitle(entry.path) ?? '') ? artifactTitle(entry.path) : null) ?? entry.customTitle ?? (entry.type === 'browser' ? browserStates[entry.id]?.title || (browserStates[entry.id]?.url ? browserStates[entry.id].url : 'New tab') : entry.type === 'side' && chats[entry.chatId] && chats[entry.chatId].title !== 'New chat' ? chats[entry.chatId].title : entry.title)
+  const titleFor = (entry: PanelTab): string => (entry.type === 'file' && (['Plan', 'Task'].includes(artifactTitle(entry.path) ?? '') || isScreenshotArtifact(entry.path)) ? artifactTitle(entry.path) : null) ?? entry.customTitle ?? (entry.type === 'browser' ? browserStates[entry.id]?.title || (browserStates[entry.id]?.url ? browserStates[entry.id].url : 'New tab') : entry.type === 'side' && chats[entry.chatId] && chats[entry.chatId].title !== 'New chat' ? chats[entry.chatId].title : entry.title)
   const commitRename = (): void => { if (renaming && renameValue.trim()) updateTab(renaming, { customTitle: renameValue.trim() }); setRenaming(null) }
   const act = (action: () => void): void => { setContext(null); action() }
   useEffect(() => {
@@ -983,7 +993,7 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
       <div className="relative flex h-[46px] shrink-0 items-center gap-1.5 bg-bg px-2">
         <div ref={strip} className="panel-tab-strip no-drag relative flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1.5 px-px" style={{ maxWidth: tabs.reduce((width, tab) => width + (tab.pinned ? 58 : 224), 0) }}>
           {tabs.map((entry) => {
-            const Icon = entry.type === 'file' && artifactTitle(entry.path) ? (artifactTitle(entry.path) === 'Plan' ? FileText : artifactTitle(entry.path) === 'Task' ? ListTodo : FileIcon) : icons[entry.type]
+            const Icon = entry.type === 'file' && /[/\\]galaxy-code[/\\]bg-[^/\\]+\.log$/.test(entry.path) ? SquareTerminal : entry.type === 'file' && artifactTitle(entry.path) ? (artifactTitle(entry.path) === 'Plan' ? FileText : artifactTitle(entry.path) === 'Task' ? ListTodo : isScreenshotArtifact(entry.path) ? Camera : FileIcon) : icons[entry.type]
             const title = titleFor(entry)
             const active = activeTab === entry.id
             return (

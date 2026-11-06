@@ -220,7 +220,7 @@ export const listTool: ToolDef = {
   kind: 'list',
   parallel: true,
   description:
-    'List a directory. Directories end with "/". Dependency and build folders such as node_modules and .git are shown but not expanded. Use `depth` up to 3 to see nested contents.',
+    'List a directory. Directories end with "/". Dependency and build folders such as node_modules and .git are shown but not expanded. Use `depth` up to 3 to see nested contents. The chat\'s artifacts folder is always listed in full.',
   parameters: {
     type: 'object',
     properties: {
@@ -232,7 +232,9 @@ export const listTool: ToolDef = {
     return outsideReadApproval(ctx.cwd, input.path, 'List', input)
   },
   present(input, ctx) {
-    return { title: `List ${displayPath(ctx.cwd, String(input.path ?? '.'))}` }
+    // The chat's artifacts folder reads as "Listed artifacts" whatever way it is written.
+    const target = resolvePath(ctx.cwd, String(input.path ?? '.'))
+    return { title: artifactName(join(target, 'x')) ? 'List artifacts' : `List ${displayPath(ctx.cwd, String(input.path ?? '.'))}` }
   },
   async execute(input, ctx) {
     const root = resolvePath(ctx.cwd, str(input, 'path') ?? '.')

@@ -78,6 +78,10 @@ const api: GalaxyApi = {
     attachFromData: call('files.attachFromData'),
     read: call('files.read'),
     write: call('files.write'),
+    panelCounts: call('files.panelCounts'),
+    shells: call('files.shells'),
+    stopShells: call('files.stopShells'),
+    artifacts: call('files.artifacts'),
     reveal: call('files.reveal'),
     openExternal: call('files.openExternal'),
     pathForFile: (file: File) => webUtils.getPathForFile(file)

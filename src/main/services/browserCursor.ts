@@ -35,7 +35,19 @@ export function agentCursorScript(update: CursorUpdate): string {
         shadow.append(el);
         return el;
       };
-      const glow = node({ inset: '0', opacity: '0', transition: 'opacity 260ms ease', borderRadius: '0', boxShadow: 'inset 0 0 0 2px rgba(37,139,255,.55), inset 0 0 22px 4px rgba(37,139,255,.38), inset 0 0 60px 8px rgba(37,139,255,.16)', zIndex: '1' });
+      // The same glow full control puts along a display's edges: four gradients, a thin ring and a slow pulse.
+      const glow = node({ inset: '0', opacity: '0', transition: 'opacity 260ms ease', zIndex: '1' });
+      const pulse = document.createElement('div');
+      Object.assign(pulse.style, { position: 'absolute', inset: '0', overflow: 'hidden', pointerEvents: 'none' });
+      for (const side of ['top', 'bottom', 'left', 'right']) {
+        const edge = document.createElement('div');
+        const across = side === 'top' || side === 'bottom';
+        const toward = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }[side];
+        Object.assign(edge.style, { position: 'absolute', [side]: '0', [across ? 'height' : 'width']: '44px', ...(across ? { left: '0', right: '0' } : { top: '0', bottom: '0' }), background: 'linear-gradient(to ' + toward + ', rgba(37,139,255,.55), rgba(37,139,255,.33) 18%, rgba(37,139,255,.16) 38%, rgba(37,139,255,.06) 62%, rgba(37,139,255,0))' });
+        pulse.append(edge);
+      }
+      glow.append(pulse);
+      if (!matchMedia('(prefers-reduced-motion: reduce)').matches) pulse.animate([{ opacity: 1 }, { opacity: .65 }, { opacity: 1 }], { duration: 2400, iterations: Infinity, easing: 'ease-in-out' });
       const cursor = node({ left: '0', top: '0', width: size + 'px', height: size + 'px', opacity: '0', transition: 'opacity 180ms ease', willChange: 'transform', zIndex: '2' });
       const glyph = document.createElement('div');
       Object.assign(glyph.style, { width: size + 'px', height: size + 'px', transformOrigin: hotspot + 'px ' + hotspot + 'px', pointerEvents: 'none' });

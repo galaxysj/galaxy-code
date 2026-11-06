@@ -139,6 +139,14 @@ export interface GalaxyApi {
     attachFromData(name: string, mime: string, base64: string): Promise<Attachment>
     read(path: string, chatId?: string): Promise<FileView>
     write(path: string, content: string): Promise<void>
+    /** Counts behind the shortcut icons above the input: the chat's running background commands and its artifact files. */
+    panelCounts(chatId: string): Promise<{ background: number; artifacts: number }>
+    /** The chat's background commands and the log file each writes to. */
+    shells(chatId: string): Promise<{ id: string; name: string; log: string; exited: boolean; code: number | null }[]>
+    /** Stops one background command of the chat, or every one when no id is given. */
+    stopShells(chatId: string, id?: string): Promise<void>
+    /** Every file in the chat's artifacts folder, newest first, with the name from a document's front matter when it has one. */
+    artifacts(chatId: string): Promise<{ path: string; title: string | null }[]>
     reveal(path: string): Promise<void>
     openExternal(target: string): Promise<void>
     pathForFile(file: File): string

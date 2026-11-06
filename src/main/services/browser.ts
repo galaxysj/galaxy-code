@@ -235,7 +235,7 @@ class BrowserService {
       webPreferences: { partition: PARTITION, sandbox: true, contextIsolation: true, backgroundThrottling: false }
     })
     view.setBackgroundColor('#ffffff')
-    view.setBorderRadius(8)
+    view.setBorderRadius(0)
     view.setVisible(false)
     this.window.contentView.addChildView(view)
     this.view = view
@@ -888,16 +888,20 @@ class BrowserTabs {
   }
   private shotCount = 0
   /** Keeps a PNG of the page after an action in the chat's artifacts folder, when Settings asks for it. Never fails the action. */
-  private async saveShot(chatId: string, tab: BrowserService, action: string): Promise<void> {
-    if (store.settings.saveBrowserScreenshots === false) return
+  private async saveShot(chatId: string, tab: BrowserService, action: string): Promise<string | null> {
+    // The automatic copy after every action follows Settings; a screenshot the agent asked for is always kept.
+    if (store.settings.saveBrowserScreenshots === false && action !== 'screenshot') return null
     try {
       const png = await tab.capturePng()
-      if (!png) return
-      const dir = join(homedir(), '.galaxy', chatId, 'artifacts', 'screenshots')
+      if (!png) return null
+      const dir = join(homedir(), '.galaxy', chatId, 'artifacts')
       await mkdir(dir, { recursive: true })
-      await writeFile(join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${String(++this.shotCount).padStart(3, '0')}-${action}.png`), png)
+      const file = join(dir, `browser-${new Date().toISOString().replace(/[:.]/g, '-')}-${String(++this.shotCount).padStart(3, '0')}-${action}.png`)
+      await writeFile(file, png)
+      return file
     } catch {
       // A screenshot is a record for the user, not part of the action.
+      return null
     }
   }
 
@@ -936,9 +940,10 @@ class BrowserTabs {
     const background = action.action !== 'navigate' || action.background !== false
     this.registerTab(chatId, id, background)
     const result = await tab.act(action, signal)
-    await this.saveShot(chatId, tab, action.action)
+    const saved = await this.saveShot(chatId, tab, action.action)
     const tabIndex = this.tabIds(window).indexOf(id) + 1
-    return { ...result, tabId: id, tabIndex, url: tab.state().url, text: `Tab index: ${tabIndex}\n${action.action === 'navigate' ? `Background: ${background}\n` : ''}${result.text}` }
+    const savedNote = saved && action.action === 'screenshot' ? `\nSaved as a PNG file: ${saved}. Give it to the user with Present.` : ''
+    return { ...result, tabId: id, tabIndex, url: tab.state().url, text: `Tab index: ${tabIndex}\n${action.action === 'navigate' ? `Background: ${background}\n` : ''}${result.text}${savedNote}` }
   }
 }
 

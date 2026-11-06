@@ -74,7 +74,8 @@ export async function gatherContext(
     memoryFile: memoryPath(projectPath),
     tasksFile: join(artifactsDir, TASKS_ARTIFACT),
     taskList: truncateEnd(taskList.trim(), 8000),
-    artifactFiles: artifactFiles.sort(),
+    // Documents first, then the browser screenshots newest first, so a long run of screenshots cannot push the documents out of the capped list.
+    artifactFiles: [...artifactFiles.filter((name) => !/^browser-.*\.png$/i.test(name)).sort(), ...artifactFiles.filter((name) => /^browser-.*\.png$/i.test(name)).sort().reverse()],
     instructions,
     skills,
     subagents: session.subagentStatus(),
@@ -228,6 +229,9 @@ For work with several steps, keep a task list in the Markdown file ${file}. The 
 
 [ ] is pending, [/] is in progress, [x] is done, and a bullet without a box is pending. Indent subtasks under their task. Keep one task in progress, mark each done as soon as it is, and keep the file current through your final message. Skip the list for simple requests.`
 
+/** How many artifact files the always-on context names. The List tool shows the folder in full. */
+const ARTIFACT_LIST_LIMIT = 20
+
 /** What this chat has already written to its artifacts folder, so a new turn picks up where the last stopped. */
 function artifactsBlock(ctx: PromptContext): string {
   const dir = ctx.tasksFile.slice(0, ctx.tasksFile.lastIndexOf('/'))
@@ -243,7 +247,7 @@ user-editable: false
 name is the title the user sees everywhere. user-editable: false locks the document so the user can only read it; use true when you want them to adjust it, in which case they can change the name and the body but never the user-editable line. The front matter is hidden when the document is viewed.
 
 Use an artifact when the result is a document the user will read, keep or come back to, and that would be too long or too lasting for a chat message: a report or research summary, a guide or how-to, a design or spec, meeting or analysis notes, a checklist or template the user will fill in (user-editable: true). Update the same artifact when its subject comes up again rather than writing a copy. Do not use artifacts for source code, for files that belong in the project, or for short answers; put those in the chat or the project instead.`,
-    ctx.artifactFiles.length ? `Files in this chat's artifacts folder (${dir}):\n${ctx.artifactFiles.map((name) => `- ${name}`).join('\n')}` : '',
+    ctx.artifactFiles.length ? `Files in this chat's artifacts folder (${dir}):\n${ctx.artifactFiles.slice(0, ARTIFACT_LIST_LIMIT).map((name) => `- ${name}`).join('\n')}${ctx.artifactFiles.length > ARTIFACT_LIST_LIMIT ? `\n- … ${ctx.artifactFiles.length - ARTIFACT_LIST_LIMIT} more; List the folder to see all of them` : ''}` : '',
     ctx.taskList ? `Current task list (${ctx.tasksFile}):\n\n${ctx.taskList}` : ''
   ].filter(Boolean).join('\n\n')
 }
@@ -271,6 +275,7 @@ const BROWSER_RULES = `# Using the browser
 
 Every Browser call is a loop: look at the page, do what the page you saw allows, look again. You only know what the last snapshot or screenshot showed.
 
+- Every screenshot you take is saved as a PNG file, with the agent cursor and glow, in the chat's artifacts folder (browser-*.png), and its result gives the path. When the user asks for a screenshot as a file, call Present with that path. Never say you cannot save a screenshot, and never try to redraw one.
 - After every navigate, take a snapshot in the same call. Use a screenshot instead when you will click by coordinates: coordinates come from a screenshot, refs from a snapshot.
 - Then act, but only as far as you can predict from what you have already seen. Never predict HTML elements or refs: do not guess selectors, ids, classes or page structure, and use only refs from the latest snapshot. If the next step depends on what the page does, end the call and decide from the result.
 - The last step of every call must be a snapshot or a screenshot. Do not finish a call blind, and do not report a result you have not seen on the page.

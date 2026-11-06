@@ -1,8 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
+import { isDocumentArtifact, parseFrontMatter } from '@shared/artifacts'
+import { listShells, runningShellCount, stopShells } from './tools/shell'
 import { IPC_CHAT_EVENT, IPC_INVOKE, IPC_UI_EVENT, type Rect } from '@shared/api'
 import { resolveImageModels, resolveModels, type ProviderId } from '@shared/catalog'
 import type {
@@ -365,6 +367,23 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'files.copyEntries': copyProjectEntries,
     'files.read': (path: string) => readFileView(path),
     'files.write': (path: string, content: string) => saveFile(path, content),
+    'files.shells': (chatId: string) => listShells(chatId),
+    'files.stopShells': (chatId: string, id?: string) => stopShells(chatId, id),
+    'files.artifacts': async (chatId: string) => {
+      const dir = join(homedir(), '.galaxy', chatId, 'artifacts')
+      const names = (await readdir(dir, { withFileTypes: true }).catch(() => [])).filter((entry) => entry.isFile()).map((entry) => entry.name)
+      const files = await Promise.all(names.map(async (name) => {
+        const path = join(dir, name)
+        const info = await stat(path).catch(() => null)
+        const title = isDocumentArtifact(path) ? parseFrontMatter(await readFile(path, 'utf8').catch(() => '')).meta.name?.trim() || null : null
+        return { path, title, time: info?.mtimeMs ?? 0 }
+      }))
+      return files.sort((a, b) => b.time - a.time).map(({ path, title }) => ({ path, title }))
+    },
+    'files.panelCounts': async (chatId: string) => ({
+      background: runningShellCount(chatId),
+      artifacts: (await readdir(join(homedir(), '.galaxy', chatId, 'artifacts'), { withFileTypes: true }).catch(() => [])).filter((entry) => entry.isFile()).length
+    }),
     'editor.complete': (request: CompletionRequest) => completeCode(request),
     'editor.suggestEdit': (request: EditSuggestionRequest) => suggestEdit(request),
     'editor.inlineEdit': (request: InlineEditRequest) => inlineEdit(request, (text) => emitUi({ type: 'inline-edit-delta', requestId: request.requestId, text })),

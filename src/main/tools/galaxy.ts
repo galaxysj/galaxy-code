@@ -1,4 +1,4 @@
-import { isDocumentArtifact, parseFrontMatter } from '@shared/artifacts'
+import { isDocumentArtifact, isScreenshotArtifact, parseFrontMatter } from '@shared/artifacts'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
@@ -409,7 +409,7 @@ export const presentTool: ToolDef = {
       else {
         // A document artifact is presented under the name in its front matter.
         const title = isDocumentArtifact(abs) ? parseFrontMatter(await readFile(abs, 'utf8').catch(() => '')).meta.name?.trim() : ''
-        files.push({ path: abs, name: title || basename(abs), mime: mimeOf(abs), size: info.size })
+        files.push({ path: abs, name: isScreenshotArtifact(abs) ? 'Screenshot' : title || basename(abs), mime: mimeOf(abs), size: info.size })
       }
     }
     if (files.length === 0) throw new Error(`None of the files exist: ${missing.join(', ')}`)

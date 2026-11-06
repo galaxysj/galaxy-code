@@ -1,3 +1,4 @@
+import { artifactTitle, isScreenshotArtifact } from '@shared/artifacts'
 import { TaskMark } from './TaskMark'
 import {
   AppWindow,
@@ -10,12 +11,16 @@ import {
   FolderGit2,
   FolderOpen,
   FolderPlus,
+  Camera,
   CircleAlert,
+  File,
+  FileDiff,
   FileText,
   GitBranch,
   GitCommitHorizontal,
   Globe,
   Laptop,
+  ListTodo,
   Monitor,
   Paperclip,
   Plug,
@@ -46,7 +51,7 @@ import type { ModelBrand } from '@shared/models'
 import { ApprovalPrompt } from './ApprovalPrompt'
 import { SubscriptionPicker } from './SubscriptionPicker'
 import { AppContextCard } from './AppContextCard'
-import { Button, MenuItem, MenuSeparator, Popover, Segmented, SkillIcon, Spinner, TextInput } from './ui'
+import { Button, IconButton, MenuItem, MenuSeparator, Popover, Segmented, SkillIcon, Spinner, TextInput } from './ui'
 import { openLink } from '../lib/openLink'
 
 const PERMISSION_MODES: { value: PermissionMode; label: string; description: string }[] = [
@@ -1010,18 +1015,9 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
           </button>
         </div>
       )}
-      {!edit && !compact && !chat?.side && (
-        <div className="mb-1.5 flex h-6 items-center gap-1.5 pl-1">
-          {!chat && <ProjectChip chat={chat} />}
-          <WorkspaceToggle chat={chat} />
-        </div>
-      )}
-
       {!edit && chat && <CurrentTask chat={chat} items={items} />}
 
       {errorShown && chat?.error && <ChatError message={chat.error} onDismiss={() => setDismissedError(errorKey)} />}
-
-      {followUp && chat && !chat.side && !errorShown && <ChatChips chat={chat} items={items} />}
 
       {!edit && chat && chat.queued.length > 0 && (
         <div className="mb-1.5 space-y-1">
@@ -1034,6 +1030,17 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Just above the box, below any suggestion chips and queued messages. The shortcuts stay in the compact one-line input too, where the chips are left out. */}
+      {!edit && !chat?.side && (!compact || chat) && (
+        <div className="relative mb-1.5 flex min-h-6 items-center gap-1.5 pl-1">
+          {!compact && !chat && <ProjectChip chat={chat} />}
+          {!compact && <WorkspaceToggle chat={chat} />}
+          {/* The suggestion chips share this row, at the left, with the shortcuts at the right. */}
+          {followUp && chat && !chat.side && !errorShown && <ChatChips chat={chat} items={items} />}
+          {chat && <PanelShortcuts chat={chat} />}
         </div>
       )}
 
@@ -1320,7 +1327,7 @@ function ChatChips({ chat, items }: { chat: Chat; items: Item[] | undefined }): 
   if (!stopped && !commands.length) return null
   const chip = SUGGESTION_CHIP
   return (
-    <div className="mb-2 flex items-center gap-2">
+    <div className="flex min-w-0 items-center gap-2">
       {stopped && (
         <button type="button" title="Have the agent pick up where it stopped" onClick={() => void useStore.getState().send('Continue', [], undefined, false, undefined, undefined, chat.id)} className={chip}>
           <Play size={12.5} />
@@ -1343,6 +1350,196 @@ function ChatChips({ chat, items }: { chat: Chat; items: Item[] | undefined }): 
           {GIT_COMMANDS[command].label}
         </button>
       ))}
+    </div>
+  )
+}
+
+/** Review, terminal and files in the side panel, at the top right of the input. */
+type ShortcutCard = 'diff' | 'terminal' | 'files'
+
+function CardRow({ onClick, children }: { onClick(): void; children: ReactNode }): ReactNode {
+  return (
+    <button type="button" onClick={onClick} className="flex h-8 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-left text-[12.5px] transition-colors hover:bg-hover">
+      {children}
+    </button>
+  )
+}
+
+/** The files this conversation changed, folder in faint small text after the name, +added -removed at the right end. */
+function DiffCard({ root, items, dirty }: { root: string | null; items: Item[] | undefined; dirty: Set<string> | null }): ReactNode {
+  const openFile = useStore((s) => s.openFile)
+  const totals = new Map<string, { added: number; removed: number }>()
+  for (const item of items ?? []) {
+    if (item.kind !== 'tool' || item.status !== 'done') continue
+    for (const diff of item.meta?.diffs ?? []) {
+      // Committed files are no longer changes: in a git project only the files still uncommitted are listed.
+      if (artifactTitle(diff.path) || (dirty && !dirty.has(diff.path))) continue
+      const sum = totals.get(diff.path) ?? { added: 0, removed: 0 }
+      totals.set(diff.path, { added: sum.added + diff.added, removed: sum.removed + diff.removed })
+    }
+  }
+  const rows = [...totals]
+  // Inside the project: the folder from the project root, left out for a file at the root. Outside: the whole folder path.
+  const folderOf = (path: string): string => {
+    const dir = path.slice(0, path.lastIndexOf('/'))
+    if (root && path.startsWith(`${root}/`)) return dir === root ? '' : dir.slice(root.length + 1)
+    return dir
+  }
+  if (rows.length === 0) return <div className="px-3 py-4 text-center text-[12px] text-subtle">No changes in this conversation yet.</div>
+  return (
+    <>
+      {rows.map(([path, sum]) => (
+        <CardRow key={path} onClick={() => openFile(path)}>
+          <span className="min-w-0 flex-1 truncate">
+            <span className="font-medium text-fg">{basename(path)}</span>
+            {folderOf(path) && <span className="ml-2 text-[11px] text-subtle">{folderOf(path)}</span>}
+          </span>
+          <span className="shrink-0 font-mono text-[11.5px] tabular-nums">
+            <span className="text-ok">+{sum.added}</span> <span className="text-danger">-{sum.removed}</span>
+          </span>
+        </CardRow>
+      ))}
+    </>
+  )
+}
+
+type ShellRow = { id: string; name: string; log: string; exited: boolean; code: number | null }
+
+/** The agent's background commands. Clicking one opens its output in the side panel, read-only; Stop ends it. */
+function ProcessCard({ chatId, shells }: { chatId: string; shells: ShellRow[] | null }): ReactNode {
+  const openFile = useStore((s) => s.openFile)
+  if (!shells) return <div className="flex justify-center py-4"><Spinner size={14} className="text-subtle" /></div>
+  if (shells.length === 0) return <div className="px-3 py-4 text-center text-[12px] text-subtle">No background processes.</div>
+  return (
+    <>
+      {shells.map((shell) => (
+        <div key={shell.id} className="flex h-8 w-full min-w-0 items-center rounded-lg transition-colors hover:bg-hover">
+          <button type="button" onClick={() => { openFile(shell.log); useStore.getState().updatePanelTab(shell.log, { customTitle: shell.name }) }} className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2 text-left text-[12.5px]">
+            <SquareTerminal size={13.5} className="shrink-0 text-subtle" />
+            <span className="min-w-0 flex-1 truncate text-fg">{shell.name}</span>
+            <span className={cn('shrink-0 text-[11.5px]', shell.exited ? 'text-subtle' : 'text-ok')}>{shell.exited ? (shell.code ? `Exited ${shell.code}` : 'Exited') : 'Running'}</span>
+          </button>
+          <span className="flex w-14 shrink-0 justify-end pr-1.5">
+            {!shell.exited && <button type="button" onClick={() => void window.galaxy.files.stopShells(chatId, shell.id)} className="h-5 rounded px-1.5 text-[11px] text-muted hover:bg-active hover:text-fg">Stop</button>}
+          </span>
+        </div>
+      ))}
+    </>
+  )
+}
+
+/** Every artifact of the conversation; clicking opens it in the side panel. */
+function ArtifactCard({ chat }: { chat: Chat }): ReactNode {
+  const openFile = useStore((s) => s.openFile)
+  const [files, setFiles] = useState<{ path: string; title: string | null }[] | null>(null)
+  useEffect(() => { void window.galaxy.files.artifacts(chat.id).then(setFiles).catch(() => setFiles([])) }, [chat.id])
+  if (!files) return <div className="flex justify-center py-4"><Spinner size={14} className="text-subtle" /></div>
+  if (files.length === 0) return <div className="px-3 py-4 text-center text-[12px] text-subtle">No artifacts yet.</div>
+  return (
+    <>
+      {files.map((file) => {
+        const label = file.title ?? artifactTitle(file.path) ?? basename(file.path)
+        const Icon = artifactTitle(file.path) === 'Plan' ? FileText : artifactTitle(file.path) === 'Task' ? ListTodo : isScreenshotArtifact(file.path) ? Camera : File
+        return (
+          <CardRow key={file.path} onClick={() => openFile(file.path)}>
+            <Icon size={13.5} className="shrink-0 text-subtle" />
+            <span className="min-w-0 flex-1 truncate text-fg">{label}</span>
+          </CardRow>
+        )
+      })}
+    </>
+  )
+}
+
+/** Review, terminal and files at the top right of the input: each opens a card above it with a preview. */
+function PanelShortcuts({ chat }: { chat: Chat }): ReactNode {
+  const project = useStore((s) => s.projects.find((p) => p.id === chat.projectId))
+  const items = useStore((s) => s.items[chat.id])
+  const root = chat.worktree?.path ?? project?.path ?? null
+  // Files still uncommitted in the project, to drop a change once it is committed. Null outside a git project.
+  const [dirty, setDirty] = useState<Set<string> | null>(null)
+  const refreshDirty = useCallback((): void => {
+    if (!root) return
+    void window.galaxy.review.read(root).then((review) => setDirty(review.isRepo ? new Set(review.diffs.map((diff) => (diff.path.startsWith('/') ? diff.path : `${root}/${diff.path}`))) : null)).catch(() => setDirty(null))
+  }, [root])
+  useEffect(refreshDirty, [refreshDirty, chat.status, items?.length])
+  // Files this conversation changed, from the edits already in the chat, that are still uncommitted; artifacts do not count.
+  const changes = new Set((items ?? []).flatMap((item) => (item.kind === 'tool' && item.status === 'done' ? item.meta?.diffs?.map((diff) => diff.path).filter((path) => !artifactTitle(path) && (!dirty || dirty.has(path))) ?? [] : []))).size
+  // Background commands and artifact files live in the main process: counted again when the chat's activity changes and when the pointer arrives.
+  const [counts, setCounts] = useState({ background: 0, artifacts: 0 })
+  const refresh = useCallback((): void => void window.galaxy.files.panelCounts(chat.id).then(setCounts).catch(() => {}), [chat.id])
+  useEffect(refresh, [refresh, chat.status, items?.length])
+  const [card, setCard] = useState<ShortcutCard | null>(null)
+  const [shells, setShells] = useState<ShellRow[] | null>(null)
+  const [committing, setCommitting] = useState(false)
+  // The process list refreshes while its card is open.
+  useEffect(() => {
+    if (card !== 'terminal') return
+    // A process that has exited is not listed.
+    const load = (): void => void window.galaxy.files.shells(chat.id).then((list) => setShells(list.filter((shell) => !shell.exited))).catch(() => {})
+    load()
+    const timer = window.setInterval(load, 1500)
+    return () => window.clearInterval(timer)
+  }, [card, chat.id])
+  const running = (shells ?? []).filter((shell) => !shell.exited).length
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!card) return
+    const away = (event: PointerEvent): void => { if (!box.current?.contains(event.target as Node)) setCard(null) }
+    const key = (event: globalThis.KeyboardEvent): void => { if (event.key === 'Escape') setCard(null) }
+    document.addEventListener('pointerdown', away)
+    document.addEventListener('keydown', key)
+    return () => {
+      document.removeEventListener('pointerdown', away)
+      document.removeEventListener('keydown', key)
+    }
+  }, [card])
+  const noun = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
+  const badge = (n: number): ReactNode => (n > 0 ? <span className="absolute -right-0.5 -top-0.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-fg px-0.5 text-[8.5px] font-semibold leading-none text-bg">{n > 99 ? '99+' : n}</span> : null)
+  const toggle = (next: ShortcutCard): void => setCard((current) => (current === next ? null : next))
+  return (
+    <div ref={box} className="ml-auto flex items-center" onPointerEnter={() => { refresh(); refreshDirty() }} onFocus={() => { refresh(); refreshDirty() }}>
+      {card && (
+        <div className="pop-in absolute bottom-full right-0 z-30 mb-2 w-[min(460px,100%)] origin-bottom-right overflow-hidden rounded-2xl border border-line bg-elev shadow-[0_4px_16px_rgba(0,0,0,0.08)]">
+          <div className="flex h-9 items-center gap-2 border-b border-line pl-3 pr-1.5">
+            <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-fg">
+              {card === 'diff' ? noun(changes, 'Change', 'Changes') : card === 'terminal' ? `${noun(counts.background, 'Background process', 'Background processes')} running` : `${noun(counts.artifacts, 'Artifact', 'Artifacts')} for conversation`}
+            </span>
+            {card === 'diff' && changes > 0 && root && (
+              <Button
+                size="sm"
+                disabled={committing}
+                onClick={() => {
+                  setCommitting(true)
+                  void runGitCommand('commit', chat.id, root).finally(() => { setCommitting(false); setCard(null); refreshDirty() })
+                }}
+              >
+                {committing ? <Spinner size={12} /> : <GitCommitHorizontal size={13} />} Commit
+              </Button>
+            )}
+            {card === 'terminal' && running > 0 && (
+              <Button size="sm" onClick={() => void window.galaxy.files.stopShells(chat.id)}>
+                <Square size={11} fill="currentColor" /> Stop all
+              </Button>
+            )}
+          </div>
+          <div className="max-h-[300px] overflow-y-auto p-1">
+            {card === 'diff' ? <DiffCard root={root} items={items} dirty={dirty} /> : card === 'terminal' ? <ProcessCard chatId={chat.id} shells={shells} /> : <ArtifactCard chat={chat} />}
+          </div>
+        </div>
+      )}
+      <IconButton label={noun(changes, 'Change', 'Changes')} size="sm" active={card === 'diff'} onClick={() => toggle('diff')}>
+        <FileDiff size={14} />
+        {badge(changes)}
+      </IconButton>
+      <IconButton label={`${noun(counts.background, 'Background process', 'Background processes')} running`} size="sm" active={card === 'terminal'} onClick={() => toggle('terminal')}>
+        <SquareTerminal size={14} />
+        {badge(counts.background)}
+      </IconButton>
+      <IconButton label={`${noun(counts.artifacts, 'Artifact', 'Artifacts')} for conversation`} size="sm" active={card === 'files'} onClick={() => toggle('files')}>
+        <File size={14} />
+        {badge(counts.artifacts)}
+      </IconButton>
     </div>
   )
 }
