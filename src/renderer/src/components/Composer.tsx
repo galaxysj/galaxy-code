@@ -1057,7 +1057,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
       {!edit && !chat?.side && (!compact || chat) && (
         <div className="relative mb-1.5 flex min-h-6 items-center gap-1.5 pl-1">
           {/* Everything at the left shrinks and clips, so it never runs under the shortcuts. Chips wait while the agent runs; the usage bubble covers the task bar. */}
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden py-1.5 -my-1.5 pr-2">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-clip py-1.5 -my-1.5 pr-2">
           {!compact && !chat && <ProjectChip chat={chat} />}
           {!followUp && <WorkspaceToggle chat={chat} />}
           {usageBubble && (
