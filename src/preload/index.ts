@@ -111,6 +111,7 @@ const api: GalaxyApi = {
     forward: call('browser.forward'),
     reload: call('browser.reload'),
     resize: call('browser.resize'),
+    deviceMode: call('browser.deviceMode'),
     stop: call('browser.stop'),
     state: call('browser.state'),
     frame: call('browser.frame'),

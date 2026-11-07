@@ -420,6 +420,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'browser.back': (id?: string) => browser.back(id, requestWindow() ?? undefined),
     'browser.forward': (id?: string) => browser.forward(id, requestWindow() ?? undefined),
     'browser.reload': (id?: string) => browser.reload(id, requestWindow() ?? undefined),
+    'browser.deviceMode': (id?: string) => browser.openDeviceMode(id, requestWindow() ?? undefined),
     'browser.resize': (width: number | null, height: number | null, id?: string) => browser.resize(width, height, id, requestWindow() ?? undefined),
     'browser.stop': (id?: string) => browser.stop(id, requestWindow() ?? undefined),
     'browser.state': (id?: string) => browser.state(id, requestWindow() ?? undefined),
