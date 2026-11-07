@@ -1053,6 +1053,9 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         </div>
       )}
 
+      {/* The task in progress sits on the chip row, below errors and queued messages. */}
+      {!edit && chat && <CurrentTask chat={chat} items={items} />}
+
       {/* Just above the box, below any suggestion chips and queued messages. The shortcuts stay in the compact one-line input too, where the chips are left out. */}
       {!edit && !chat?.side && (!compact || chat) && (
         <div className="relative mb-1.5 flex min-h-6 items-center gap-1.5 pl-1">
@@ -1075,8 +1078,6 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         </div>
       )}
 
-      {/* The task in progress sits directly on the box, below the chip row. */}
-      {!edit && chat && <CurrentTask chat={chat} items={items} />}
       {pendingApproval && chat ? (
         <ApprovalPrompt key={approvalId} chatId={chat.id} item={pendingApproval} remaining={approvals.length} onRespond={onRespond} />
       ) : <div
