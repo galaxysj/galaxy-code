@@ -1036,7 +1036,6 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
 
   return (
     <div className={cn(!edit && 'chat-column mx-auto w-full px-6', !edit && (centered ? 'max-w-[680px] pb-0' : 'max-w-[780px] pb-4'))}>
-      {!edit && chat && <CurrentTask chat={chat} items={items} />}
 
       {errorShown && chat?.error && <ChatError message={chat.error} onDismiss={() => setDismissedError(errorKey)} />}
 
@@ -1076,6 +1075,8 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         </div>
       )}
 
+      {/* The task in progress sits directly on the box, below the chip row. */}
+      {!edit && chat && <CurrentTask chat={chat} items={items} />}
       {pendingApproval && chat ? (
         <ApprovalPrompt key={approvalId} chatId={chat.id} item={pendingApproval} remaining={approvals.length} onRespond={onRespond} />
       ) : <div
