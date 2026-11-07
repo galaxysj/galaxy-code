@@ -1053,9 +1053,6 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         </div>
       )}
 
-      {/* The task in progress sits on the chip row, below errors and queued messages. */}
-      {!edit && chat && <CurrentTask chat={chat} items={items} />}
-
       {/* Just above the box, below any suggestion chips and queued messages. The shortcuts stay in the compact one-line input too, where the chips are left out. */}
       {!edit && !chat?.side && (!compact || chat) && (
         <div className="relative mb-1.5 flex min-h-6 items-center gap-1.5 pl-1">
@@ -1072,6 +1069,8 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
               </button>
             </div>
           )}
+          {/* The task in progress shares the row too, so it sits on the box like the chips. */}
+          {chat && <CurrentTask chat={chat} items={items} />}
           {/* The suggestion chips share this row, at the left, with the shortcuts at the right. */}
           {followUp && chat && !chat.side && !errorShown && <ChatChips chat={chat} items={items} />}
           {chat && <PanelShortcuts chat={chat} />}
@@ -1625,7 +1624,7 @@ function CurrentTask({ chat, items }: { chat: Chat; items: Item[] | undefined })
   if (!current) return null
   const done = tasks.filter((task) => task.status === 'completed').length
   return (
-    <div className="group/task relative mb-1.5 flex h-7 items-center gap-2 px-2 text-[13px] text-muted">
+    <div className="group/task relative flex h-6 min-w-0 items-center gap-2 px-1 text-[13px] text-muted">
       <Spinner size={13} className="shrink-0" />
       <span className="shimmer min-w-0 truncate">{current.content}</span>
       <span className="shrink-0 text-[11.5px] tabular-nums text-subtle">{done}/{tasks.length}</span>
