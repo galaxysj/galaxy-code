@@ -278,7 +278,7 @@ export function revealMarks({ htmlView, parseTable }: { htmlView?: (node: ProseN
       }
     },
     appendTransaction(transactions, _old, state) {
-      // Moving text during IME composition would break the word being composed.
+      // Moving text while a word is still being typed would break that word.
       if (editor?.composing || !transactions.some((tr) => tr.selectionSet || tr.docChanged)) return null
       const current = key.getState(state)
       const tr = state.tr.setMeta('addToHistory', false)
