@@ -1056,9 +1056,11 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
       {/* Just above the box, below any suggestion chips and queued messages. The shortcuts stay in the compact one-line input too, where the chips are left out. */}
       {!edit && !chat?.side && (!compact || chat) && (
         <div className="relative mb-1.5 flex min-h-6 items-center gap-1.5 pl-1">
+          {/* Everything at the left shrinks and clips, so it never runs under the shortcuts. Bubbles wait while the agent runs; the task bar shows only then. */}
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden py-1.5 -my-1.5 pr-2">
           {!compact && !chat && <ProjectChip chat={chat} />}
           {!compact && <WorkspaceToggle chat={chat} />}
-          {usageBubble && (
+          {usageBubble && !running && (
             <div className="group/att relative flex min-w-0 max-w-full">
               <button type="button" title="Open usage in Settings" onClick={() => { setUsageBubble(null); useStore.setState({ settingsOpen: 'usage' }) }} className={SUGGESTION_CHIP}>
                 <Gauge size={13.5} className="shrink-0" />
@@ -1070,9 +1072,10 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
             </div>
           )}
           {/* The task in progress shares the row too, so it sits on the box like the chips. */}
-          {chat && <CurrentTask chat={chat} items={items} />}
+          {chat && !(usageBubble && !running) && <CurrentTask chat={chat} items={items} />}
           {/* The suggestion chips share this row, at the left, with the shortcuts at the right. */}
-          {followUp && chat && !chat.side && !errorShown && <ChatChips chat={chat} items={items} />}
+          {followUp && chat && !chat.side && !errorShown && !running && <ChatChips chat={chat} items={items} />}
+          </div>
           {chat && <PanelShortcuts chat={chat} />}
         </div>
       )}
@@ -1567,7 +1570,7 @@ function PanelShortcuts({ chat }: { chat: Chat }): ReactNode {
   const badge = (n: number): ReactNode => (n > 0 ? <span className="absolute -right-0.5 -top-0.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-fg px-0.5 text-[8.5px] font-semibold leading-none text-bg">{n > 99 ? '99+' : n}</span> : null)
   const toggle = (next: ShortcutCard): void => setCard((current) => (current === next ? null : next))
   return (
-    <div ref={box} className="ml-auto flex items-center" onPointerEnter={() => { refresh(); refreshDirty() }} onFocus={() => { refresh(); refreshDirty() }}>
+    <div ref={box} className="ml-auto flex shrink-0 items-center" onPointerEnter={() => { refresh(); refreshDirty() }} onFocus={() => { refresh(); refreshDirty() }}>
       {card && (
         <div className="pop-in absolute bottom-full right-0 z-30 mb-2 w-[min(460px,100%)] origin-bottom-right overflow-hidden rounded-2xl border border-line bg-elev shadow-[0_4px_16px_rgba(0,0,0,0.08)]">
           <div className="flex h-9 items-center gap-2 border-b border-line pl-3 pr-1.5">
