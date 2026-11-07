@@ -1059,7 +1059,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
           {/* Everything at the left shrinks and clips, so it never runs under the shortcuts. Chips wait while the agent runs; the usage bubble covers the task bar. */}
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden py-1.5 -my-1.5 pr-2">
           {!compact && !chat && <ProjectChip chat={chat} />}
-          {!compact && <WorkspaceToggle chat={chat} />}
+          {!followUp && <WorkspaceToggle chat={chat} />}
           {usageBubble && (
             <div className="group/att relative flex min-w-0 max-w-full">
               <button type="button" title="Open usage in Settings" onClick={() => { setUsageBubble(null); useStore.setState({ settingsOpen: 'usage' }) }} className={SUGGESTION_CHIP}>
