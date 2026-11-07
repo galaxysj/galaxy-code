@@ -203,10 +203,11 @@ export function ComputerPip({ inset = 0 }: { inset?: number }): ReactNode {
           type="button"
           title={`Show ${windowTitle(entry)}`}
           onClick={() => setChosen({ id: entry.id, latest: latest.id })}
-          className="relative -mb-2 block h-8 truncate rounded-t-lg bg-elev px-3 pt-1 text-left text-[11.5px] text-muted shadow-pop transition-colors hover:text-fg"
+          className="relative -mb-2 block h-8 overflow-hidden rounded-t-lg bg-elev shadow-pop transition-opacity hover:opacity-90"
           style={{ width: `calc(100% - ${(behind.length - index) * 16}px)`, marginInline: 'auto' }}
         >
-          {windowTitle(entry)}
+          {/* The top edge of the window's latest picture. */}
+          {frames.current.get(entry.id) && <img src={frames.current.get(entry.id)} alt="" className="block h-full w-full object-cover object-top" />}
         </button>
       ))}
       <LiveWindow key={front.id} target={front} frame={frames.current.get(front.id)} onDrag={startDrag} onClose={() => setClosed([...closed, front.id])} />
