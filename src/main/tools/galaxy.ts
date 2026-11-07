@@ -200,7 +200,7 @@ Examples: {"title":"Open example.com and read the page","steps":[{"action":"navi
       steps: {
         type: 'array',
         minItems: 1,
-        description: 'Browser actions to run in order. One step is fine; batch the ones you can predict.',
+        description: 'Browser actions to run in order. One step is fine; batch the ones you can predict. To see the page, use snapshot (text with element refs) or screenshot (an image); never click just to look.',
         items: {
           type: 'object',
           properties: {

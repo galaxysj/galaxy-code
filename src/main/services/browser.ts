@@ -391,6 +391,8 @@ class BrowserService {
     }
     this.view.setBounds(this.viewport)
     this.view.setVisible(true)
+    // A resized page scales again to fit the panel's new size.
+    if (this.pageSize) void this.command('Emulation.setDeviceMetricsOverride', { ...this.pageSize, deviceScaleFactor: 0, mobile: this.pageSize.width < 600, scale: this.fitScale(this.pageSize) }).catch(() => {})
   }
 
   setBounds(rect: Rect | null): void {
@@ -402,6 +404,7 @@ class BrowserService {
   /** Lays the page out at this size, as on a device of that size, whatever the panel's size. No size goes back to the panel's. */
   async resize(width?: number | null, height?: number | null): Promise<{ width: number; height: number } | null> {
     if (!width && !height) {
+      this.pageSize = null
       await this.command('Emulation.clearDeviceMetricsOverride', {})
       return null
     }
@@ -409,8 +412,15 @@ class BrowserService {
       width: Math.round(Math.max(200, Math.min(3840, width || this.viewport.width))),
       height: Math.round(Math.max(200, Math.min(2400, height || this.viewport.height)))
     }
-    await this.command('Emulation.setDeviceMetricsOverride', { ...size, deviceScaleFactor: 0, mobile: size.width < 600 })
+    this.pageSize = size
+    await this.command('Emulation.setDeviceMetricsOverride', { ...size, deviceScaleFactor: 0, mobile: size.width < 600, scale: this.fitScale(size) })
     return size
+  }
+
+  /** A page size set by resize. However large, the user sees it scaled down to fit the panel. */
+  private pageSize: { width: number; height: number } | null = null
+  private fitScale(size: { width: number; height: number }): number {
+    return Math.min(1, this.viewport.width / size.width, this.viewport.height / size.height)
   }
 
   /** The page as it looks now, to stand in for the native view while something covers it. */
@@ -659,6 +669,10 @@ class BrowserService {
   }
 
   private async clickAt(action: BrowserAction, signal?: AbortSignal): Promise<void> {
+    // A click in the top left corner is a guess at "show me the page", which only snapshot and screenshot do.
+    if (action.ref === undefined && !action.selector && hasPoint(action) && action.x! <= 2 && action.y! <= 2) {
+      throw new Error('Clicking at (0, 0) does not show the page. Use a snapshot step to read it or a screenshot step to see it, then click an element by ref or a point from that screenshot.')
+    }
     let point = await this.locate(action)
     await this.moveCursor({ x: point.x, y: point.y }, signal)
     // Hover handlers or a layout update can move the target during the cursor animation.
