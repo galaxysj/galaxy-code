@@ -415,7 +415,8 @@ function ExploreItemLine({ item }: { item: ToolItem }): ReactNode {
   const editing = item.tool === 'edit' || item.tool === 'create'
   const [open, toggle] = useDisclosure(false, `${outputMode}:${isLive(item) ? 'running' : 'complete'}`)
   const diffs = item.tool === 'edit' || item.tool === 'create' ? item.meta?.diffs ?? [] : []
-  const preview = !open && editing && diffs.length > 0 && (outputMode === 'preview' || outputMode === 'foreground' && isLive(item))
+  // Artifact edits stay closed: the artifact opens in its own tab.
+  const preview = !open && editing && diffs.length > 0 && !diffs.every((diff) => artifactTitle(diff.path)) && (outputMode === 'preview' || outputMode === 'foreground' && isLive(item))
   const command = item.tool === 'bash' ? item.meta?.command ?? (item.input as { command?: string } | null)?.command ?? '' : ''
   // Grouped commands and edits expand in place, like their standalone blocks; a command opens to itself even before it prints.
   const expandable = item.tool === 'bash' ? !!(command || item.output || item.error) : diffs.length > 0
@@ -757,7 +758,9 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
     if (typeof input.new_string === 'string') return input.new_string
     return null
   }, [item.input, item.output, item.status, diffs.length])
-  const preview = !open && (diffs.length > 0 || inputPreview !== null || live) && (outputMode === 'preview' || outputMode === 'foreground' && live)
+  // Artifact edits stay closed: the artifact opens in its own tab.
+  const artifactEdit = diffs.length > 0 ? diffs.every((diff) => artifactTitle(diff.path)) : typeof (item.input as { patch?: unknown } | null)?.patch === 'string' && /\*\*\* (?:Add|Update) File: .*[/\\]\.galaxy[/\\]/.test((item.input as { patch: string }).patch)
+  const preview = !open && !artifactEdit && (diffs.length > 0 || inputPreview !== null || live) && (outputMode === 'preview' || outputMode === 'foreground' && live)
   useLayoutEffect(() => {
     if (live && preview && followPatch.current && patchViewport.current) patchViewport.current.scrollTop = patchViewport.current.scrollHeight
   }, [diffs, inputPreview, live, preview])
