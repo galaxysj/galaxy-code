@@ -1036,17 +1036,6 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
 
   return (
     <div className={cn(!edit && 'chat-column mx-auto w-full px-6', !edit && (centered ? 'max-w-[680px] pb-0' : 'max-w-[780px] pb-4'))}>
-      {usageBubble && (
-        <div className="group/att relative mb-2 flex w-fit max-w-full">
-          <button type="button" title="Open usage in Settings" onClick={() => { setUsageBubble(null); useStore.setState({ settingsOpen: 'usage' }) }} className={SUGGESTION_CHIP}>
-            <Gauge size={13.5} className="shrink-0" />
-            <span className="min-w-0 truncate">{usageBubble}</span>
-          </button>
-          <button type="button" title="Dismiss" onClick={() => setUsageBubble(null)} className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-fg text-bg opacity-0 transition-opacity group-hover/att:opacity-100">
-            <X size={10} strokeWidth={3} />
-          </button>
-        </div>
-      )}
       {!edit && chat && <CurrentTask chat={chat} items={items} />}
 
       {errorShown && chat?.error && <ChatError message={chat.error} onDismiss={() => setDismissedError(errorKey)} />}
@@ -1070,6 +1059,17 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         <div className="relative mb-1.5 flex min-h-6 items-center gap-1.5 pl-1">
           {!compact && !chat && <ProjectChip chat={chat} />}
           {!compact && <WorkspaceToggle chat={chat} />}
+          {usageBubble && (
+            <div className="group/att relative flex min-w-0 max-w-full">
+              <button type="button" title="Open usage in Settings" onClick={() => { setUsageBubble(null); useStore.setState({ settingsOpen: 'usage' }) }} className={SUGGESTION_CHIP}>
+                <Gauge size={13.5} className="shrink-0" />
+                <span className="min-w-0 truncate">{usageBubble}</span>
+              </button>
+              <button type="button" title="Dismiss" onClick={() => setUsageBubble(null)} className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-fg text-bg opacity-0 transition-opacity group-hover/att:opacity-100">
+                <X size={10} strokeWidth={3} />
+              </button>
+            </div>
+          )}
           {/* The suggestion chips share this row, at the left, with the shortcuts at the right. */}
           {followUp && chat && !chat.side && !errorShown && <ChatChips chat={chat} items={items} />}
           {chat && <PanelShortcuts chat={chat} />}

@@ -150,6 +150,10 @@
     user-select: text;
   }
 
+  ::highlight(comment-mark) {
+    background-color: color-mix(in srgb, var(--blue) 42%, transparent);
+  }
+
   ::selection {
     background: color-mix(in srgb, var(--blue) 32%, transparent);
   }

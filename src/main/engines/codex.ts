@@ -33,7 +33,10 @@ function mcpFlags(bridgeUrl: string): string[] {
     '-c',
     `mcp_servers.${BRIDGE_SERVER_NAME}.url=${tomlString(bridgeUrl)}`,
     '-c',
-    `mcp_servers.${BRIDGE_SERVER_NAME}.tool_timeout_sec=3600`
+    `mcp_servers.${BRIDGE_SERVER_NAME}.tool_timeout_sec=3600`,
+    // The task list is Galaxy Code's task.md, written with galaxy.Edit, not Codex's own plan.
+    '-c',
+    'include_plan_tool=false'
   ]
   for (const config of store.settings.mcpServers) {
     if (!config.enabled) continue
@@ -80,7 +83,6 @@ async function connect(session: Session, env: ToolEnv): Promise<Connection> {
   }
   if (existing) disposeCodex(session.id)
 
-  // Codex keeps its own plan, so the Task tool is not bridged.
   const handle = await bridge.register(
     BRIDGE_TOOLS.filter((t) => t.name !== 'Task'),
     env

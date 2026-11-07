@@ -403,6 +403,30 @@ ${environmentBlock(ctx)}${ctx.instructions ? `\n\n# Project instructions\n\n${ct
  * Guidance appended to an account CLI's own system prompt so it knows about
  * memory, skills and the tools Galaxy Code lends it.
  */
+/** What changes from turn to turn for an agent that is not Galaxy Code's own: the artifacts folder, the task list and running processes. */
+export function liveContextBlock(ctx: PromptContext): string {
+  const processes = ctx.processes
+    ? `# Background processes\n\nRunning in this chat right now; the output of each goes to the log file named. To see its latest logs, use your Read tool on that file, not tail or cat. Stop one with galaxy.Bash \`shell_id\` and \`stop\`.\n${ctx.processes}`
+    : ''
+  return [artifactsBlock(ctx).replace(/Edit \*\*\* Add File patch/, 'galaxy.Edit *** Add File patch'), processes].filter(Boolean).join('\n\n')
+}
+
+const BRIDGE_TASKS_AND_ARTIFACTS = `# Galaxy Code task list and artifacts
+
+Your task list is Galaxy Code's task.md, and your documents are Galaxy Code artifacts; the user sees only these in the app. Do not use your own todo, task or plan tools (such as TodoWrite, TaskCreate, TaskUpdate, update_plan or a plan update) for them. Write and update task.md and every artifact only with galaxy.Edit, never with your own write or edit tool, and hand finished deliverables to the user with galaxy.Present.`
+
+/**
+ * For an ACP agent, which has no system prompt of its own to fill: Galaxy Code's whole system prompt, sent with the first message of
+ * a session, and the context that changes between turns, sent with every later one.
+ */
+export function acpSystemPrompt(ctx: PromptContext, toolNames: string[]): string {
+  return `<galaxy_system_prompt>\n${buildSystemPrompt(ctx)}\n\n# Where the tools are\n\nThe tools this prompt names (${toolNames.join(', ')}) are on the "galaxy" MCP server. Use them instead of your own tools that do the same job.\n\n${BRIDGE_TASKS_AND_ARTIFACTS}\n</galaxy_system_prompt>`
+}
+
+export function acpTurnContext(ctx: PromptContext): string {
+  return `<galaxy_context>\n# Environment\n\n${environmentBlock(ctx)}\n\n${permissionBlock(ctx.permissionMode)}\n\n${liveContextBlock(ctx)}\n</galaxy_context>`
+}
+
 export function buildBridgeInstructions(ctx: PromptContext, bridgeTools: string[], mentions?: PromptMentions, readsOnItsOwn?: string): string {
   const parts = [
     `You are running inside Galaxy Code, a desktop app where the user watches your work in a chat and can open files and a browser beside it.${
@@ -436,6 +460,11 @@ export function buildBridgeInstructions(ctx: PromptContext, bridgeTools: string[
     )
   }
   if (bridgeTools.includes('Browser')) parts.push(BROWSER_RULES)
+  if (bridgeTools.includes('Edit')) {
+    parts.push(tasksBlock(ctx.tasksFile).replace('Edit *** Add File patch', 'galaxy.Edit *** Add File patch'))
+    parts.push(BRIDGE_TASKS_AND_ARTIFACTS)
+  }
+  parts.push(liveContextBlock(ctx))
   const instructions = projectInstructionsBlock(ctx, readsOnItsOwn)
   if (instructions) parts.push(instructions)
   parts.push(memoryBlock(ctx))

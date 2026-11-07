@@ -3,7 +3,7 @@ import { basename, dirname } from 'node:path'
 import { AcpAgents, type AcpAgentSpec } from '@shared/acp-registry'
 import { ACCOUNT_LABELS, type AccountId, type AgentMode, type AcpConfigChoice, type AcpConfigOption, type FileDiff, type TaskEntry, type ToolItem, type ToolKind, type ToolMeta } from '@shared/types'
 import { commandPrefix, gate } from '../agent/approval'
-import { gatherContext, inlineMentionsBlock, projectInstructionsBlock } from '../agent/prompt'
+import { acpSystemPrompt, acpTurnContext, gatherContext, inlineMentionsBlock } from '../agent/prompt'
 import { TurnWriter, type Session, type Turn } from '../agent/session'
 import { bridge, BRIDGE_SERVER_NAME, bridgeStdioCommand, type BridgeHandle } from '../services/bridge'
 import { installedRegistryLaunch, registryLaunch } from '../services/acpRegistry'
@@ -739,7 +739,7 @@ export async function runAcp(account: AccountId, session: Session, turn: Turn): 
     others.push(attachment.path)
   }
   const note = others.length ? `\n\nAttached files:\n${others.map((p) => `- ${p}`).join('\n')}` : ''
-  prompt.unshift({ type: 'text', text: [newSession ? projectInstructionsBlock(ctx) : '', inlineMentionsBlock(turn.mentions), modeNote, (turn.text || 'See the attached files.') + note].filter(Boolean).join('\n\n') })
+  prompt.unshift({ type: 'text', text: [newSession ? acpSystemPrompt(ctx, ACP_TOOLS.map((t) => t.name)) : acpTurnContext(ctx), inlineMentionsBlock(turn.mentions), modeNote, (turn.text || 'See the attached files.') + note].filter(Boolean).join('\n\n') })
 
   const onAbort = (): void => rpc.notify('session/cancel', { sessionId })
   turn.signal.addEventListener('abort', onAbort, { once: true })

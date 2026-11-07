@@ -355,7 +355,7 @@ export async function runClaude(session: Session, turn: Turn): Promise<void> {
     includePartialMessages: true,
     permissionMode: session.agentId === 'main' ? 'default' : 'bypassPermissions',
     allowDangerouslySkipPermissions: session.agentId !== 'main',
-    disallowedTools: ['Agent', 'Task', 'Edit', 'MultiEdit', 'Bash', 'BashOutput', 'KillShell', 'KillBash', ...(explore ? ['Write', 'NotebookEdit', 'Skill', 'TodoWrite'] : []), ...(session.agentId !== 'main' ? ['AskUserQuestion'] : [])],
+    disallowedTools: ['Agent', 'Task', 'Edit', 'MultiEdit', 'Bash', 'BashOutput', 'KillShell', 'KillBash', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', ...(explore ? ['Write', 'NotebookEdit', 'Skill'] : []), ...(session.agentId !== 'main' ? ['AskUserQuestion'] : [])],
     canUseTool,
     settingSources: ['user', 'project', 'local'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: buildBridgeInstructions(ctx, bridged.map((t) => t.name), turn.mentions, 'CLAUDE.md') },

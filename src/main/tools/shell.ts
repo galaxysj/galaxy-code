@@ -101,17 +101,34 @@ export function killBackgroundProcesses(): void {
   shells.clear()
 }
 
+/**
+ * Runs $0 -lc $1 under `script`, which gives it a terminal. `script` refuses a socket as its input, which is what a Node pipe is,
+ * so the input goes through `cat` first. Once `script` ends it records the exit code and stops this shell, which would otherwise wait for `cat`.
+ */
+const PTY_WRAPPER = 'exec 3<&0; d=$(mktemp -d); trap \'r=$(cat "$d/code" 2>/dev/null || echo 1); rm -rf "$d"; exit $r\' TERM; { cat <&3 2>/dev/null | { /usr/bin/script -q /dev/null "$0" -lc "$1"; echo $? > "$d/code"; kill $$; }; } & wait'
+
 async function startShell(command: string, name: string, cwd: string, chatId: string, itemId: string): Promise<Shell> {
   const program = process.env.SHELL && /(zsh|bash)$/.test(process.env.SHELL) ? process.env.SHELL : '/bin/zsh'
   const dir = join(tmpdir(), 'galaxy-code')
   await mkdir(dir, { recursive: true })
   const log = join(dir, `bg-${newId()}.log`)
   const stream = createWriteStream(log)
-  const child = spawn(program, ['-lc', command], { cwd, env: shellEnv(), detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
+  // Piped output makes most programs buffer until they exit, so nothing shows while they run. `script` gives them a terminal, which prints line by line.
+  const pty = process.platform === 'darwin'
+  const child = pty
+    ? spawn('/bin/sh', ['-c', PTY_WRAPPER, program, command], { cwd, env: shellEnv(), detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    : spawn(program, ['-lc', command], { cwd, env: shellEnv(), detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
+  let first = true
   const shell: Shell = { id: `shell-${++shellCount}`, name, child, log, output: '', code: null, exited: false, chatId, itemId, listeners: new Set() }
   shells.set(shell.id, shell)
   const onData = (chunk: Buffer): void => {
-    const text = chunk.toString('utf8')
+    let text = chunk.toString('utf8')
+    if (pty) {
+      // script starts with a stray "^D" and backspaces when its input is not a terminal, and ends lines with CR LF.
+      if (first) { first = false; text = text.replace(/^\^D\x08+/, '') }
+      text = text.replace(/\r\n/g, '\n')
+    }
+    if (!text) return
     shell.output += text
     if (shell.output.length > 400_000) shell.output = shell.output.slice(-300_000)
     stream.write(text)

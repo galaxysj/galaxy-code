@@ -26,10 +26,35 @@ export interface ComposerComment {
 }
 
 /** Adds a comment to the message being written. It waits as a card above the input until the message is sent. */
-export function addComment(input: Omit<ComposerComment, 'id'>): void {
+export function addComment(input: Omit<ComposerComment, 'id'>, range?: Range): void {
   const state = useStore.getState()
-  state.addComposerComment(state.activeChatId ?? 'new', { ...input, id: crypto.randomUUID() })
+  const id = crypto.randomUUID()
+  if (range) marks.set(id, range)
+  state.addComposerComment(state.activeChatId ?? 'new', { ...input, id })
+  paintMarks()
 }
+
+// Commented text stays marked in dark blue while its comment waits in the message. `pending` is the selection a note box is open for.
+const marks = new Map<string, Range>()
+const paint = (): void => {
+  const registry = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights
+  const Highlight = (window as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight
+  if (!registry || !Highlight) return
+  const ranges = [...marks.values()].filter((range) => !range.collapsed)
+  if (ranges.length) registry.set('comment-mark', new Highlight(...ranges))
+  else registry.delete('comment-mark')
+}
+export function paintMarks(): void {
+  const live = new Set(Object.values(useStore.getState().composerComments).flat().map((comment) => comment.id))
+  for (const id of [...marks.keys()]) if (id !== 'pending' && !live.has(id)) marks.delete(id)
+  paint()
+}
+export function markPending(range: Range | null): void {
+  if (range) marks.set('pending', range)
+  else marks.delete('pending')
+  paint()
+}
+useStore.subscribe(paintMarks)
 
 function load(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {

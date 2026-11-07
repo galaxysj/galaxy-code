@@ -1,5 +1,5 @@
 import { unavailableAccounts } from '@shared/catalog'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { GitInfo, WorktreeInfo, WorktreeMergeResult, WorktreeMergeStrategy, WorktreeStatus } from '@shared/types'
@@ -13,16 +13,47 @@ async function git(cwd: string, args: string[], timeout = 20000): Promise<{ ok: 
   return { ok: result.code === 0, out: result.stdout.trim(), err: result.stderr.trim() }
 }
 
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'out', '.next', '.venv', 'venv', '__pycache__', 'target', '.cache', '.turbo', 'DerivedData'])
+
+/**
+ * The repository a folder works in: the one it sits inside, or else the first one found in its subfolders
+ * (breadth first, a few levels down), so a folder that holds a repo is treated as that repo.
+ */
+export async function repoRoot(path: string, depth = 3): Promise<string | null> {
+  if (!(await exists(path))) return null
+  const inside = await git(path, ['rev-parse', '--show-toplevel'])
+  if (inside.ok && inside.out) return path
+  let level = [path]
+  for (let i = 0; i < depth && level.length; i++) {
+    const next: string[] = []
+    for (const dir of level) {
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+      if (entries.some((entry) => entry.name === '.git') && dir !== path) return dir
+      for (const entry of entries) {
+        if (entry.isDirectory() && !entry.isSymbolicLink() && !entry.name.startsWith('.') && !SKIP_DIRS.has(entry.name)) next.push(join(dir, entry.name))
+      }
+    }
+    for (const dir of next) if (await exists(join(dir, '.git'))) return dir
+    level = next
+  }
+  return null
+}
+
+/** The repository to run Git in for a folder, or the folder itself when none is found. */
+export async function repoCwd(path: string): Promise<string> {
+  return (await repoRoot(path)) ?? path
+}
+
 export async function gitInfo(path: string): Promise<GitInfo> {
-  if (!(await exists(path))) return { isRepo: false, branch: null }
-  const inside = await git(path, ['rev-parse', '--is-inside-work-tree'])
-  if (!inside.ok || inside.out !== 'true') return { isRepo: false, branch: null }
-  const branch = await git(path, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  const root = await repoRoot(path)
+  if (!root) return { isRepo: false, branch: null }
+  const branch = await git(root, ['rev-parse', '--abbrev-ref', 'HEAD'])
   return { isRepo: true, branch: branch.ok ? branch.out : null }
 }
 
 /** What the review panel needs to pick its main Git action. */
 export async function gitState(cwd: string): Promise<{ isRepo: boolean; dirty: boolean; hasRemote: boolean }> {
+  cwd = await repoCwd(cwd)
   if (!(await gitInfo(cwd)).isRepo) return { isRepo: false, dirty: false, hasRemote: false }
   const [status, remotes] = await Promise.all([git(cwd, ['status', '--porcelain']), git(cwd, ['remote'])])
   return { isRepo: true, dirty: status.ok && status.out !== '', hasRemote: remotes.ok && remotes.out !== '' }
@@ -30,6 +61,7 @@ export async function gitState(cwd: string): Promise<{ isRepo: boolean; dirty: b
 
 /** Instant commit: stage everything, have the commit message model write the message, commit, and push when asked. */
 export async function instantCommit(cwd: string, push: boolean): Promise<{ hash: string; message: string; pushed: { branch: string; remote: string } | null }> {
+  cwd = await repoCwd(cwd)
   // An account model falls back to the default when its account is switched off.
   const model = usableUtilityModels(CommitMessageModel, store.settings.accounts, unavailableAccounts(store.settings)).find((entry) => entry.ID === store.settings.commitMessageModelId) ?? CommitMessageModel[0]
   if (model.Subscription === 'Default' && !store.openRouterKey) throw new Error('Instant commit writes the message with an OpenRouter model. Add an OpenRouter key in Settings first.')
@@ -56,6 +88,7 @@ export async function instantCommit(cwd: string, push: boolean): Promise<{ hash:
  * only remote, and becomes tracked there. Never prompts for credentials.
  */
 export async function pushBranch(cwd: string): Promise<{ branch: string; remote: string }> {
+  cwd = await repoCwd(cwd)
   const branch = await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])
   if (!branch.ok || branch.out === 'HEAD') throw new Error('No branch is checked out, so there is nothing to push.')
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' }
@@ -80,6 +113,7 @@ export async function pushBranch(cwd: string): Promise<{ branch: string; remote:
  * ~/.galaxy/worktrees/<project>/<slug>. Fails if the repo has no commits yet.
  */
 export async function createWorktree(projectPath: string, hint: string): Promise<WorktreeInfo> {
+  projectPath = await repoCwd(projectPath)
   const head = await git(projectPath, ['rev-parse', '--verify', 'HEAD'])
   if (!head.ok) throw new Error('This repository has no commits yet, so a worktree cannot be created. Commit once or use Local.')
 
@@ -96,6 +130,7 @@ export async function createWorktree(projectPath: string, hint: string): Promise
 }
 
 export async function removeWorktree(projectPath: string, worktree: WorktreeInfo): Promise<void> {
+  projectPath = await repoCwd(projectPath)
   if (!(await exists(projectPath))) return
   await git(projectPath, ['worktree', 'remove', '--force', worktree.path], 60000)
   // The branch is kept when it carries commits the base does not have.
@@ -104,6 +139,7 @@ export async function removeWorktree(projectPath: string, worktree: WorktreeInfo
 }
 
 export async function worktreeStatus(projectPath: string, worktree: WorktreeInfo): Promise<WorktreeStatus> {
+  projectPath = await repoCwd(projectPath)
   const [changes, project, counts] = await Promise.all([
     git(worktree.path, ['status', '--porcelain']),
     git(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']),
@@ -141,6 +177,7 @@ const conflictedFiles = async (cwd: string): Promise<string[]> => (await git(cwd
  * on the new base commit, so a later merge from this chat does not bring the same work twice.
  */
 export async function mergeWorktree(projectPath: string, worktree: WorktreeInfo, strategy: WorktreeMergeStrategy): Promise<WorktreeMergeResult> {
+  projectPath = await repoCwd(projectPath)
   const base = worktree.baseBranch
   if (!base) throw new Error('This worktree started from a detached HEAD, so it has no branch to merge into.')
   const project = await git(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD'])

@@ -1,7 +1,7 @@
 import { MessageSquarePlus } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { addComment, requestSend } from '../lib/comments'
+import { addComment, markPending, requestSend } from '../lib/comments'
 import { cn } from '../lib/utils'
 import { Button } from './ui'
 
@@ -54,6 +54,7 @@ export function CommentBox({ x, y, title, send = false, onSubmit, onClose }: { x
 
 /** A selection made somewhere on screen: the button appears at its end, and opens the note box. */
 export interface SelectionPoint {
+  range?: Range
   x: number
   y: number
   quote: string
@@ -62,7 +63,13 @@ export interface SelectionPoint {
 
 export function CommentFloat({ point, source, onClose }: { point: SelectionPoint; source: string; onClose(): void }): ReactNode {
   const [open, setOpen] = useState(false)
-  if (open) return <CommentBox x={point.x} y={point.y + 6} title={point.quote.replace(/\s+/g, ' ').slice(0, 80)} onClose={onClose} onSubmit={(note) => addComment({ source, detail: point.detail, quote: point.quote, note })} />
+  // The selection disappears once the note box takes focus, so it is kept marked meanwhile.
+  useEffect(() => {
+    if (!open) return
+    markPending(point.range ?? null)
+    return () => markPending(null)
+  }, [open, point.range])
+  if (open) return <CommentBox x={point.x} y={point.y + 6} title={point.quote.replace(/\s+/g, ' ').slice(0, 80)} onClose={onClose} onSubmit={(note) => { markPending(null); addComment({ source, detail: point.detail, quote: point.quote, note }, point.range) }} />
   return createPortal(
     <button
       type="button"
@@ -70,7 +77,7 @@ export function CommentFloat({ point, source, onClose }: { point: SelectionPoint
       onMouseDown={(event) => event.preventDefault()}
       onMouseUp={(event) => event.stopPropagation()}
       onClick={() => setOpen(true)}
-      className="pop-in fixed z-[60] flex h-7 items-center gap-1.5 rounded-lg border border-line bg-elev px-2 text-[12px] text-fg shadow-[0_4px_16px_rgba(0,0,0,0.12)] hover:bg-hover"
+      className="pop-in fixed z-[60] flex h-7 items-center gap-1.5 rounded-lg border border-line bg-elev px-2 text-[12px] text-fg shadow-[0_4px_16px_rgba(0,0,0,0.12)] hover:bg-[linear-gradient(var(--bg-hover),var(--bg-hover))]"
       style={{ left: Math.max(8, Math.min(point.x, window.innerWidth - 100)), top: Math.min(point.y + 6, window.innerHeight - 40) }}
     >
       <MessageSquarePlus size={13} /> Comment
@@ -91,7 +98,10 @@ export function SelectionComment({ source, content, className, children }: { sou
         setPoint(null)
         return
       }
-      const rect = selection.getRangeAt(0).getBoundingClientRect()
+      const range = selection.getRangeAt(0).cloneRange()
+      // The button sits at the end of the last selected line, not at the corner of the whole block.
+      const rects = range.getClientRects()
+      const rect = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect()
       let detail: string | undefined
       if (content) {
         const at = content.indexOf(quote.split('\n')[0].trim())
@@ -101,7 +111,7 @@ export function SelectionComment({ source, content, className, children }: { sou
           detail = end > start ? `lines ${start}-${end}` : `line ${start}`
         }
       }
-      setPoint({ x: rect.right, y: rect.bottom, quote, detail })
+      setPoint({ x: rect.right, y: rect.bottom, quote, detail, range })
     }, 0)
   }
   return (

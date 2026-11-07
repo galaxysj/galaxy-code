@@ -6,7 +6,7 @@ import type { FileDiff } from '@shared/types'
 import type { ReviewCommit, ReviewOptions } from '@shared/api'
 import { isReviewBinaryPath, isReviewTextDiff } from '@shared/review'
 import { diffFromUnified, makeDiff } from '../tools/diff'
-import { gitInfo } from './git'
+import { gitInfo, repoCwd } from './git'
 import { looksBinary } from '../util'
 
 function git(cwd: string, args: string[], timeoutMs = 30000): Promise<string> {
@@ -106,6 +106,7 @@ export async function initReviewRepository(cwd: string): Promise<void> {
 }
 
 export async function reviewCommits(cwd: string): Promise<ReviewCommit[]> {
+  cwd = await repoCwd(cwd)
   if (!(await gitInfo(cwd)).isRepo) return []
   const refs = await git(cwd, ['for-each-ref', '--count=1', '--format=%(objectname)'])
   const head = await git(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']).catch(() => '')
@@ -118,6 +119,7 @@ export async function reviewCommits(cwd: string): Promise<ReviewCommit[]> {
 }
 
 async function loadReview(cwd: string, options?: ReviewOptions): Promise<{ isRepo: boolean; diffs: FileDiff[] }> {
+  cwd = await repoCwd(cwd)
   if (!(await gitInfo(cwd)).isRepo) return { isRepo: false, diffs: [] }
   const mode = options?.mode ?? 'uncommitted'
   const flags = ['--relative', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', '--no-quiet', '--no-exit-code', '--src-prefix=a/', '--dst-prefix=b/']
