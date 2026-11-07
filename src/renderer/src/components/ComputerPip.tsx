@@ -89,13 +89,14 @@ function LiveWindow({ target, frame, onClose, onDrag }: { target: ComputerWindow
 
   const title = windowTitle(target)
   return (
-    <div ref={card} className="relative overflow-hidden rounded-lg bg-elev shadow-pop" style={{ width: Math.round(size.width) }}>
-      <div onPointerDown={onDrag} className="flex h-8 cursor-move select-none items-center gap-2 pl-3 pr-1 text-[12px] text-fg">
-        <span className="min-w-0 flex-1 truncate" title={title}>{title}</span>
+    <div ref={card} className="group/pip relative overflow-hidden rounded-lg bg-elev shadow-pop" style={{ width: Math.round(size.width) }}>
+      {/* Only the picture shows: it drags the card, and the close button comes up on hover. */}
+      <div onPointerDown={onDrag} title={title} className="absolute inset-0 z-10 cursor-move select-none" />
+      <div className="absolute right-1 top-1 z-20 rounded-md bg-elev/90 opacity-0 transition-opacity group-hover/pip:opacity-100">
         <IconButton label="Close live view" size="sm" onClick={onClose}><X size={13} /></IconButton>
       </div>
       {failed
-        ? <div className="px-3 pb-3 text-[12px] text-muted">The live view is not available for this window.</div>
+        ? <div className="px-3 py-3 text-[12px] text-muted">The live view is not available for this window.</div>
         : (
           <div className="relative overflow-hidden" style={size}>
               {frame && <img src={frame} alt="" className="block h-full w-full" onLoad={target.id < 0 ? (event) => { const { naturalWidth: width, naturalHeight: height } = event.currentTarget; if (width && height && (width !== natural?.width || height !== natural?.height)) setNatural({ width, height }) } : undefined} />}
