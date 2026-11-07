@@ -41,6 +41,7 @@ import {
   SquareDashed,
   SquareTerminal,
   RotateCw,
+  Scaling,
   X
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
@@ -197,6 +198,7 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
           </Button>
         )}
         {sending && <CommentBox send x={sending.x} y={sending.y} title="Message" onClose={() => setSending(null)} onSubmit={(note) => { const state = useStore.getState(); const key = state.activeChatId ?? 'new'; const current = state.composerText[key] ?? ''; state.setComposerText(key, current ? `${current.replace(/\s+$/, '')}\n${note.trim()}` : note.trim()) }} />}
+        <ResizeButton tabId={tabId} disabled={!hasPage} />
         <IconButton label="Open in default browser" disabled={!/^https?:/.test(state.url)} onClick={() => void window.galaxy.files.openExternal(state.url)}>
           <ExternalLink size={13.5} />
         </IconButton>
@@ -1149,6 +1151,43 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
         {!activeTab && <Placeholder icon={<Plus size={22} />} title="Open a tab" detail="Select a tab above, or use + to open a new tab." />}
       </div>
       <CloseSideChatDialog />
+    </div>
+  )
+}
+
+const PAGE_SIZES: { label: string; width: number | null; height: number | null }[] = [
+  { label: 'Fit panel', width: null, height: null },
+  { label: 'Phone', width: 390, height: 844 },
+  { label: 'Tablet', width: 768, height: 1024 },
+  { label: 'Laptop', width: 1280, height: 800 },
+  { label: 'Desktop', width: 1440, height: 900 }
+]
+
+/** Lays the page out at a device size, or back at the panel's size. */
+function ResizeButton({ tabId, disabled }: { tabId?: string; disabled: boolean }): ReactNode {
+  const anchor = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = useState(false)
+  const [current, setCurrent] = useState('Fit panel')
+  return (
+    <div ref={anchor} className="flex">
+      <IconButton label="Resize the page" active={current !== 'Fit panel'} disabled={disabled} onClick={() => setOpen((value) => !value)}>
+        <Scaling size={13.5} />
+      </IconButton>
+      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} placement="bottom-end" className="w-48 p-1">
+        {PAGE_SIZES.map((size) => (
+          <MenuItem
+            key={size.label}
+            label={size.label}
+            hint={size.width ? `${size.width}×${size.height}` : undefined}
+            selected={current === size.label}
+            onClick={() => {
+              setOpen(false)
+              setCurrent(size.label)
+              void window.galaxy.browser.resize(size.width, size.height, tabId)
+            }}
+          />
+        ))}
+      </Popover>
     </div>
   )
 }

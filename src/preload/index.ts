@@ -110,6 +110,7 @@ const api: GalaxyApi = {
     back: call('browser.back'),
     forward: call('browser.forward'),
     reload: call('browser.reload'),
+    resize: call('browser.resize'),
     stop: call('browser.stop'),
     state: call('browser.state'),
     frame: call('browser.frame'),

@@ -181,6 +181,8 @@ export interface GalaxyApi {
     back(tabId?: string): Promise<void>
     forward(tabId?: string): Promise<void>
     reload(tabId?: string): Promise<void>
+    /** Lays the page out at this size; null for both goes back to the panel's size. */
+    resize(width: number | null, height: number | null, tabId?: string): Promise<void>
     stop(tabId?: string): Promise<void>
     state(tabId?: string): Promise<BrowserState>
     /** A JPEG data URL of the page as it looks now, or null before it has painted. */
