@@ -405,6 +405,7 @@ class BrowserService {
   async resize(width?: number | null, height?: number | null): Promise<{ width: number; height: number } | null> {
     if (!width && !height) {
       this.pageSize = null
+      this.emit()
       await this.command('Emulation.clearDeviceMetricsOverride', {})
       return null
     }
@@ -412,7 +413,9 @@ class BrowserService {
       width: Math.round(Math.max(200, Math.min(3840, width || this.viewport.width))),
       height: Math.round(Math.max(200, Math.min(2400, height || this.viewport.height)))
     }
+    const changed = this.pageSize?.width !== size.width || this.pageSize?.height !== size.height
     this.pageSize = size
+    if (changed) this.emit()
     await this.command('Emulation.setDeviceMetricsOverride', { ...size, deviceScaleFactor: 0, mobile: size.width < 600, scale: this.fitScale(size) })
     return size
   }
@@ -456,7 +459,8 @@ class BrowserService {
       loading: wc?.isLoading() ?? false,
       canGoBack: wc?.navigationHistory.canGoBack() ?? false,
       canGoForward: wc?.navigationHistory.canGoForward() ?? false,
-      agentActive: this.agentActive
+      agentActive: this.agentActive,
+      pageSize: this.pageSize
     }
   }
 

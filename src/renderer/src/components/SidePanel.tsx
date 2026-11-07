@@ -103,12 +103,20 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
   }, [])
   const scale = responsive && space.width > 0 ? Math.min(1, (space.width - RESPONSIVE_MARGIN * 2) / responsive.width, (space.height - RESPONSIVE_MARGIN * 2) / responsive.height) : 1
   const responsiveKey = responsive ? `${responsive.width}x${responsive.height}` : ''
+  // A size the agent sets turns responsive mode on too, so the page always shows whole and the glow and cursor sit on it.
+  const agentSize = state.pageSize ? `${state.pageSize.width}x${state.pageSize.height}` : ''
+  useEffect(() => {
+    if (!dragging.current && agentSize !== responsiveKey) setResponsive(state.pageSize ?? null)
+  // Only a change from the browser side should move the toolbar.
+  }, [agentSize])
   useEffect(() => {
     if (!hasPage) return
     void window.galaxy.browser.resize(responsive?.width ?? null, responsive?.height ?? null, tabId)
   }, [responsiveKey, hasPage, tabId])
+  const dragging = useRef(false)
   const dragEdge = (edge: 'right' | 'bottom' | 'corner') => (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (!responsive) return
+    dragging.current = true
     event.preventDefault()
     const start = { x: event.clientX, y: event.clientY, ...responsive, scale }
     const handle = event.currentTarget
@@ -120,6 +128,8 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
       setResponsive({ width: Math.max(200, Math.min(3840, width)), height: Math.max(200, Math.min(2400, height)) })
     }
     const end = (): void => {
+      // Sizes still on their way back from the drag must not pull the toolbar back.
+      window.setTimeout(() => { dragging.current = false }, 300)
       handle.removeEventListener('pointermove', move)
       handle.removeEventListener('pointerup', end)
       handle.removeEventListener('pointercancel', end)

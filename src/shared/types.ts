@@ -694,6 +694,8 @@ export interface BrowserState {
   canGoForward: boolean
   /** True while the agent is driving the page. */
   agentActive: boolean
+  /** The size the page lays out at in responsive mode, set by the user or the agent; absent at the panel's size. */
+  pageSize?: { width: number; height: number } | null
 }
 
 export interface ProjectFileEntry {
