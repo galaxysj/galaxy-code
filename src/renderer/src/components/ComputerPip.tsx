@@ -1,5 +1,5 @@
 import { X } from 'lucide-react'
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type { ComputerWindow } from '@shared/types'
 import { useStore } from '../store'
 import { IconButton } from './ui'
@@ -11,6 +11,15 @@ const FIRST_FRAME_TIMEOUT_MS = 5000
 /** How many other windows show as cards behind the picture, the most recent nearest. */
 const MAX_BEHIND = 4
 const NO_WINDOWS: ComputerWindow[] = []
+/** How often a browser tab's picture refreshes. */
+const BROWSER_FRAME_MS = 600
+/** Browser tabs share the stack with app windows under negative ids, which no app window has. */
+const browserIds = new Map<string, number>()
+const browserIdFor = (tabId: string): number => {
+  if (!browserIds.has(tabId)) browserIds.set(tabId, -(browserIds.size + 1))
+  return browserIds.get(tabId)!
+}
+const tabForId = (id: number): string | undefined => [...browserIds].find(([, value]) => value === id)?.[0]
 const SWITCH_MS = 220
 const CURSOR_SIZE = 20
 /** How small the cursor gets when it presses, the same as on the desktop. */
@@ -86,8 +95,8 @@ function LiveWindow({ target, frame, onClose, onDrag }: { target: ComputerWindow
         ? <div className="px-3 pb-3 text-[12px] text-muted">The live view is not available for this window.</div>
         : (
           <div className="flex items-center justify-center overflow-hidden bg-black" style={{ height: PIP_HEIGHT }}>
-            <div className="relative" style={fitted(target)}>
-              {frame && <img src={frame} alt="" className="block h-full w-full" />}
+            <div className="relative" style={target.id < 0 ? { width: PIP_WIDTH, height: PIP_HEIGHT } : fitted(target)}>
+              {frame && <img src={frame} alt="" className="block h-full w-full object-contain" />}
               <LiveCursor windowId={target.id} />
             </div>
           </div>
@@ -98,7 +107,18 @@ function LiveWindow({ target, frame, onClose, onDrag }: { target: ComputerWindow
 
 /** Shows the windows the open chat's agent has worked in as a stack. The picture follows the agent, and a click on a card behind it shows that window until the agent moves on. */
 export function ComputerPip({ inset = 0 }: { inset?: number }): ReactNode {
-  const windows = useStore((s) => (s.activeChatId ? s.computerWindows[s.activeChatId] : undefined)) ?? NO_WINDOWS
+  const apps = useStore((s) => (s.activeChatId ? s.computerWindows[s.activeChatId] : undefined)) ?? NO_WINDOWS
+  // Tabs the agent is browsing in, while the side panel does not show them.
+  const browserKey = useStore((s) => Object.entries(s.browserStates)
+    .filter(([tabId, state]) => tabId.startsWith('browser_') && state.agentActive && !(s.panelOpen && s.panelTab === tabId))
+    .map(([tabId, state]) => `${tabId}\u0000${state.title || state.url || 'Browser'}`).join('\u0001'))
+  const windows = useMemo(() => {
+    const tabs = browserKey ? browserKey.split('\u0001').map((entry) => {
+      const [tabId, title] = entry.split('\u0000')
+      return { id: browserIdFor(tabId), app: 'Browser', title, width: 16, height: 10 }
+    }) : []
+    return tabs.length ? [...apps, ...tabs] : apps
+  }, [apps, browserKey])
   const [closed, setClosed] = useState<number[]>([])
   const [chosen, setChosen] = useState<{ id: number; latest: number } | null>(null)
   // Pixels from the top right corner, below the header, so the stack stays in the window when it is resized.
@@ -127,12 +147,31 @@ export function ComputerPip({ inset = 0 }: { inset?: number }): ReactNode {
     if (event.windowId === frontId.current) redraw((count) => count + 1)
   }), [])
 
+  // A browser tab in front is pictured by capturing it again and again.
+  const frontBrowser = front && front.id < 0 ? tabForId(front.id) : undefined
+  useEffect(() => {
+    if (!frontBrowser) return
+    const id = browserIdFor(frontBrowser)
+    let stopped = false
+    const tick = async (): Promise<void> => {
+      const frame = await window.galaxy.browser.frame(frontBrowser).catch(() => null)
+      if (stopped) return
+      if (frame) {
+        frames.current.set(id, frame)
+        redraw((count) => count + 1)
+      }
+      setTimeout(() => void tick(), BROWSER_FRAME_MS)
+    }
+    void tick()
+    return () => { stopped = true }
+  }, [frontBrowser])
+
   useEffect(() => {
     const ids = shown ? shown.split(',').map(Number) : []
-    void window.galaxy.computer.watch(ids)
+    void window.galaxy.computer.watch(ids.filter((id) => id >= 0))
     for (const [id, url] of frames.current) {
       if (ids.includes(id)) continue
-      URL.revokeObjectURL(url)
+      if (url.startsWith('blob:')) URL.revokeObjectURL(url)
       frames.current.delete(id)
     }
   }, [shown])

@@ -398,8 +398,9 @@ class BrowserService {
   /** The page as it looks now, to stand in for the native view while something covers it. */
   async frame(): Promise<string | null> {
     if (!this.view) return null
-    const image = await this.view.webContents.capturePage()
-    return image.isEmpty() ? null : `data:image/jpeg;base64,${image.toJPEG(90).toString('base64')}`
+    // A hidden tab still paints for the live view.
+    const image = await this.view.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })
+    return image.isEmpty() ? null : `data:image/jpeg;base64,${image.toJPEG(80).toString('base64')}`
   }
 
   /** Comment mode. Resolves when the user clicks an element or drags a rectangle; null on Escape, a cancel or a navigation. */
