@@ -7,6 +7,8 @@ import { IconButton } from './ui'
 const PIP_WIDTH = 320
 /** The picture area is a fixed size, and a window of any shape fits inside it. */
 const PIP_HEIGHT = 200
+/** The card never gets narrower than this, so its title bar stays usable. */
+const MIN_CARD_WIDTH = 180
 const FIRST_FRAME_TIMEOUT_MS = 5000
 /** How many other windows show as cards behind the picture, the most recent nearest. */
 const MAX_BEHIND = 4
@@ -30,8 +32,8 @@ const CURSOR_TIP = 4.21875 / 30
 const CURSOR_PATH = 'M6.8 4.5 C5.2 3.9 4.1 5.1 4.7 6.8 L10.6 22 C11.1 23.3 12.5 23.2 13 21.9 L15.1 16.6 C15.4 15.9 15.9 15.4 16.6 15.1 L21.9 13 C23.2 12.5 23.3 11.1 22 10.6 Z'
 
 /** The window's picture scaled to fit the fixed picture area, keeping its shape. */
-function fitted(target: ComputerWindow): { width: number; height: number } {
-  const ratio = target.width > 0 && target.height > 0 ? target.width / target.height : PIP_WIDTH / PIP_HEIGHT
+function fitted(width: number, height: number): { width: number; height: number } {
+  const ratio = width > 0 && height > 0 ? width / height : PIP_WIDTH / PIP_HEIGHT
   return ratio >= PIP_WIDTH / PIP_HEIGHT ? { width: PIP_WIDTH, height: PIP_WIDTH / ratio } : { width: PIP_HEIGHT * ratio, height: PIP_HEIGHT }
 }
 
@@ -70,6 +72,9 @@ function LiveCursor({ windowId }: { windowId: number }): ReactNode {
 function LiveWindow({ target, frame, onClose, onDrag }: { target: ComputerWindow; frame: string | undefined; onClose: () => void; onDrag: (event: ReactPointerEvent<HTMLDivElement>) => void }): ReactNode {
   const card = useRef<HTMLDivElement>(null)
   const [failed, setFailed] = useState(false)
+  // A browser tab takes the shape of its pictures, an app window the shape it reports.
+  const [natural, setNatural] = useState<{ width: number; height: number } | null>(null)
+  const size = fitted(natural?.width ?? target.width, natural?.height ?? target.height)
   const waiting = frame === undefined
 
   useEffect(() => {
@@ -86,7 +91,7 @@ function LiveWindow({ target, frame, onClose, onDrag }: { target: ComputerWindow
 
   const title = windowTitle(target)
   return (
-    <div ref={card} className="relative overflow-hidden rounded-lg bg-elev shadow-pop">
+    <div ref={card} className="relative overflow-hidden rounded-lg bg-elev shadow-pop" style={{ width: Math.max(MIN_CARD_WIDTH, Math.round(size.width)) }}>
       <div onPointerDown={onDrag} className="flex h-8 cursor-move select-none items-center gap-2 pl-3 pr-1 text-[12px] text-fg">
         <span className="min-w-0 flex-1 truncate" title={title}>{title}</span>
         <IconButton label="Close live view" size="sm" onClick={onClose}><X size={13} /></IconButton>
@@ -94,11 +99,9 @@ function LiveWindow({ target, frame, onClose, onDrag }: { target: ComputerWindow
       {failed
         ? <div className="px-3 pb-3 text-[12px] text-muted">The live view is not available for this window.</div>
         : (
-          <div className="flex items-center justify-center overflow-hidden bg-black" style={{ height: PIP_HEIGHT }}>
-            <div className="relative" style={target.id < 0 ? { width: PIP_WIDTH, height: PIP_HEIGHT } : fitted(target)}>
-              {frame && <img src={frame} alt="" className="block h-full w-full object-contain" />}
+          <div className="relative mx-auto overflow-hidden" style={size}>
+              {frame && <img src={frame} alt="" className="block h-full w-full" onLoad={target.id < 0 ? (event) => { const { naturalWidth: width, naturalHeight: height } = event.currentTarget; if (width && height && (width !== natural?.width || height !== natural?.height)) setNatural({ width, height }) } : undefined} />}
               <LiveCursor windowId={target.id} />
-            </div>
           </div>
         )}
     </div>
@@ -194,7 +197,7 @@ export function ComputerPip({ inset = 0 }: { inset?: number }): ReactNode {
 
   if (!latest || !front) return null
   return (
-    <div className="pop-in fixed z-[55]" style={{ top: offset.top, right: Math.max(offset.right, inset ? inset + 14 : 0), width: PIP_WIDTH }}>
+    <div className="pop-in fixed z-[55]" style={{ top: offset.top, right: Math.max(offset.right, inset ? inset + 14 : 0) }}>
       {behind.map((entry, index) => (
         <button
           key={entry.id}
