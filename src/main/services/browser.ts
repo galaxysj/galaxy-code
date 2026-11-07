@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { dialog, session, WebContentsView, type BrowserWindow, type WebContents } from 'electron'
+import { dialog, nativeImage, session, WebContentsView, type BrowserWindow, type WebContents } from 'electron'
 import type { Rect } from '@shared/api'
 import type { BrowserDataKind, BrowserPick, BrowserSearchEngine, BrowserState } from '@shared/types'
 import { store } from '../store'
@@ -742,12 +742,30 @@ class BrowserService {
 
   /** The page at full size as a PNG, with the agent cursor and glow it shows. */
   async capturePng(): Promise<Buffer | null> {
+    if (this.pageSize) {
+      const debuggerApi = this.wc.debugger
+      if (!debuggerApi.isAttached()) debuggerApi.attach('1.3')
+      const shot = (await withTimeout(debuggerApi.sendCommand('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, ...this.pageSize, scale: 1 } }), 8000, 'Capture timed out')) as { data: string }
+      return Buffer.from(shot.data, 'base64')
+    }
     const image = await withTimeout(this.ensureView().webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }), 8000, 'Capture timed out')
     return image.isEmpty() ? null : image.toPNG()
   }
 
   private async capture(): Promise<{ mime: string; base64: string }> {
     const view = this.ensureView()
+    // A resized page is shot whole at its own size, not as it shows scaled down in the panel with space around it.
+    if (this.pageSize) {
+      const { width, height } = this.pageSize
+      const scale = Math.min(1, SCREENSHOT_WIDTH / width)
+      const debuggerApi = this.wc.debugger
+      if (!debuggerApi.isAttached()) debuggerApi.attach('1.3')
+      const shot = (await withTimeout(debuggerApi.sendCommand('Page.captureScreenshot', { format: 'jpeg', quality: 72, clip: { x: 0, y: 0, width, height, scale } }), 10000, 'The screenshot timed out after 10 seconds.')) as { data: string }
+      const image = nativeImage.createFromBuffer(Buffer.from(shot.data, 'base64'))
+      const size = image.getSize()
+      this.shot = { x: size.width / width, y: size.height / height, width: size.width, height: size.height }
+      return { mime: 'image/jpeg', base64: shot.data }
+    }
     let image = await withTimeout(view.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }), 10000, 'The screenshot timed out after 10 seconds. The tab may not have painted yet; navigate it or try again.')
     if (image.getSize().width > SCREENSHOT_WIDTH) image = image.resize({ width: SCREENSHOT_WIDTH, quality: 'good' })
     const jpeg = image.toJPEG(72)
