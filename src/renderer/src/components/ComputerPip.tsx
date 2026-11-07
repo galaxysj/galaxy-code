@@ -5,6 +5,8 @@ import { useStore } from '../store'
 import { IconButton } from './ui'
 
 const PIP_WIDTH = 320
+/** The picture area is a fixed size, and a window of any shape fits inside it. */
+const PIP_HEIGHT = 200
 const FIRST_FRAME_TIMEOUT_MS = 5000
 /** How many other windows show as cards behind the picture, the most recent nearest. */
 const MAX_BEHIND = 4
@@ -17,6 +19,12 @@ const CURSOR_EASING = 'cubic-bezier(.2,.8,.2,1)'
 /** Where the tip of the arrow is in the drawing, as a share of its size. */
 const CURSOR_TIP = 4.21875 / 30
 const CURSOR_PATH = 'M6.8 4.5 C5.2 3.9 4.1 5.1 4.7 6.8 L10.6 22 C11.1 23.3 12.5 23.2 13 21.9 L15.1 16.6 C15.4 15.9 15.9 15.4 16.6 15.1 L21.9 13 C23.2 12.5 23.3 11.1 22 10.6 Z'
+
+/** The window's picture scaled to fit the fixed picture area, keeping its shape. */
+function fitted(target: ComputerWindow): { width: number; height: number } {
+  const ratio = target.width > 0 && target.height > 0 ? target.width / target.height : PIP_WIDTH / PIP_HEIGHT
+  return ratio >= PIP_WIDTH / PIP_HEIGHT ? { width: PIP_WIDTH, height: PIP_WIDTH / ratio } : { width: PIP_HEIGHT * ratio, height: PIP_HEIGHT }
+}
 
 function windowTitle(entry: ComputerWindow): string {
   return entry.title ? `${entry.app}: ${entry.title}` : entry.app
@@ -77,11 +85,11 @@ function LiveWindow({ target, frame, onClose, onDrag }: { target: ComputerWindow
       {failed
         ? <div className="px-3 pb-3 text-[12px] text-muted">The live view is not available for this window.</div>
         : (
-          <div className="relative overflow-hidden">
-            <div className="w-full bg-black" style={{ aspectRatio: `${target.width} / ${target.height}` }}>
+          <div className="flex items-center justify-center overflow-hidden bg-black" style={{ height: PIP_HEIGHT }}>
+            <div className="relative" style={fitted(target)}>
               {frame && <img src={frame} alt="" className="block h-full w-full" />}
+              <LiveCursor windowId={target.id} />
             </div>
-            <LiveCursor windowId={target.id} />
           </div>
         )}
     </div>
@@ -89,7 +97,7 @@ function LiveWindow({ target, frame, onClose, onDrag }: { target: ComputerWindow
 }
 
 /** Shows the windows the open chat's agent has worked in as a stack. The picture follows the agent, and a click on a card behind it shows that window until the agent moves on. */
-export function ComputerPip(): ReactNode {
+export function ComputerPip({ inset = 0 }: { inset?: number }): ReactNode {
   const windows = useStore((s) => (s.activeChatId ? s.computerWindows[s.activeChatId] : undefined)) ?? NO_WINDOWS
   const [closed, setClosed] = useState<number[]>([])
   const [chosen, setChosen] = useState<{ id: number; latest: number } | null>(null)
@@ -131,7 +139,7 @@ export function ComputerPip(): ReactNode {
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if ((event.target as HTMLElement).closest('button')) return
-    const start = { x: event.clientX, y: event.clientY, ...offset }
+    const start = { x: event.clientX, y: event.clientY, top: offset.top, right: Math.max(offset.right, inset ? inset + 14 : 0) }
     const handle = event.currentTarget
     handle.setPointerCapture(event.pointerId)
     const move = (next: PointerEvent): void => setOffset({ right: Math.max(0, start.right + start.x - next.clientX), top: Math.max(0, start.top + next.clientY - start.y) })
@@ -147,7 +155,7 @@ export function ComputerPip(): ReactNode {
 
   if (!latest || !front) return null
   return (
-    <div className="pop-in fixed z-[55]" style={{ ...offset, width: PIP_WIDTH }}>
+    <div className="pop-in fixed z-[55]" style={{ top: offset.top, right: Math.max(offset.right, inset ? inset + 14 : 0), width: PIP_WIDTH }}>
       {behind.map((entry, index) => (
         <button
           key={entry.id}

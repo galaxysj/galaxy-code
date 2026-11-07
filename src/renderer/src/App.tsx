@@ -256,7 +256,8 @@ export function App(): ReactNode {
       {gitError && <ErrorDialog title="Instant commit failed" message={gitError} onClose={() => useStore.setState({ gitError: null })} onFix={() => fixWithAgent(gitError, () => useStore.setState({ gitError: null }))} />}
       {appError && <ErrorDialog title="Error" message={appError} onClose={() => useStore.setState({ appError: null })} onFix={() => fixWithAgent(appError, () => useStore.setState({ appError: null }))} />}
       {attachmentPreview && <AttachmentPreview key={attachmentPreview.id} file={attachmentPreview} />}
-      <ComputerPip />
+      {/* The browser is a native view above the page, so the picture keeps to the left of the side panel. */}
+      <ComputerPip inset={panelSpace} />
       {chat && overviewOpen && <OverviewCard chat={chat} right={panelSpace + 14} docked={overviewDocked} />}
       {toast && (
         <div
