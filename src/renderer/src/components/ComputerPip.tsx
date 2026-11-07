@@ -7,8 +7,6 @@ import { IconButton } from './ui'
 const PIP_WIDTH = 320
 /** The picture area is a fixed size, and a window of any shape fits inside it. */
 const PIP_HEIGHT = 200
-/** The card never gets narrower than this, so its title bar stays usable. */
-const MIN_CARD_WIDTH = 180
 const FIRST_FRAME_TIMEOUT_MS = 5000
 /** How many other windows show as cards behind the picture, the most recent nearest. */
 const MAX_BEHIND = 4
@@ -91,7 +89,7 @@ function LiveWindow({ target, frame, onClose, onDrag }: { target: ComputerWindow
 
   const title = windowTitle(target)
   return (
-    <div ref={card} className="relative overflow-hidden rounded-lg bg-elev shadow-pop" style={{ width: Math.max(MIN_CARD_WIDTH, Math.round(size.width)) }}>
+    <div ref={card} className="relative overflow-hidden rounded-lg bg-elev shadow-pop" style={{ width: Math.round(size.width) }}>
       <div onPointerDown={onDrag} className="flex h-8 cursor-move select-none items-center gap-2 pl-3 pr-1 text-[12px] text-fg">
         <span className="min-w-0 flex-1 truncate" title={title}>{title}</span>
         <IconButton label="Close live view" size="sm" onClick={onClose}><X size={13} /></IconButton>
@@ -99,7 +97,7 @@ function LiveWindow({ target, frame, onClose, onDrag }: { target: ComputerWindow
       {failed
         ? <div className="px-3 pb-3 text-[12px] text-muted">The live view is not available for this window.</div>
         : (
-          <div className="relative mx-auto overflow-hidden" style={size}>
+          <div className="relative overflow-hidden" style={size}>
               {frame && <img src={frame} alt="" className="block h-full w-full" onLoad={target.id < 0 ? (event) => { const { naturalWidth: width, naturalHeight: height } = event.currentTarget; if (width && height && (width !== natural?.width || height !== natural?.height)) setNatural({ width, height }) } : undefined} />}
               <LiveCursor windowId={target.id} />
           </div>
