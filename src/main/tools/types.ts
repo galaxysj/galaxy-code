@@ -57,6 +57,8 @@ export interface ToolDef {
   present(input: Record<string, unknown>, ctx: Pick<ToolContext, 'cwd' | 'skills'>): ToolPresentation
   /** Returns what needs approval, or null when the call is always allowed. */
   approval?(input: Record<string, unknown>, ctx: Pick<ToolContext, 'cwd'>): Omit<GateRequest, 'itemId' | 'kind'> | null
+  /** Runs before the approval check when one is needed, and may apply what needs no approval and return the input left to approve. */
+  beforeApproval?(input: Record<string, unknown>, ctx: ToolContext): Promise<Record<string, unknown>>
   execute(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>
 }
 

@@ -314,7 +314,18 @@ export async function runTool(
 
   try {
     if (session.agentId !== 'main' && tool.kind === 'ask') return fail('Subagents cannot ask the user. Use Message to contact the parent agent.')
-    const approval = tool.approval?.(input, env)
+    const context = {
+      ...env,
+      spawnSubagent: env.spawnSubagent ?? (session.team ? (request: Parameters<NonNullable<typeof env.spawnSubagent>>[0]) => session.team!.spawn(request, session) : undefined),
+      itemId: item.id,
+      onOutput: (delta: string) => session.append(item.id, 'output', delta)
+    }
+    let runInput = input
+    let approval = tool.approval?.(input, env)
+    if (approval && tool.beforeApproval) {
+      runInput = await tool.beforeApproval(input, context)
+      if (runInput !== input) approval = tool.approval?.(runInput, env)
+    }
     if (approval) {
       const verdict = await gate(session, env.permissionMode, { ...approval, itemId: item.id, kind: tool.kind })
       if (!verdict.allowed) return fail(verdict.message, 'denied')
@@ -322,12 +333,7 @@ export async function runTool(
       session.update<ToolItem>(item.id, { status: 'running' })
     }
 
-    const result = await tool.execute(input, {
-      ...env,
-      spawnSubagent: env.spawnSubagent ?? (session.team ? (request) => session.team!.spawn(request, session) : undefined),
-      itemId: item.id,
-      onOutput: (delta) => session.append(item.id, 'output', delta)
-    })
+    const result = await tool.execute(runInput, context)
 
     const current = session.item<ToolItem>(item.id)
     if (result.pending) return { itemId: item.id, result }

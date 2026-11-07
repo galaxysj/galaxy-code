@@ -9,7 +9,7 @@ import { outsideReadApproval } from '../agent/approval'
 import { skillNameForPath } from '../services/skills'
 import { displayPath, exists, isImagePath, looksBinary, mimeOf, resolvePath, truncateEnd } from '../util'
 import { applyEditPatch, parseEditPatch, patchFiles, plannedContents, previewEditPatch } from './patch'
-import { bool, num, plural, str, ToolInputError, type ToolDef } from './types'
+import { bool, num, plural, str, ToolInputError, type ToolDef, type ToolResult } from './types'
 
 const rgPath = bundledRgPath.replace(/app\.asar([/\\])/, 'app.asar.unpacked$1')
 
@@ -266,6 +266,39 @@ export const listTool: ToolDef = {
   }
 }
 
+/** Markdown directly in a chat's artifacts folder, which the agent writes without approval. */
+function isFreeArtifact(path: string): boolean {
+  return /\.md$/i.test(artifactName(path) ?? '') && path.startsWith(join(homedir(), '.galaxy') + sep)
+}
+
+const earlyArtifacts = new WeakMap<Record<string, unknown>, ToolResult>()
+
+/** Splits a patch into its artifact files and the rest, or null unless it has both. A move counts as an artifact only when both ends are. */
+function splitArtifactPatch(patch: string, cwd: string): { artifacts: string; rest: string } | null {
+  const lines = patch.replace(/\r\n/g, '\n').split('\n')
+  const begin = lines.findIndex((line) => line.trim() === '*** Begin Patch')
+  const end = lines.findIndex((line, index) => index > begin && line.trim() === '*** End Patch')
+  if (begin < 0 || end < 0) return null
+  const header = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/
+  const sections: { artifact: boolean; lines: string[] }[] = []
+  for (const line of lines.slice(begin + 1, end)) {
+    const match = header.exec(line.trim())
+    if (match) sections.push({ artifact: isFreeArtifact(resolvePath(cwd, match[1].trim())), lines: [line] })
+    else if (sections.length) {
+      const section = sections[sections.length - 1]
+      const move = /^\*\*\* Move to: (.+)$/.exec(line.trim())
+      if (move && !isFreeArtifact(resolvePath(cwd, move[1].trim()))) section.artifact = false
+      section.lines.push(line)
+    } else return null
+  }
+  const pick = (artifact: boolean): string[] => sections.filter((section) => section.artifact === artifact).flatMap((section) => section.lines)
+  const artifacts = pick(true)
+  const rest = pick(false)
+  if (!artifacts.length || !rest.length) return null
+  const wrap = (body: string[]): string => ['*** Begin Patch', ...body, '*** End Patch'].join('\n')
+  return { artifacts: wrap(artifacts), rest: wrap(rest) }
+}
+
 export const editTool: ToolDef = {
   name: 'Edit',
   kind: 'edit',
@@ -301,7 +334,7 @@ Update File hunks use a space for unchanged context, - for removed lines and + f
     const operations = parseEditPatch(patch, ctx.cwd).operations
     // Markdown in the chat's artifacts folder (the task list, documents) is the agent's own work product, so writing it needs no approval.
     const files = patchFiles({ operations }, ctx.cwd)
-    if (files.length > 0 && files.every((path) => /\.md$/i.test(artifactName(path) ?? '') && path.startsWith(join(homedir(), '.galaxy') + sep))) return null
+    if (files.length > 0 && files.every(isFreeArtifact)) return null
     const outside = patchFiles({ operations }, ctx.cwd).some((path) => path !== ctx.cwd && !path.startsWith(ctx.cwd + sep))
     return {
       action: {
@@ -316,7 +349,23 @@ Update File hunks use a space for unchanged context, - for removed lines and + f
       sessionLabel: outside ? 'Allow edits outside the project in this chat' : 'Allow all edits in this chat'
     }
   },
+  // A patch that mixes artifacts with other files writes the artifacts at once, and only the rest waits for approval.
+  async beforeApproval(input, ctx) {
+    const parts = splitArtifactPatch(str(input, 'patch', true), ctx.cwd)
+    if (!parts) return input
+    try {
+      const early = await editTool.execute({ patch: parts.artifacts }, ctx)
+      const rest = { ...input, patch: parts.rest }
+      earlyArtifacts.set(rest, early)
+      return rest
+    } catch {
+      return input
+    }
+  },
   async execute(input, ctx) {
+    const early = earlyArtifacts.get(input)
+    const earlyDiffs = early?.meta?.diffs ?? []
+    const earlyTasks = early?.meta?.tasks
     const patch = str(input, 'patch', true)
     for (const path of patchFiles(parseEditPatch(patch, ctx.cwd), ctx.cwd)) if (artifactName(path)) await mkdir(dirname(path), { recursive: true })
     // A document artifact must carry a name and user-editable, and its name becomes the title the user sees.
@@ -329,10 +378,10 @@ Update File hunks use a space for unchanged context, - for removed lines and + f
       titles.set(path, parseFrontMatter(content).meta.name.trim())
     }
     const named = (list: FileDiff[]): FileDiff[] => list.map((diff) => (titles.has(diff.path) ? { ...diff, title: titles.get(diff.path) } : diff))
-    const proposed = named(await previewEditPatch(patch, ctx.cwd))
+    const proposed = [...earlyDiffs, ...named(await previewEditPatch(patch, ctx.cwd))]
     const item = ctx.session.item<ToolItem>(ctx.itemId)
     ctx.session.update<ToolItem>(ctx.itemId, { meta: { ...item?.meta, diffs: proposed } })
-    const diffs = named(await applyEditPatch(patch, ctx.cwd, ctx.signal))
+    const diffs = [...earlyDiffs, ...named(await applyEditPatch(patch, ctx.cwd, ctx.signal))]
     // A patch whose result matches the files as they are writes nothing. The agent should know that, and it is not an edit to show.
     if (!diffs.length) return { text: 'No changes: the patch leaves every file as it already was. Read the file before trying again.', meta: { diffs } }
     // The task file also becomes the user's task list above the composer.
@@ -340,7 +389,7 @@ Update File hunks use a space for unchanged context, - for removed lines and + f
     const tasks = taskFile ? parseTaskMarkdown(await readFile(taskFile.path, 'utf8').catch(() => '')) : undefined
     return {
       text: `Applied patch to ${plural(diffs.length, 'file')}.${diffs.length ? '\n' + diffs.map((diff) => `${diff.created ? 'A' : diff.deleted ? 'D' : 'M'} ${diff.path}`).join('\n') : ''}`,
-      meta: { diffs, ...(tasks?.length ? { tasks } : {}) }
+      meta: { diffs, ...(tasks?.length ? { tasks } : earlyTasks?.length ? { tasks: earlyTasks } : {}) }
     }
   }
 }
