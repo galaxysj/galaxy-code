@@ -29,6 +29,7 @@ import {
   type UiEvent,
   type WorkspaceMode
 } from '@shared/types'
+import type { ComposerComment } from './lib/comments'
 import { pageHost } from './lib/utils'
 
 export type SettingsSection = 'general' | 'models' | 'providers' | 'subscriptions' | 'usage' | 'customize' | 'browser' | 'computer' | 'appContext'
@@ -212,6 +213,9 @@ interface State {
   /** Unsent composer text per chat, 'new' for the new chat screen. */
   composerText: Record<string, string>
   composerAttachments: Record<string, Attachment[]>
+  composerComments: Record<string, ComposerComment[]>
+  /** Set to a composer's key to have that composer send its message, as the Send button of a comment box does. */
+  composerSend: string | null
   /** Ask or Plan chip in a composer, by the same keys as its text. */
   composerMode: Record<string, AgentMode | undefined>
   /** Explicit activity collapses survive group changes and chat navigation. */
@@ -272,6 +276,8 @@ interface State {
   setPanel(open: boolean, tab?: string): void
   setComposerText(key: string, text: string): void
   setComposerAttachments(key: string, attachments: Attachment[]): void
+  addComposerComment(key: string, comment: ComposerComment): void
+  setComposerComments(key: string, comments: ComposerComment[]): void
   setComposerMode(key: string, mode: AgentMode | undefined): void
   setActivityCollapsed(key: string, collapsed: boolean): void
   notify(text: string, tone?: 'info' | 'error'): void
@@ -535,6 +541,8 @@ export const useStore = create<State>((set, get) => {
     draft: { projectId: null, workspace: 'local', modelKey: '', effort: null, ultra: false, fast: false, ultrafast: false, permissionMode: 'auto' },
     composerText: {},
     composerAttachments: {},
+    composerComments: {},
+    composerSend: null,
     composerMode: { ...prefs.modes },
     activityCollapsed: {},
 
@@ -793,6 +801,7 @@ export const useStore = create<State>((set, get) => {
           activeChatId: chat.id,
           composerText: { ...state.composerText, new: '' },
           composerAttachments: { ...state.composerAttachments, new: [] },
+          composerComments: { ...state.composerComments, new: [] },
           // The mode chip stays on for the chat the draft became.
           composerMode: { ...state.composerMode, new: undefined, [chat.id]: state.composerMode.new }
         }))
@@ -994,6 +1003,12 @@ export const useStore = create<State>((set, get) => {
       set((s) => ({ composerText: { ...s.composerText, [key]: text } }))
     },
 
+    addComposerComment(key, comment) {
+      set((s) => ({ composerComments: { ...s.composerComments, [key]: [...(s.composerComments[key] ?? []), comment] } }))
+    },
+    setComposerComments(key, comments) {
+      set((s) => ({ composerComments: { ...s.composerComments, [key]: comments } }))
+    },
     setComposerAttachments(key, attachments) {
       set((s) => ({ composerAttachments: { ...s.composerAttachments, [key]: attachments } }))
     },

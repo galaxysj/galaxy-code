@@ -83,6 +83,7 @@ const api: GalaxyApi = {
     stopShells: call('files.stopShells'),
     artifacts: call('files.artifacts'),
     reveal: call('files.reveal'),
+    saveCopy: call('files.saveCopy'),
     openExternal: call('files.openExternal'),
     pathForFile: (file: File) => webUtils.getPathForFile(file)
   },
@@ -112,7 +113,9 @@ const api: GalaxyApi = {
     stop: call('browser.stop'),
     state: call('browser.state'),
     frame: call('browser.frame'),
-    clearData: call('browser.clearData')
+    clearData: call('browser.clearData'),
+    pick: call('browser.pick'),
+    cancelPick: call('browser.cancelPick')
   },
   computer: {
     permissions: call('computer.permissions'),

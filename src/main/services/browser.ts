@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { dialog, session, WebContentsView, type BrowserWindow, type WebContents } from 'electron'
 import type { Rect } from '@shared/api'
-import type { BrowserDataKind, BrowserSearchEngine, BrowserState } from '@shared/types'
+import type { BrowserDataKind, BrowserPick, BrowserSearchEngine, BrowserState } from '@shared/types'
 import { store } from '../store'
 import { errorMessage, newId, sleep, truncateEnd } from '../util'
 import { agentCursorScript, type CursorUpdate } from './browserCursor'
@@ -118,6 +118,69 @@ button:hover{background:#1765cc}
 
 const HOME_URL = 'about:blank'
 const SCREENSHOT_WIDTH = 1400
+
+// Comment mode, run inside the page: hover marks an element, a click picks it, a drag picks a rectangle.
+const PICK_SCRIPT = `new Promise((resolve) => {
+  window.__galaxyPickCancel?.();
+  const cover = document.createElement('div');
+  const mark = document.createElement('div');
+  cover.style.cssText = 'position:fixed;inset:0;z-index:2147483647;cursor:crosshair;background:transparent';
+  mark.style.cssText = 'position:fixed;display:none;pointer-events:none;border:2px solid #258bff;background:rgba(37,139,255,.16);border-radius:3px;box-sizing:border-box';
+  cover.append(mark);
+  document.documentElement.append(cover);
+  let start = null, dragged = false;
+  const at = (x, y) => { cover.style.pointerEvents = 'none'; const el = document.elementFromPoint(x, y); cover.style.pointerEvents = ''; return el; };
+  const show = (r) => Object.assign(mark.style, { display: 'block', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+  const spanOf = (a, b) => ({ left: Math.min(a.x, b.x), top: Math.min(a.y, b.y), width: Math.abs(a.x - b.x), height: Math.abs(a.y - b.y) });
+  const selectorOf = (el) => {
+    const parts = [];
+    for (let node = el; node && node.nodeType === 1 && parts.length < 5; node = node.parentElement) {
+      if (node.id) { parts.unshift('#' + CSS.escape(node.id)); break; }
+      let part = node.tagName.toLowerCase();
+      const cls = [...node.classList].slice(0, 2).map((c) => '.' + CSS.escape(c)).join('');
+      part += cls;
+      const same = node.parentElement ? [...node.parentElement.children].filter((c) => c.tagName === node.tagName) : [];
+      if (!cls && same.length > 1) part += ':nth-of-type(' + (same.indexOf(node) + 1) + ')';
+      parts.unshift(part);
+    }
+    return parts.join(' > ');
+  };
+  const describe = (el) => el ? { selector: selectorOf(el), tag: el.tagName.toLowerCase(), text: (el.innerText || el.getAttribute('alt') || el.getAttribute('aria-label') || '').trim().slice(0, 240), html: el.outerHTML.slice(0, 400) } : null;
+  const finish = (result) => {
+    window.removeEventListener('keydown', onKey, true);
+    cover.remove();
+    delete window.__galaxyPickCancel;
+    resolve(result);
+  };
+  const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); finish(null); } };
+  const done = (kind, box, el) => finish({ kind, rect: { x: box.left, y: box.top, width: box.width, height: box.height }, viewport: { width: innerWidth, height: innerHeight }, url: location.href, title: document.title, element: describe(el) });
+  cover.addEventListener('mousemove', (event) => {
+    if (start) {
+      const box = spanOf(start, { x: event.clientX, y: event.clientY });
+      if (box.width > 4 || box.height > 4) dragged = true;
+      if (dragged) show(box);
+      return;
+    }
+    const el = at(event.clientX, event.clientY);
+    if (el) show(el.getBoundingClientRect());
+  });
+  cover.addEventListener('mousedown', (event) => { event.preventDefault(); start = { x: event.clientX, y: event.clientY }; dragged = false; });
+  cover.addEventListener('mouseup', (event) => {
+    event.preventDefault();
+    if (!start) return;
+    const end = { x: event.clientX, y: event.clientY };
+    if (dragged) {
+      const box = spanOf(start, end);
+      done('region', box, at(box.left + box.width / 2, box.top + box.height / 2));
+    } else {
+      const el = at(end.x, end.y);
+      if (el) done('element', el.getBoundingClientRect(), el);
+      else finish(null);
+    }
+  });
+  window.addEventListener('keydown', onKey, true);
+  window.__galaxyPickCancel = () => finish(null);
+})`
 const PARTITION = 'persist:galaxy-browser'
 
 const SEARCH_URLS: Record<BrowserSearchEngine, string> = {
@@ -187,6 +250,19 @@ function locateScript(target: { ref?: number; selector?: string }): string {
   })()`
 }
 
+
+/** Rejects when a page call does not answer in time, as one on a tab that never painted or loaded. */
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string, signal?: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => { cleanup(); reject(new Error(message)) }, ms)
+    const onAbort = (): void => { cleanup(); reject(new Error('Aborted')) }
+    const cleanup = (): void => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort) }
+    if (signal?.aborted) return onAbort()
+    signal?.addEventListener('abort', onAbort, { once: true })
+    promise.then((v) => { cleanup(); resolve(v) }, (e) => { cleanup(); reject(e) })
+  })
+}
+
 class BrowserService {
   private window: BrowserWindow | null = null
   private view: WebContentsView | null = null
@@ -195,6 +271,8 @@ class BrowserService {
   private agentActive = false
   private cursorPosition: { x: number; y: number } | null = null
   private cursorWaitingAtCenter = false
+  /** Called with the cursor on its target, just before a click, drag or scroll reaches the page. */
+  beforeInput: ((kind: string) => Promise<void>) | null = null
   private consoleLog: string[] = []
   private favicon = ''
   private failure: LoadFailure | null = null
@@ -322,6 +400,19 @@ class BrowserService {
     if (!this.view) return null
     const image = await this.view.webContents.capturePage()
     return image.isEmpty() ? null : `data:image/jpeg;base64,${image.toJPEG(90).toString('base64')}`
+  }
+
+  /** Comment mode. Resolves when the user clicks an element or drags a rectangle; null on Escape, a cancel or a navigation. */
+  async pick(): Promise<BrowserPick | null> {
+    try {
+      return (await this.ensureView().webContents.executeJavaScript(PICK_SCRIPT, true)) as BrowserPick | null
+    } catch {
+      return null
+    }
+  }
+
+  cancelPick(): void {
+    void this.view?.webContents.executeJavaScript('window.__galaxyPickCancel?.()', true).catch(() => {})
   }
 
   state(): BrowserState {
@@ -495,7 +586,7 @@ class BrowserService {
   }
 
   private async describe(includeText: boolean): Promise<string> {
-    const snap = (await this.wc.executeJavaScript(SNAPSHOT_SCRIPT, true)) as {
+    const snap = (await withTimeout(this.wc.executeJavaScript(SNAPSHOT_SCRIPT, true), 10000, 'The page did not answer the snapshot in 10 seconds. It may still be loading or blank; navigate it or try again.')) as {
       url: string
       title: string
       scroll: string
@@ -555,6 +646,7 @@ class BrowserService {
     point = await this.locate(action)
     this.cursorPosition = { x: point.x, y: point.y }
     await this.updateCursor({ action: 'click', ...this.cursorPosition })
+    await this.beforeInput?.('click')
     await sleep(60, signal)
     if (point.hit) {
       await this.command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y })
@@ -576,6 +668,7 @@ class BrowserService {
     const to = await this.pagePoint(action.toX, action.toY)
     await this.moveCursor(from, signal)
     await this.updateCursor({ action: 'press', ...from })
+    await this.beforeInput?.('drag')
     await this.command('Input.dispatchMouseEvent', { type: 'mouseMoved', ...from })
     await this.command('Input.dispatchMouseEvent', { type: 'mousePressed', ...from, button: 'left', buttons: 1, clickCount: 1 })
     let last = from
@@ -612,24 +705,26 @@ class BrowserService {
 
   /** The page at full size as a PNG, with the agent cursor and glow it shows. */
   async capturePng(): Promise<Buffer | null> {
-    const image = await this.ensureView().webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })
+    const image = await withTimeout(this.ensureView().webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }), 8000, 'Capture timed out')
     return image.isEmpty() ? null : image.toPNG()
   }
 
   private async capture(): Promise<{ mime: string; base64: string }> {
     const view = this.ensureView()
-    let image = await view.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })
+    let image = await withTimeout(view.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }), 10000, 'The screenshot timed out after 10 seconds. The tab may not have painted yet; navigate it or try again.')
     if (image.getSize().width > SCREENSHOT_WIDTH) image = image.resize({ width: SCREENSHOT_WIDTH, quality: 'good' })
     const jpeg = image.toJPEG(72)
     if (jpeg.length === 0) throw new Error('The page has not painted yet')
     const size = image.getSize()
-    const page = (await view.webContents.executeJavaScript('({ width: innerWidth, height: innerHeight })', true)) as { width: number; height: number }
+    const page = (await withTimeout(view.webContents.executeJavaScript('({ width: innerWidth, height: innerHeight })', true), 5000, 'The page did not answer in 5 seconds')) as { width: number; height: number }
     this.shot = { x: size.width / page.width, y: size.height / page.height, width: size.width, height: size.height }
     return { mime: 'image/jpeg', base64: jpeg.toString('base64') }
   }
 
   async act(action: BrowserAction, signal?: AbortSignal): Promise<BrowserResult> {
-    const result = await this.run(action, signal)
+    // No step may spin forever: a page that never answers fails the step instead.
+    const limit = action.action === 'wait' ? 40000 : 60000
+    const result = await withTimeout(this.run(action, signal), limit, `The browser step "${action.action}" did not finish in ${limit / 1000} seconds.`, signal)
     // Dialogs that opened while the step ran are reported with its result.
     const dialogs = this.dialogLog.splice(0)
     return dialogs.length ? { ...result, text: `${result.text}\n\nBrowser dialogs:\n${dialogs.join('\n')}` } : result
@@ -666,7 +761,7 @@ class BrowserService {
         if (action.ref !== undefined || action.selector || hasPoint(action)) {
           await this.clickAt(action, signal)
           await sleep(80, signal)
-        }
+        } else await this.beforeInput?.('type')
         if (action.clear) {
           await wc.executeJavaScript(
             `(() => { const el = document.activeElement; if (!el) return; if ('value' in el) { el.select?.(); } else { document.execCommand('selectAll'); } })()`,
@@ -684,6 +779,7 @@ class BrowserService {
       }
       case 'press': {
         if (!action.key) throw new Error('`key` is required, for example "Enter" or "Meta+A"')
+        await this.beforeInput?.('press')
         await this.pressKey(action.key)
         await this.settle(signal, 5000)
         return { text: `Pressed ${action.key}.` }
@@ -693,8 +789,15 @@ class BrowserService {
         const dx = action.direction === 'left' ? -amount : action.direction === 'right' ? amount : 0
         const dy = action.direction === 'up' ? -amount : action.direction === 'down' || !action.direction ? amount : 0
         // A point wheels whatever is under it, such as a scrollable panel, rather than the window.
-        if (hasPoint(action)) await this.command('Input.dispatchMouseEvent', { type: 'mouseWheel', ...(await this.pagePoint(action.x, action.y)), deltaX: dx, deltaY: dy })
-        else await wc.executeJavaScript(`window.scrollBy({ left: ${dx}, top: ${dy}, behavior: 'instant' })`, true)
+        if (hasPoint(action)) {
+          const at = await this.pagePoint(action.x, action.y)
+          await this.moveCursor(at, signal)
+          await this.beforeInput?.('scroll')
+          await this.command('Input.dispatchMouseEvent', { type: 'mouseWheel', ...at, deltaX: dx, deltaY: dy })
+        } else {
+          await this.beforeInput?.('scroll')
+          await wc.executeJavaScript(`window.scrollBy({ left: ${dx}, top: ${dy}, behavior: 'instant' })`, true)
+        }
         await sleep(200, signal)
         return { text: await this.describe(false) }
       }
@@ -864,6 +967,12 @@ class BrowserTabs {
       this.get(tabId, window).setBounds(rect)
     } else this.tabs.get(tabId)?.setBounds(null)
   }
+  pick(id?: string, window?: BrowserWindow): Promise<BrowserPick | null> {
+    return this.get(id, window).pick()
+  }
+  cancelPick(id?: string, window?: BrowserWindow): void {
+    this.get(id, window).cancelPick()
+  }
   frame(id?: string, window?: BrowserWindow): Promise<string | null> {
     return this.get(id, window).frame()
   }
@@ -889,14 +998,14 @@ class BrowserTabs {
   private shotCount = 0
   /** Keeps a PNG of the page after an action in the chat's artifacts folder, when Settings asks for it. Never fails the action. */
   private async saveShot(chatId: string, tab: BrowserService, action: string): Promise<string | null> {
-    // The automatic copy after every action follows Settings; a screenshot the agent asked for is always kept.
+    // The copies taken as a click, drag or scroll happens follow Settings; a screenshot the agent asked for is always kept.
     if (store.settings.saveBrowserScreenshots === false && action !== 'screenshot') return null
     try {
       const png = await tab.capturePng()
       if (!png) return null
       const dir = join(homedir(), '.galaxy', chatId, 'artifacts')
       await mkdir(dir, { recursive: true })
-      const file = join(dir, `browser-${new Date().toISOString().replace(/[:.]/g, '-')}-${String(++this.shotCount).padStart(3, '0')}-${action}.png`)
+      const file = join(dir, `browser-${new Date().toISOString().replace(/[:.]/g, '-')}-${String(++this.shotCount).padStart(3, '0')}.png`)
       await writeFile(file, png)
       return file
     } catch {
@@ -939,8 +1048,14 @@ class BrowserTabs {
     this.agentOwners.set(id, owners)
     const background = action.action !== 'navigate' || action.background !== false
     this.registerTab(chatId, id, background)
-    const result = await tab.act(action, signal)
-    const saved = await this.saveShot(chatId, tab, action.action)
+    tab.beforeInput = async (kind) => { await this.saveShot(chatId, tab, kind) }
+    let result: BrowserResult
+    try {
+      result = await tab.act(action, signal)
+    } finally {
+      tab.beforeInput = null
+    }
+    const saved = action.action === 'screenshot' ? await this.saveShot(chatId, tab, 'screenshot') : null
     const tabIndex = this.tabIds(window).indexOf(id) + 1
     const savedNote = saved && action.action === 'screenshot' ? `\nSaved as a PNG file: ${saved}. Give it to the user with Present.` : ''
     return { ...result, tabId: id, tabIndex, url: tab.state().url, text: `Tab index: ${tabIndex}\n${action.action === 'navigate' ? `Background: ${background}\n` : ''}${result.text}${savedNote}` }

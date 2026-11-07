@@ -26,12 +26,14 @@ import {
   Hammer,
   ListTodo,
   MessageSquareDiff,
+  MessageSquarePlus,
   MessagesSquare,
   GitBranch,
   GitCompare,
   GitMerge,
   GitPullRequestArrow,
   CloudUpload,
+  Download,
   GitCommitHorizontal,
   Plus,
   PanelRight,
@@ -41,7 +43,7 @@ import {
   RotateCw,
   X
 } from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import type { FileView, FileDiff } from '@shared/types'
 import type { ReviewCommit } from '@shared/api'
@@ -58,8 +60,10 @@ import { CodeEditor, InlineEditBox } from './CodeEditor'
 import { InlineModel, usableUtilityModels } from '@shared/models'
 import { CloseSideChatDialog, SideChatPane } from './SideChat'
 import { cleanError } from './Settings'
+import { addComment } from '../lib/comments'
+import { CommentBox, CommentableImage, CommentFloat, SelectionComment, type SelectionPoint } from './CommentBox'
 import { isInstant, runGitCommand } from '../lib/gitCommands'
-import type { GitCommand, WorktreeMergeStrategy, WorktreeStatus } from '@shared/types'
+import type { BrowserPick, GitCommand, WorktreeMergeStrategy, WorktreeStatus } from '@shared/types'
 
 // Browser
 
@@ -77,7 +81,12 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
   const covered = usePopoverShown()
   // A still of the page, shown in place of the native view while a popover needs to sit above it.
   const [frame, setFrame] = useState<string | null>(null)
-  const stepAside = covered && !!frame
+  // Comment mode: the user marks something on the page; the note is written over a still of the page.
+  const [commenting, setCommenting] = useState(false)
+  const [sending, setSending] = useState<{ x: number; y: number } | null>(null)
+  const pendingComments = useStore((s) => s.composerComments[s.activeChatId ?? 'new']?.length ?? 0)
+  const [picked, setPicked] = useState<{ pick: BrowserPick; frame: string } | null>(null)
+  const stepAside = (covered && !!frame) || !!picked
 
   useEffect(() => {
     if (!editing) setAddress(state.url)
@@ -119,6 +128,22 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
   }, [sync])
 
   useEffect(() => () => void window.galaxy.browser.setBounds(null, tabId), [tabId])
+
+  const toggleComment = (): void => {
+    if (commenting) {
+      void window.galaxy.browser.cancelPick(tabId)
+      return
+    }
+    setCommenting(true)
+    void window.galaxy.browser.pick(tabId).then(async (pick) => {
+      setCommenting(false)
+      if (!pick) return
+      const image = await window.galaxy.browser.frame(tabId)
+      if (image) setPicked({ pick, frame: image })
+    }).catch(() => setCommenting(false))
+  }
+  useEffect(() => () => void window.galaxy.browser.cancelPick(tabId), [tabId])
+  useEffect(() => { if (!visible && commenting) void window.galaxy.browser.cancelPick(tabId) }, [visible, commenting, tabId])
 
   const go = (): void => {
     const value = address.trim()
@@ -163,13 +188,28 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
           />
           {state.agentActive && <span className="shimmer shrink-0 text-[11px]">Agent is browsing</span>}
         </div>
+        <IconButton label={commenting ? 'Cancel commenting' : 'Comment on the page: click an element or drag an area'} active={commenting} disabled={!hasPage} onClick={toggleComment}>
+          <MessageSquarePlus size={14} />
+        </IconButton>
+        {pendingComments > 0 && (
+          <Button size="sm" title="Write the message and send it with your comments" onClick={(event) => { const box = event.currentTarget.getBoundingClientRect(); setSending((current) => current ? null : { x: box.right - 300, y: box.bottom + 6 }) }}>
+            Comment
+          </Button>
+        )}
+        {sending && <CommentBox send x={sending.x} y={sending.y} title="Message" onClose={() => setSending(null)} onSubmit={(note) => { const state = useStore.getState(); const key = state.activeChatId ?? 'new'; const current = state.composerText[key] ?? ''; state.setComposerText(key, current ? `${current.replace(/\s+$/, '')}\n${note.trim()}` : note.trim()) }} />}
         <IconButton label="Open in default browser" disabled={!/^https?:/.test(state.url)} onClick={() => void window.galaxy.files.openExternal(state.url)}>
           <ExternalLink size={13.5} />
         </IconButton>
       </div>
       <div className="relative min-h-0 flex-1">
         <div ref={host} className="h-full w-full overflow-hidden">
-          {frame && hasPage && <img src={frame} alt="" draggable={false} className="h-full w-full" />}
+          {(picked?.frame ?? frame) && hasPage && <img src={picked?.frame ?? frame ?? ''} alt="" draggable={false} className="h-full w-full" />}
+          {picked && (
+            <div
+              className="pointer-events-none absolute border-2 border-[#ff3b30] bg-[#ff3b30]/10"
+              style={{ left: `${(picked.pick.rect.x / picked.pick.viewport.width) * 100}%`, top: `${(picked.pick.rect.y / picked.pick.viewport.height) * 100}%`, width: `${(picked.pick.rect.width / picked.pick.viewport.width) * 100}%`, height: `${(picked.pick.rect.height / picked.pick.viewport.height) * 100}%` }}
+            />
+          )}
           {!hasPage && (
             <div className="flex h-full flex-col items-center justify-center gap-5 px-5 text-center">
               <div><div className="mb-2 text-[19px] font-medium text-fg">New tab</div><div className="text-[12px] text-subtle">Enter a website above, or open a tool.</div></div>
@@ -180,8 +220,30 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
             </div>
           )}
         </div>
+        {picked && <BrowserComment picked={picked} host={host} onClose={() => setPicked(null)} />}
       </div>
     </div>
+  )
+}
+
+/** The note box for a marked element or area of a page, with the page's picture outlined as the attachment. */
+function BrowserComment({ picked, host, onClose }: { picked: { pick: BrowserPick; frame: string }; host: RefObject<HTMLDivElement | null>; onClose(): void }): ReactNode {
+  const { pick, frame } = picked
+  const box = host.current?.getBoundingClientRect()
+  const x = (box?.left ?? 0) + (pick.rect.x / pick.viewport.width) * (box?.width ?? 0)
+  const y = (box?.top ?? 0) + ((pick.rect.y + pick.rect.height) / pick.viewport.height) * (box?.height ?? 0) + 6
+  const element = pick.element
+  return (
+    <CommentBox
+      x={x}
+      y={y}
+      title={element ? `<${element.tag}> ${element.selector.split(' > ').pop()}` : 'Selected area'}
+      onClose={onClose}
+      onSubmit={(note) => {
+        const detail = [pick.url, pick.kind === 'element' ? 'element' : 'dragged area', element ? `selector ${element.selector}` : '', `x ${Math.round(pick.rect.x)}, y ${Math.round(pick.rect.y)}, ${Math.round(pick.rect.width)}x${Math.round(pick.rect.height)} px of the ${pick.viewport.width}x${pick.viewport.height} viewport`].filter(Boolean).join('; ')
+        addComment({ source: pick.title || 'browser page', detail, quote: element?.text || element?.html, note, area: { group: `${pick.url}:${frame.length}:${frame.slice(-64)}`, src: frame, rect: pick.rect, reference: pick.viewport } })
+      }}
+    />
   )
 }
 
@@ -254,6 +316,7 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
   const savedText = useRef('')
   const liveText = useRef('')
   const [completing, setCompleting] = useState(false)
+  const [codeSelection, setCodeSelection] = useState<SelectionPoint | null>(null)
 
   // Reload when the agent finishes an edit to this file.
   const editStamp = useStore((s) => {
@@ -301,6 +364,10 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
   }
 
   const isMarkdown = /\.(md|mdx|markdown)$/i.test(file.path)
+  /** A file in the chat's artifacts folder: shown by its name, with its own set of buttons. */
+  const artifact = !!artifactTitle(file.path)
+  const [commenting, setCommenting] = useState<{ x: number; y: number } | null>(null)
+  const [sending, setSending] = useState<{ x: number; y: number } | null>(null)
   const isHtml = /\.html?$/i.test(file.path)
   const isSvg = view?.mime === 'image/svg+xml'
   /** A background process's output: shown read-only and kept current while it runs. */
@@ -326,9 +393,13 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
   return (
     <div className={cn('flex h-full flex-col', !visible && 'hidden')}>
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line pl-3 pr-2">
-        <span className="min-w-0 truncate font-mono text-[11.5px] text-muted" title={artifactTitle(file.path) ? undefined : file.path}>
-          {relativeTo(root, file.path, homeDir)}
-        </span>
+        {artifact ? (
+          <span className="min-w-0 truncate text-[12.5px] font-medium text-fg">{front?.meta.name || artifactTitle(file.path)}</span>
+        ) : (
+          <span className="min-w-0 truncate font-mono text-[11.5px] text-muted" title={file.path}>
+            {relativeTo(root, file.path, homeDir)}
+          </span>
+        )}
         {completing && (
           <span className="flex shrink-0 items-center px-1 text-subtle" title="Generating a suggestion">
             <Spinner size={11} />
@@ -364,12 +435,32 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
         <IconButton label="Reload" size="sm" onClick={() => setReload((n) => n + 1)}>
           <RotateCw size={12.5} />
         </IconButton>
-        <IconButton label="Show in folder" size="sm" onClick={() => void window.galaxy.files.reveal(file.path)}>
-          <FolderOpen size={13} />
-        </IconButton>
-        <IconButton label="Open with default app" size="sm" onClick={() => void window.galaxy.files.openExternal(file.path)}>
-          <ExternalLink size={13} />
-        </IconButton>
+        {artifact ? (
+          <>
+            <IconButton label="Save a copy" size="sm" onClick={() => void window.galaxy.files.saveCopy(file.path, basename(file.path)).then((saved) => { if (saved) useStore.getState().notify(`Saved a copy to ${saved}`, 'info') }).catch((error: unknown) => useStore.getState().notify(String(error), 'error'))}>
+              <Download size={13} />
+            </IconButton>
+            <IconButton label="Comment: add a note to send with your next message" size="sm" active={!!commenting} onClick={(event) => { const box = event.currentTarget.getBoundingClientRect(); setCommenting((current) => current ? null : { x: box.right - 300, y: box.bottom + 6 }) }}>
+              <MessageSquarePlus size={13} />
+            </IconButton>
+          </>
+        ) : (
+          <>
+            <IconButton label="Show in folder" size="sm" onClick={() => void window.galaxy.files.reveal(file.path)}>
+              <FolderOpen size={13} />
+            </IconButton>
+            <IconButton label="Open with default app" size="sm" onClick={() => void window.galaxy.files.openExternal(file.path)}>
+              <ExternalLink size={13} />
+            </IconButton>
+          </>
+        )}
+        {artifact && (
+          <Button size="sm" className="ml-0.5" title="Write the message and send it with your comments" onClick={(event) => { const box = event.currentTarget.getBoundingClientRect(); setSending((current) => current ? null : { x: box.right - 300, y: box.bottom + 6 }) }}>
+            Comment
+          </Button>
+        )}
+        {sending && <CommentBox send x={sending.x} y={sending.y} title="Message" onClose={() => setSending(null)} onSubmit={(note) => { const state = useStore.getState(); const key = state.activeChatId ?? 'new'; const current = state.composerText[key] ?? ''; state.setComposerText(key, current ? `${current.replace(/\s+$/, '')}\n${note.trim()}` : note.trim()) }} />}
+        {commenting && <CommentBox x={commenting.x} y={commenting.y} title={`Comment on ${front?.meta.name || artifactTitle(file.path)}`} onClose={() => setCommenting(null)} onSubmit={(note) => addComment({ source: front?.meta.name || artifactTitle(file.path) || basename(file.path), note })} />}
         {PLAN_FILE.test(file.path) && view?.kind === 'text' && (
           <Button variant="primary" size="sm" className="ml-1" disabled={dirty} title={dirty ? 'Save the plan before building' : 'Send this plan to the agent and start building'} onClick={() => void buildPlan(file.path, root)}>
             <Hammer size={12.5} />
@@ -386,10 +477,10 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
           <Placeholder icon={<FileText size={22} />} title="No preview for this file" detail="Open it with its default app instead." />
         ) : view.kind === 'image' && !(isSvg && mode === 'source') ? (
           <div className="flex h-full items-center justify-center overflow-auto p-6" style={{ background: 'repeating-conic-gradient(var(--bg-hover) 0% 25%, transparent 0% 50%) 50% / 18px 18px' }}>
-            <img src={view.dataUrl} alt={view.name} className="max-h-full max-w-full rounded object-contain shadow-pop" draggable={false} />
+            <CommentableImage src={view.dataUrl ?? ''} source={artifactTitle(file.path) ?? view.name} alt={view.name} className="rounded shadow-pop" />
           </div>
         ) : tasksFile && view.kind === 'text' ? (
-          <div className="h-full overflow-y-auto px-6 py-5">
+          <SelectionComment source={artifactTitle(file.path) ?? basename(file.path)} content={view.content} className="h-full overflow-y-auto px-6 py-5">
             <div className="space-y-2">
               {parseTaskMarkdown(view.content ?? '').map((task, index) => (
                 <div key={index} className="flex items-start gap-2.5 text-[13.5px] leading-[1.5]" style={{ paddingLeft: (task.depth ?? 0) * 20 }}>
@@ -398,26 +489,27 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
                 </div>
               ))}
             </div>
-          </div>
+          </SelectionComment>
         ) : document && locked ? (
-          <div className="h-full overflow-y-auto px-6 py-5">
+          <SelectionComment source={front?.meta.name || basename(file.path)} content={front?.body} className="h-full overflow-y-auto px-6 py-5">
             <Markdown text={front?.body ?? ''} root={file.path.slice(0, file.path.lastIndexOf('/'))} html />
-          </div>
+          </SelectionComment>
         ) : isMarkdown && mode === 'preview' && view.kind === 'text' && !view.truncated ? (
-          <div className="flex h-full flex-col">
+          <SelectionComment source={front?.meta.name || artifactTitle(file.path) || basename(file.path)} content={front ? front.body : view.content ?? ''} className="flex h-full flex-col">
             <LiveMarkdown key={`${file.path}:${file.nonce}:${reload}:${editStamp}`} initial={front ? front.body : view.content ?? ''} onChange={(text) => editLive((front?.raw ?? '') + text)} onSave={(text) => saveLive((front?.raw ?? '') + text)} />
-          </div>
+          </SelectionComment>
         ) : isMarkdown && mode === 'preview' ? (
-          <div className="h-full overflow-y-auto px-6 py-5">
+          <SelectionComment source={artifactTitle(file.path) || basename(file.path)} content={view.content} className="h-full overflow-y-auto px-6 py-5">
             <Markdown text={view.content ?? ''} root={file.path.slice(0, file.path.lastIndexOf('/'))} html />
-          </div>
+          </SelectionComment>
         ) : processLog && view.kind === 'text' ? (
-          <SourceView content={view.content ?? ''} path={file.path} line={file.line} />
+          <SelectionComment source={relativeTo(root, file.path, homeDir)} content={view.content} className="h-full"><SourceView content={view.content ?? ''} path={file.path} line={file.line} /></SelectionComment>
         ) : view.kind === 'text' && !view.truncated ? (
-          <CodeEditor path={file.path} initial={view.content ?? ''} line={file.line} onDirtyChange={isMarkdown ? undefined : setDirty} onTextChange={isMarkdown ? editLive : undefined} onSaved={isMarkdown ? savedLive : undefined} onCompletingChange={setCompleting} />
+          <CodeEditor onSelect={(selection) => setCodeSelection(selection)} path={file.path} initial={view.content ?? ''} line={file.line} onDirtyChange={isMarkdown ? undefined : setDirty} onTextChange={isMarkdown ? editLive : undefined} onSaved={isMarkdown ? savedLive : undefined} onCompletingChange={setCompleting} />
         ) : (
-          <SourceView content={view.content ?? ''} path={file.path} line={file.line} />
+          <SelectionComment source={relativeTo(root, file.path, homeDir)} content={view.content} className="h-full"><SourceView content={view.content ?? ''} path={file.path} line={file.line} /></SelectionComment>
         )}
+        {codeSelection && <CommentFloat key={`${codeSelection.x}:${codeSelection.y}:${codeSelection.quote.length}`} point={codeSelection} source={relativeTo(root, file.path, homeDir)} onClose={() => setCodeSelection(null)} />}
         {view?.truncated && <div className="border-t border-line px-3 py-1 text-[11px] text-subtle">Showing the first 1.5 MB of this file.</div>}
       </div>
     </div>

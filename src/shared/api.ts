@@ -10,6 +10,7 @@ import type {
   Attachment,
   Bootstrap,
   BrowserDataKind,
+  BrowserPick,
   BrowserState,
   Chat,
   ChatEvent,
@@ -148,6 +149,8 @@ export interface GalaxyApi {
     /** Every file in the chat's artifacts folder, newest first, with the name from a document's front matter when it has one. */
     artifacts(chatId: string): Promise<{ path: string; title: string | null }[]>
     reveal(path: string): Promise<void>
+    /** Asks where to save, then copies the file there. Returns the new path, or null when cancelled. */
+    saveCopy(path: string, name: string): Promise<string | null>
     openExternal(target: string): Promise<void>
     pathForFile(file: File): string
   }
@@ -183,6 +186,9 @@ export interface GalaxyApi {
     /** A JPEG data URL of the page as it looks now, or null before it has painted. */
     frame(tabId?: string): Promise<string | null>
     clearData(kind: BrowserDataKind): Promise<void>
+    /** Comment mode: waits while the user clicks an element or drags a rectangle on the page. Null when cancelled. */
+    pick(tabId?: string): Promise<BrowserPick | null>
+    cancelPick(tabId?: string): Promise<void>
   }
 
   computer: {

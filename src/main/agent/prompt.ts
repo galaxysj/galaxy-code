@@ -6,6 +6,7 @@ import type { AgentMode, PermissionMode, PromptMentions, SkillInfo } from '@shar
 import { gitInfo } from '../services/git'
 import { memoryPath, readMemory } from '../services/memory'
 import { listSkills } from '../services/skills'
+import { listShells } from '../tools/shell'
 import { store } from '../store'
 import { tildify, truncateEnd } from '../util'
 import type { Session } from './session'
@@ -33,6 +34,8 @@ export interface PromptContext {
   mode?: AgentMode
   /** The chat's subagents and where each stands; empty when there are none. */
   subagents: string
+  /** The chat's running background commands, one per line with the log file each writes to; empty when there are none. */
+  processes: string
 }
 
 const INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md', '.galaxy/AGENTS.md']
@@ -79,6 +82,7 @@ export async function gatherContext(
     instructions,
     skills,
     subagents: session.subagentStatus(),
+    processes: listShells(session.id).filter((shell) => !shell.exited).map((shell) => `- ${shell.id}: ${shell.name} (running). Output log: ${shell.log}`).join('\n'),
     ...options
   }
 }
@@ -97,9 +101,12 @@ function environmentBlock(ctx: PromptContext): string {
     `Model: ${ctx.modelName}`
   ]
   const text = lines.filter(Boolean).join('\n')
-  return ctx.subagents
-    ? `${text}\n\nSubagents in this chat right now (check before starting more; a running one is already working on its task, and its report reaches you when it finishes):\n${ctx.subagents}`
+  const withProcesses = ctx.processes
+    ? `${text}\n\nBackground processes running in this chat right now (a dev server or watcher you or the user started is one of these; its output goes to the log file below). To see its latest logs, call the Read tool on that log file path. Do not use tail, cat, head, ps, lsof or any other Bash command for this, and do not conclude the logs are unavailable without Reading the file first. Stop one with Bash \`shell_id\` and \`stop\`):\n${ctx.processes}`
     : text
+  return ctx.subagents
+    ? `${withProcesses}\n\nSubagents in this chat right now (check before starting more; a running one is already working on its task, and its report reaches you when it finishes):\n${ctx.subagents}`
+    : withProcesses
 }
 
 function permissionBlock(mode: PermissionMode): string {
@@ -206,8 +213,8 @@ The user turned on Plan mode for this message. Never mention the mode or these i
 
 1. Investigate the relevant code with Read, Grep, Glob and List until you know which files change and how. For a large or many-sided codebase, start read-only Explore subagents with the Agent tool in the same turn, one per area, and collect their reports with Message action=wait.
 2. If a decision is genuinely the user's to make, ask it with the Ask tool before writing the plan.
-3. Write the plan to plan.md. A chat has one plan file: if plan.md does not exist yet, create it with an Edit *** Add File patch; if it exists, Read it and revise it with *** Update File, or replace it entirely when the user asks for a new plan. Never create another file for a plan. Include: the goal, the approach, the concrete changes by file, edge cases and risks, and how to verify the result.
-4. Whenever you write or rewrite the plan, write task.md in the same patch or the next one: the plan's implementation steps as a task list, every item still pending, in exactly this format (subtasks indented under their task):
+3. Write the plan to plan.md. A chat has one plan file: if plan.md does not exist yet, create it with an Edit *** Add File patch; if it exists, Read it and revise it with *** Update File, or replace it entirely when the user asks for a new plan. Never create another file for a plan. Write plain Markdown with no front matter or other metadata block (no --- header, name or description fields). Include: the goal, the approach, the concrete changes by file, edge cases and risks, and how to verify the result.
+4. Whenever you write or rewrite the plan, write task.md in the same patch or the next one: the plan's implementation steps as a task list, every item still pending, with no front matter or other metadata, in exactly this format (subtasks indented under their task):
 
 * [ ] First step
    * [ ] A smaller part of it
@@ -218,7 +225,7 @@ The user turned on Plan mode for this message. Never mention the mode or these i
 
 const tasksBlock = (file: string): string => `# Task list
 
-For work with several steps, keep a task list in the Markdown file ${file}. The user sees it above the chat input and can open it, but cannot edit it. If it does not exist, create it with an Edit *** Add File patch before you start; if a plan already wrote it, Read it and continue from there. Update it with *** Update File as work proceeds. This file needs no approval. Write exactly this format, with the box showing the state:
+For work with several steps, keep a task list in the Markdown file ${file}. The user sees it above the chat input and can open it, but cannot edit it. If it does not exist, create it with an Edit *** Add File patch before you start; if a plan already wrote it, Read it and continue from there. Update it with *** Update File as work proceeds. This file needs no approval. Write no front matter or other metadata in it, only the list. Write exactly this format, with the box showing the state:
 
 * [ ] Explore codebase
 * [/] Fix bugs

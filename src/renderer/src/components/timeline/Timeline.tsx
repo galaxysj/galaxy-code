@@ -1,7 +1,8 @@
-import { AppWindow, ArrowDown, ChevronRight, CircleAlert, CircleStop, Clock, File as FileIcon, FileText, GitCommitHorizontal, Globe, Info, MessageCircle, Monitor, Package, Plug, Redo2, SquareTerminal, Undo2 } from 'lucide-react'
+import { AppWindow, ArrowDown, ChevronRight, CircleAlert, CircleStop, Clock, File as FileIcon, FileText, GitCommitHorizontal, Globe, Info, MessageCircle, MessageSquareText, Monitor, Package, Plug, Redo2, SquareTerminal, Undo2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AssistantItem, Chat, FileDiff, Item, MentionChip, NoticeItem, ReasoningItem, ToolItem, TurnItem, UserItem } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, plural } from '../../lib/utils'
+import { COMMENTS_MARKER } from '../../lib/comments'
 import { GIT_COMMAND_ICON, gitCommandFor } from '../../lib/gitCommands'
 import { thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
 import { useStore } from '../../store'
@@ -41,12 +42,42 @@ function planBody(text: string): string {
   return split < 0 ? text : text.slice(split + 2)
 }
 
+/** The comments sent with a message, as one card that opens to the list. */
+function SentComments({ comments }: { comments: NonNullable<UserItem['prompt']>['comments'] & object }): ReactNode {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="flex min-w-0 max-w-[85%] flex-col items-end gap-1.5">
+      <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-2xl border border-line bg-bg px-3 text-[13px] font-medium text-fg hover:[background-image:linear-gradient(var(--bg-hover),var(--bg-hover))]">
+        <MessageSquareText size={14} className="text-muted" />
+        {comments.length} {comments.length === 1 ? 'comment' : 'comments'}
+      </button>
+      {open && (
+        <div className="w-full rounded-xl border border-line bg-elev p-1">
+          {comments.map((comment, index) => (
+            <div key={index} className="flex items-start gap-2 rounded-lg px-2 py-1.5">
+              <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded bg-[#ff3b30] text-[10px] font-semibold text-white">{index + 1}</span>
+              <div className="min-w-0 flex-1 text-[12.5px]">
+                <div className="truncate text-[11.5px] text-subtle">{comment.source}{comment.detail ? ` · ${comment.detail}` : ''}</div>
+                <div className="selectable whitespace-pre-wrap break-words text-fg">{comment.note}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const UserMessage = memo(function UserMessage({ item, chatId }: { item: UserItem; chatId: string }): ReactNode {
   const openAttachment = useStore((s) => s.openAttachment)
   const openFile = useStore((s) => s.openFile)
   const idle = useStore((s) => s.chats[chatId]?.status !== 'running' && s.chats[chatId]?.status !== 'awaiting')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<{ text: string; files: boolean } | null>(null)
+  // The comment list at the end of the text is shown as a card instead.
+  const sentComments = item.prompt?.comments ?? []
+  const cut = sentComments.length ? item.text.indexOf(COMMENTS_MARKER) : -1
+  const shownText = cut >= 0 ? item.text.slice(0, cut).trim() : item.text
   const revert = (messageOnly = false): void => {
     setError(null)
     setBusy(true)
@@ -75,6 +106,16 @@ const UserMessage = memo(function UserMessage({ item, chatId }: { item: UserItem
           })}
         </div>
       )}
+      {sentComments.length > 0 && (
+        <div className="mb-1.5 flex items-start justify-end gap-1.5">
+          {!shownText && item.revertible && idle && (
+            <IconButton label="Revert to before this message" size="sm" disabled={busy} onClick={() => revert()} className="mt-1.5 shrink-0 text-subtle">
+              <Undo2 size={14} />
+            </IconButton>
+          )}
+          <SentComments comments={sentComments} />
+        </div>
+      )}
       {item.mode && <div className="mb-1 text-[11.5px] font-medium text-subtle">{item.mode === 'plan' ? 'Plan mode' : item.mode === 'multitask' ? 'Multitask mode' : 'Ask mode'}</div>}
       {item.plan ? (
         <div role="button" tabIndex={0} title="Open the plan" onClick={() => openFile(item.plan!)} onKeyDown={(event) => { if (event.key === 'Enter') openFile(item.plan!) }} className="-mx-2.5 flex flex-col self-stretch rounded-xl bg-elev py-2 pl-2.5 pr-1.5 text-left shadow-[0_0_0_1px_var(--border)]">
@@ -92,10 +133,10 @@ const UserMessage = memo(function UserMessage({ item, chatId }: { item: UserItem
             <Markdown text={planBody(item.text)} root={item.plan.slice(0, item.plan.lastIndexOf('/'))} />
           </div>
         </div>
-      ) : item.text && (
+      ) : shownText && (
         <div className="-mx-2.5 flex items-start gap-2 self-stretch rounded-xl bg-elev py-2 pl-2.5 pr-1.5 shadow-[0_0_0_1px_var(--border)]">
           <div className="selectable min-w-0 flex-1 whitespace-pre-wrap break-words text-[14.7px] leading-[1.55] text-fg">
-            <MessageText text={item.text} mentions={item.mentions} />
+            <MessageText text={shownText} mentions={item.mentions} />
           </div>
           {item.revertible && idle && (
             <IconButton label="Revert to before this message" size="sm" disabled={busy} onClick={() => revert()} className="shrink-0 text-subtle">

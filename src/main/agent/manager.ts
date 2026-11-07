@@ -15,6 +15,7 @@ import {
   type ResolvedModel,
   type SendInput,
   type Subscription,
+  type ToolItem,
   type UiEvent,
   type UserItem,
   type WorktreeInfo,
@@ -35,7 +36,11 @@ import { terminals } from '../services/terminal'
 import { stopRevertedBackgroundProcesses } from '../tools/shell'
 import { generateTitle, MissingKeyError } from '../services/openrouter'
 import { store } from '../store'
-import { errorMessage, isAbortError, newId, oneLine, truncateMiddle } from '../util'
+import { errorMessage, isAbortError, mimeOf, newId, oneLine, truncateMiddle } from '../util'
+import { PLAN_ARTIFACT } from '@shared/artifacts'
+import { stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { Session, type Turn } from './session'
 import type { PendingEvent } from '../tools/events'
 import { AgentTeam } from './team'
@@ -618,6 +623,14 @@ class ChatManager {
         const after = await this.checkpoint(session)
         if (after) mark.after = after
         else delete session.doc.engine.checkpoints![userItem.id]
+      }
+      // Plan mode has no Present tool, so a plan written or revised this turn always ends as a card.
+      if (mode === 'plan' && !failed && !interrupted) {
+        const file = join(homedir(), '.galaxy', session.id, 'artifacts', PLAN_ARTIFACT)
+        const info = await stat(file).catch(() => null)
+        if (info?.isFile() && info.mtimeMs >= startedAt) {
+          session.add<ToolItem>({ id: newId(), kind: 'tool', tool: 'present', name: 'Present', title: 'Plan', input: { files: [file] }, status: 'done', endedAt: Date.now(), meta: { files: [{ path: file, name: 'Plan', mime: mimeOf(file), size: info.size }] } })
+        }
       }
       session.add({ kind: 'turn', durationMs: Date.now() - startedAt, interrupted })
       session.controller = null

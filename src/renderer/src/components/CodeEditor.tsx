@@ -144,9 +144,11 @@ function registerCompletions(): void {
  * The file editor, built on Monaco. Ghost-text completions accept with Tab, and a second Tab
  * jumps to where the model expects the next edit. Ctrl+I opens an inline edit, Ctrl+S saves.
  */
-export function CodeEditor({ path, initial, line, onDirtyChange, onTextChange, onSaved, onCompletingChange }: { path: string; initial: string; line?: number; onDirtyChange?(dirty: boolean): void; onTextChange?(text: string): void; onSaved?(text: string): void; onCompletingChange?(completing: boolean): void }): ReactNode {
+export function CodeEditor({ path, initial, line, onDirtyChange, onTextChange, onSaved, onCompletingChange, onSelect }: { path: string; initial: string; line?: number; onSelect?(selection: { x: number; y: number; quote: string; detail: string } | null): void; onDirtyChange?(dirty: boolean): void; onTextChange?(text: string): void; onSaved?(text: string): void; onCompletingChange?(completing: boolean): void }): ReactNode {
   const host = useRef<HTMLDivElement>(null)
   const editorRef = useRef<Editor | null>(null)
+  const selectRef = useRef(onSelect)
+  selectRef.current = onSelect
   const savedVersion = useRef(0)
   /** Text sent to onTextChange. It comes back as `initial` and must not overwrite newer typing. */
   const reported = useRef(new Set<string>())
@@ -203,6 +205,19 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onTextChange, o
     })
     editorRef.current = editor
     savedVersion.current = model.getAlternativeVersionId()
+    // A selected passage can be commented on: report where it ends on screen.
+    const selecting = editor.onDidChangeCursorSelection((event) => {
+      const selection = event.selection
+      const report = selectRef.current
+      if (!report) return
+      if (selection.isEmpty()) { report(null); return }
+      const place = editor.getScrolledVisiblePosition(selection.getEndPosition())
+      const box = editor.getDomNode()?.getBoundingClientRect()
+      if (!place || !box) { report(null); return }
+      const start = selection.startLineNumber
+      const end = selection.endColumn === 1 && selection.endLineNumber > start ? selection.endLineNumber - 1 : selection.endLineNumber
+      report({ x: box.left + place.left, y: box.top + place.top + place.height, quote: model.getValueInRange(selection), detail: end > start ? `lines ${start}-${end}` : `line ${start}` })
+    })
 
     // A predicted next edit spot, offered after a completion is accepted.
     const jumpKey = editor.createContextKey<boolean>('galaxyJump', false)
@@ -305,6 +320,7 @@ export function CodeEditor({ path, initial, line, onDirtyChange, onTextChange, o
       guard.dispose()
       keys.dispose()
       tracker.dispose()
+      selecting.dispose()
       suggestions.dispose()
       mouse.dispose()
       changes.dispose()

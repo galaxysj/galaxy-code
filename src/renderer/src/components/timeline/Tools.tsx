@@ -1114,7 +1114,7 @@ export function PresentTool({ item }: { item: ToolItem }): ReactNode {
   const openFile = useStore((s) => s.openFile)
   const files = item.meta?.files ?? []
   if (item.status !== 'done' || files.length === 0) {
-    return <Row icon={<FileIcon size={13.5} className="text-subtle" />} title={item.title} live={isLive(item)} trailing={<StatusMark item={item} />} />
+    return <Row icon={item.title === 'Plan' ? <FileText size={13.5} className="text-subtle" /> : <FileIcon size={13.5} className="text-subtle" />} title={item.title} live={isLive(item)} trailing={<StatusMark item={item} />} />
   }
   return (
     <div className="my-2">
@@ -1123,7 +1123,7 @@ export function PresentTool({ item }: { item: ToolItem }): ReactNode {
           return (
             <div key={file.path} className="group/file flex w-full items-center gap-3 rounded-lg border border-line px-4 py-3">
               <div className="flex min-w-0 flex-1 items-center gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-line bg-hover">{artifactTitle(file.path) ? (isScreenshotArtifact(file.path) ? <Camera size={16} className="text-fg" /> : <FileIcon size={16} className="text-fg" />) : <FileTypeIcon name={file.name} size={16} />}</span>
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-line bg-hover">{artifactTitle(file.path) ? (isScreenshotArtifact(file.path) ? <Camera size={16} className="text-fg" /> : artifactTitle(file.path) === 'Task' ? <ListTodo size={16} className="text-fg" /> : <FileText size={16} className="text-fg" />) : <FileTypeIcon name={file.name} size={16} />}</span>
                 <button type="button" onClick={() => openFile(file.path)} className="min-w-0 flex-1 text-left" title={artifactTitle(file.path) ? undefined : file.path}>
                   <span className="block truncate text-[14.3px] font-medium text-fg">{isScreenshotArtifact(file.path) ? artifactTitle(file.path) : file.name}</span>
                   <span className="block text-[12.1px] text-subtle">{formatBytes(file.size)}</span>
@@ -1222,7 +1222,11 @@ export const ToolBlock = memo(function ToolBlock({ item, ctx }: { item: ToolItem
   // Medium keeps commands and edits on their own line, without the card; approvals still get the full card.
   // An edit or create that could not run or changed nothing reads as one plain line, "Edit attempted", not a card; the reason is its tooltip.
   const failedEdit = (item.tool === 'edit' || item.tool === 'create') && (item.status === 'error' || isNoChange(item))
-  if ((medium && ['bash', 'edit', 'create'].includes(item.tool) || failedEdit) && !item.approval && item.status !== 'awaiting') return <ExploreLine item={item} />
+  // A command that could not run is one plain line, "Run attempted", in every view.
+  const failedRun = item.tool === 'bash' && !!attemptedTitle(item)
+  // Artifacts read as plain lines, one per file, in every density, rather than a card that merges them into "2 artifacts".
+  const artifactEdit = (item.tool === 'edit' || item.tool === 'create') && !!item.meta?.diffs?.length && item.meta.diffs.every((diff) => artifactTitle(diff.path))
+  if ((medium && ['bash', 'edit', 'create'].includes(item.tool) || failedEdit || failedRun || artifactEdit) && !item.approval && item.status !== 'awaiting') return <ExploreLine item={item} />
   if (isAgentMessage(item)) {
     if (isHiddenAgentMessage(item)) return null
     const to = String((item.input as { to?: string } | null)?.to ?? 'agent')

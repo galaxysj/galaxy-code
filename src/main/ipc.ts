@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { isDocumentArtifact, parseFrontMatter } from '@shared/artifacts'
@@ -389,6 +389,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'editor.inlineEdit': (request: InlineEditRequest) => inlineEdit(request, (text) => emitUi({ type: 'inline-edit-delta', requestId: request.requestId, text })),
     'editor.cancelInlineEdit': (requestId: string) => cancelInlineEdit(requestId),
     'editor.terminalCommand': (request: TerminalCommandRequest) => terminalCommand(request, (text) => emitUi({ type: 'inline-edit-delta', requestId: request.requestId, text })),
+    'files.saveCopy': async (path: string, name: string) => {
+      const win = requestWindow()
+      const options = { title: 'Save a copy', defaultPath: join(app.getPath('documents'), name) }
+      const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+      if (result.canceled || !result.filePath) return null
+      await copyFile(expandHome(path), result.filePath)
+      return result.filePath
+    },
     'files.reveal': (path: string) => shell.showItemInFolder(expandHome(path)),
     'files.openExternal': async (target: string) => {
       if (/^(https?|mailto):/i.test(target)) await shell.openExternal(target)
@@ -415,6 +423,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'browser.stop': (id?: string) => browser.stop(id, requestWindow() ?? undefined),
     'browser.state': (id?: string) => browser.state(id, requestWindow() ?? undefined),
     'browser.frame': (id?: string) => browser.frame(id, requestWindow() ?? undefined),
+    'browser.pick': (id?: string) => browser.pick(id, requestWindow() ?? undefined),
+    'browser.cancelPick': (id?: string) => browser.cancelPick(id, requestWindow() ?? undefined),
     'browser.clearData': (kind: BrowserDataKind) => browser.clearData(kind),
     'computer.permissions': () => computer.permissions(),
     'computer.requestPermission': (kind: ComputerPermission) => computer.requestPermission(kind),

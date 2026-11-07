@@ -26,6 +26,7 @@ import {
   Plug,
   Plus,
   MessageCircle,
+  MessageSquareText,
   MessagesSquare,
   Package,
   Play,
@@ -51,6 +52,7 @@ import type { ModelBrand } from '@shared/models'
 import { ApprovalPrompt } from './ApprovalPrompt'
 import { SubscriptionPicker } from './SubscriptionPicker'
 import { AppContextCard } from './AppContextCard'
+import { buildComments, COMMENTS_MARKER, type ComposerComment } from '../lib/comments'
 import { Button, IconButton, MenuItem, MenuSeparator, Popover, Segmented, SkillIcon, Spinner, TextInput } from './ui'
 import { openLink } from '../lib/openLink'
 
@@ -456,6 +458,8 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const key = edit?.key ?? chat?.id ?? 'new'
   const text = useStore((s) => s.composerText[key] ?? '')
   const attachments = useStore((s) => s.composerAttachments[key]) ?? EMPTY
+  const comments = useStore((s) => s.composerComments[key]) ?? NO_COMMENTS
+  const setComments = useStore((s) => s.setComposerComments)
   const setText = useStore((s) => s.setComposerText)
   const setAttachments = useStore((s) => s.setComposerAttachments)
   const send = useStore((s) => s.send)
@@ -540,8 +544,12 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
     if (!edit) return
     const state = useStore.getState()
     if (!state.composerText[edit.key] && !state.composerAttachments[edit.key]?.length) {
-      setText(edit.key, edit.message.text)
+      // The comment list at the end of the text comes back as comments, not as text.
+      const sent = edit.message.mentions?.comments ?? []
+      const cut = sent.length ? edit.message.text.indexOf(COMMENTS_MARKER) : -1
+      setText(edit.key, cut >= 0 ? edit.message.text.slice(0, cut).trim() : edit.message.text)
       setAttachments(edit.key, edit.message.attachments)
+      if (sent.length) state.setComposerComments(edit.key, sent.map((comment) => ({ ...comment, id: crypto.randomUUID() })))
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const mirror = useRef<HTMLDivElement>(null)
@@ -569,8 +577,8 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
   const projectId = chat?.projectId ?? draft.projectId
   const hasOwnMessage = !chat?.side || (items ?? []).some((item) => item.kind === 'user' && !item.parentId)
   const followUp = !!chat && !edit && hasOwnMessage
-  const compact = followUp && !text.includes('\n') && !wrapped && attachments.length === 0 && !acp && !mode
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && !!model
+  const compact = followUp && !text.includes('\n') && !wrapped && attachments.length === 0 && comments.length === 0 && !acp && !mode
+  const canSend = (text.trim().length > 0 || attachments.length > 0 || comments.length > 0) && !!model
 
   useEffect(() => {
     let current = true
@@ -904,6 +912,14 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
     return window.galaxy.onUiEvent((event) => { if (event.type === 'app-context' && event.attachments.length) textarea.current?.focus() })
   }, [edit])
 
+  // A comment box's Send button asks this composer to send, once its comments have reached it.
+  const sendRequest = useStore((s) => s.composerSend)
+  const submitRef = useRef<(steer?: boolean) => Promise<void>>(async () => {})
+  useEffect(() => {
+    if (edit || sendRequest !== key) return
+    useStore.setState({ composerSend: null })
+    void submitRef.current()
+  }, [sendRequest, key, edit])
   const submit = async (steer = false): Promise<void> => {
     if (!canSend) return
     if (!edit && /^\/compact\s*$/i.test(text.trim()) && canCompact) {
@@ -920,7 +936,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
       void openSideChat(text.slice(side[0].length), chat?.id)
       return
     }
-    const outgoing = text
+    let outgoing = text
     const selected = selectedMentions.filter((item) => outgoing.includes(item.token))
     const mentionedChats: PromptMentions['chats'] = []
     for (const item of selected) {
@@ -971,13 +987,29 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
         ...(item.kind === 'mcp' && !item.tool ? { title: item.server } : {})
       }))
     }
-    const files = attachments
+    let files = attachments
+    // Comments go after the message, and the pictures they point at go with it, each area numbered as in the text.
+    if (comments.length) {
+      try {
+        const built = await buildComments(comments)
+        const pictures = await Promise.all(built.images.map((image) => window.galaxy.files.attachFromData(image.name, 'image/png', image.dataUrl.slice(image.dataUrl.indexOf(',') + 1))))
+        files = [...attachments, ...pictures]
+        outgoing = [outgoing.trim(), built.text].filter(Boolean).join('\n\n')
+        mentions.comments = comments.map(({ source, detail, note }) => ({ source, detail, note }))
+        setComments(key, [])
+      } catch (error) {
+        useStore.getState().notify(String(error), 'error')
+        return
+      }
+    }
     setText(key, '')
     setAttachments(key, [])
     setSelectedMentions([])
     setMention(null)
     void send(outgoing, files, mentions, steer, mode, undefined, chat?.id ?? null)
   }
+
+  submitRef.current = submit
 
   const onPaste = (event: ClipboardEvent): void => {
     const files = [...event.clipboardData.files]
@@ -1099,6 +1131,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
             })}
           </div>
         )}
+        {comments.length > 0 && <CommentsCard comments={comments} onChange={(next) => setComments(key, next)} />}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 px-3.5 pt-3.5">
             {attachments.map((file) => {
@@ -1285,6 +1318,38 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
 }
 
 const EMPTY: Attachment[] = []
+const NO_COMMENTS: ComposerComment[] = []
+
+/** The comments waiting to be sent, as one card; opening it lists them, each removable. */
+function CommentsCard({ comments, onChange }: { comments: ComposerComment[]; onChange(next: ComposerComment[]): void }): ReactNode {
+  const [open, setOpen] = useState(false)
+  const anchor = useRef<HTMLDivElement>(null)
+  return (
+    <div className="px-3.5 pt-3.5">
+      <div ref={anchor} className="inline-flex h-10 items-center whitespace-nowrap rounded-2xl border border-line bg-bg text-[13.5px] font-medium text-fg">
+        <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-full items-center gap-2.5 rounded-l-2xl pl-3.5 pr-2 hover:bg-hover">
+          <MessageSquareText size={15} className="text-muted" />
+          {comments.length} {comments.length === 1 ? 'comment' : 'comments'}
+        </button>
+        <button type="button" title="Remove all comments" onClick={() => { onChange([]); setOpen(false) }} className="mr-1.5 flex h-6 w-6 items-center justify-center rounded-full text-subtle hover:bg-active hover:text-fg"><X size={14} /></button>
+      </div>
+      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} placement="top-start">
+        <div className="max-h-[280px] w-[340px] overflow-y-auto p-1">
+          {comments.map((comment, index) => (
+            <div key={comment.id} className="group/comment flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-hover">
+              <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded bg-[#ff3b30] text-[10px] font-semibold text-white">{index + 1}</span>
+              <div className="min-w-0 flex-1 text-[12.5px]">
+                <div className="truncate text-[11.5px] text-subtle">{comment.source}{comment.detail ? ` · ${comment.detail}` : ''}</div>
+                <div className="whitespace-pre-wrap break-words text-fg">{comment.note}</div>
+              </div>
+              <button type="button" title="Remove comment" onClick={() => { const next = comments.filter((entry) => entry.id !== comment.id); onChange(next); if (!next.length) setOpen(false) }} className="shrink-0 rounded p-0.5 text-subtle hover:bg-active hover:text-fg"><X size={13} /></button>
+            </div>
+          ))}
+        </div>
+      </Popover>
+    </div>
+  )
+}
 
 /** Why the last run stopped, above the message box. */
 function ChatError({ message, onDismiss }: { message: string; onDismiss: () => void }): ReactNode {
@@ -1406,8 +1471,9 @@ function DiffCard({ root, items, dirty }: { root: string | null; items: Item[] |
 type ShellRow = { id: string; name: string; log: string; exited: boolean; code: number | null }
 
 /** The agent's background commands. Clicking one opens its output in the side panel, read-only; Stop ends it. */
-function ProcessCard({ chatId, shells }: { chatId: string; shells: ShellRow[] | null }): ReactNode {
+function ProcessCard({ chatId, shells, stoppingAll }: { chatId: string; shells: ShellRow[] | null; stoppingAll: boolean }): ReactNode {
   const openFile = useStore((s) => s.openFile)
+  const [stopping, setStopping] = useState<Set<string>>(new Set())
   if (!shells) return <div className="flex justify-center py-4"><Spinner size={14} className="text-subtle" /></div>
   if (shells.length === 0) return <div className="px-3 py-4 text-center text-[12px] text-subtle">No background processes.</div>
   return (
@@ -1417,10 +1483,10 @@ function ProcessCard({ chatId, shells }: { chatId: string; shells: ShellRow[] | 
           <button type="button" onClick={() => { openFile(shell.log); useStore.getState().updatePanelTab(shell.log, { customTitle: shell.name }) }} className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2 text-left text-[12.5px]">
             <SquareTerminal size={13.5} className="shrink-0 text-subtle" />
             <span className="min-w-0 flex-1 truncate text-fg">{shell.name}</span>
-            <span className={cn('shrink-0 text-[11.5px]', shell.exited ? 'text-subtle' : 'text-ok')}>{shell.exited ? (shell.code ? `Exited ${shell.code}` : 'Exited') : 'Running'}</span>
+            <span className={cn('shrink-0 text-[11.5px]', shell.exited || stopping.has(shell.id) || stoppingAll ? 'text-subtle' : 'text-ok')}>{shell.exited ? (shell.code ? `Exited ${shell.code}` : 'Exited') : stopping.has(shell.id) || stoppingAll ? 'Stopping...' : 'Running'}</span>
           </button>
           <span className="flex w-14 shrink-0 justify-end pr-1.5">
-            {!shell.exited && <button type="button" onClick={() => void window.galaxy.files.stopShells(chatId, shell.id)} className="h-5 rounded px-1.5 text-[11px] text-muted hover:bg-active hover:text-fg">Stop</button>}
+            {!shell.exited && !stopping.has(shell.id) && !stoppingAll && <button type="button" onClick={() => { setStopping((current) => new Set(current).add(shell.id)); void window.galaxy.files.stopShells(chatId, shell.id) }} className="h-5 rounded px-1.5 text-[11px] text-muted hover:bg-active hover:text-fg">Stop</button>}
           </span>
         </div>
       ))}
@@ -1472,6 +1538,7 @@ function PanelShortcuts({ chat }: { chat: Chat }): ReactNode {
   const [card, setCard] = useState<ShortcutCard | null>(null)
   const [shells, setShells] = useState<ShellRow[] | null>(null)
   const [committing, setCommitting] = useState(false)
+  const [stoppingAll, setStoppingAll] = useState(false)
   // The process list refreshes while its card is open.
   useEffect(() => {
     if (card !== 'terminal') return
@@ -1482,6 +1549,7 @@ function PanelShortcuts({ chat }: { chat: Chat }): ReactNode {
     return () => window.clearInterval(timer)
   }, [card, chat.id])
   const running = (shells ?? []).filter((shell) => !shell.exited).length
+  useEffect(() => { if (running === 0) setStoppingAll(false) }, [running])
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!card) return
@@ -1518,13 +1586,13 @@ function PanelShortcuts({ chat }: { chat: Chat }): ReactNode {
               </Button>
             )}
             {card === 'terminal' && running > 0 && (
-              <Button size="sm" onClick={() => void window.galaxy.files.stopShells(chat.id)}>
-                <Square size={11} fill="currentColor" /> Stop all
+              <Button size="sm" disabled={stoppingAll} onClick={() => { setStoppingAll(true); void window.galaxy.files.stopShells(chat.id) }}>
+                {stoppingAll ? <Spinner size={12} /> : <Square size={11} fill="currentColor" />} {stoppingAll ? 'Stopping...' : 'Stop all'}
               </Button>
             )}
           </div>
           <div className="max-h-[300px] overflow-y-auto p-1">
-            {card === 'diff' ? <DiffCard root={root} items={items} dirty={dirty} /> : card === 'terminal' ? <ProcessCard chatId={chat.id} shells={shells} /> : <ArtifactCard chat={chat} />}
+            {card === 'diff' ? <DiffCard root={root} items={items} dirty={dirty} /> : card === 'terminal' ? <ProcessCard chatId={chat.id} shells={shells} stoppingAll={stoppingAll} /> : <ArtifactCard chat={chat} />}
           </div>
         </div>
       )}

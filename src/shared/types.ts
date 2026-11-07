@@ -450,6 +450,8 @@ export interface PromptMentions {
   git?: GitCommand
   /** Where each pick sits in the text, so the message can show it as a chip. */
   chips?: MentionChip[]
+  /** Comments sent with the message, so it can show them as a card. Their text is also at the end of the message. */
+  comments?: { source: string; detail?: string; note: string }[]
 }
 
 export type GitCommand = 'commit' | 'commit-push' | 'push'
@@ -671,6 +673,17 @@ export type UiEvent =
   | { type: 'computer-frame'; windowId: number; jpeg: Uint8Array }
   | { type: 'browser-state'; state: BrowserState; tabId?: string }
   | { type: 'menu'; action: 'new-chat' | 'settings' | 'toggle-sidebar' | 'toggle-panel' | 'open-files' | 'open-browser' | 'open-terminal' }
+
+/** What the user marked on a page in comment mode: an element, or a rectangle they dragged. Pixels are CSS pixels of the viewport. */
+export interface BrowserPick {
+  kind: 'element' | 'region'
+  rect: { x: number; y: number; width: number; height: number }
+  viewport: { width: number; height: number }
+  url: string
+  title: string
+  /** The element clicked, or the one under the middle of the rectangle. */
+  element: { selector: string; tag: string; text: string; html: string } | null
+}
 
 export interface BrowserState {
   favicon?: string
