@@ -31,6 +31,7 @@ export interface BrowserAction {
     | 'wait'
     | 'console'
     | 'dialog'
+    | 'resize'
   url?: string
   ref?: number
   selector?: string
@@ -51,6 +52,9 @@ export interface BrowserAction {
   full_text?: boolean
   /** dialog only: accept (default) or dismiss the next alert, confirm or prompt. `text` answers a prompt. */
   accept?: boolean
+  /** resize only: the page size in CSS pixels; leave both out to go back to the panel's size. */
+  width?: number
+  height?: number
 }
 
 export interface BrowserResult {
@@ -801,6 +805,19 @@ class BrowserService {
         }
         await sleep(200, signal)
         return { text: await this.describe(false) }
+      }
+      case 'resize': {
+        // The page lays out at this size, as on a device of that size, whatever the panel's size.
+        if (!action.width && !action.height) {
+          await this.command('Emulation.clearDeviceMetricsOverride', {})
+          await sleep(150, signal)
+          return { text: `Restored the page size to the panel.\n\n${await this.describe(false)}` }
+        }
+        const width = Math.round(Math.max(200, Math.min(3840, action.width ?? this.viewport?.width ?? 1280)))
+        const height = Math.round(Math.max(200, Math.min(2400, action.height ?? this.viewport?.height ?? 800)))
+        await this.command('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 0, mobile: width < 600 })
+        await sleep(150, signal)
+        return { text: `Resized the page to ${width}x${height}.\n\n${await this.describe(false)}` }
       }
       case 'screenshot': {
         const image = await this.capture()

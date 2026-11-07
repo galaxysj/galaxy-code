@@ -119,6 +119,8 @@ function browserStepTitle(step: Record<string, unknown>): string {
       return `Scrolled ${String(step.direction ?? 'down')}${hasPoint(step) ? ` at ${target}` : ''}`
     case 'screenshot':
       return 'Took a screenshot'
+    case 'resize':
+      return step.width || step.height ? `Resized the page to ${String(step.width ?? '')}x${String(step.height ?? '')}` : 'Restored the page size'
     case 'dialog':
       return step.accept === false ? 'Set the next dialog to be dismissed' : 'Set the next dialog to be accepted'
     case 'evaluate':
@@ -204,7 +206,7 @@ Examples: {"title":"Open example.com and read the page","steps":[{"action":"navi
           properties: {
             action: {
               type: 'string',
-              enum: ['create', 'navigate', 'navigate_file', 'snapshot', 'click', 'drag', 'type', 'press', 'scroll', 'screenshot', 'evaluate', 'back', 'forward', 'reload', 'wait', 'console', 'dialog', 'tabs', 'close']
+              enum: ['create', 'navigate', 'navigate_file', 'snapshot', 'click', 'drag', 'type', 'press', 'scroll', 'screenshot', 'evaluate', 'back', 'forward', 'reload', 'wait', 'console', 'dialog', 'resize', 'tabs', 'close']
             },
             url: { type: 'string' },
             path: { type: 'string', description: 'navigate_file only: the local file to open.' },
@@ -224,6 +226,8 @@ Examples: {"title":"Open example.com and read the page","steps":[{"action":"navi
             amount: { type: 'integer' },
             script: { type: 'string' },
             seconds: { type: 'number' },
+            width: { type: 'integer', description: 'resize only: page width in CSS pixels, such as 390 for a phone or 1440 for a desktop. Leave out width and height to go back to the panel size.' },
+            height: { type: 'integer', description: 'resize only: page height in CSS pixels.' },
             accept: { type: 'boolean', description: 'dialog only: accept (default) or dismiss the next alert, confirm or prompt. Put the step before the action that opens it; text answers a prompt. Without it, confirms and prompts are dismissed while you work.' }
           },
           required: ['action']
