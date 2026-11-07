@@ -16,52 +16,73 @@ async function git(cwd: string, args: string[], timeout = 20000): Promise<{ ok: 
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'out', '.next', '.venv', 'venv', '__pycache__', 'target', '.cache', '.turbo', 'DerivedData'])
 
 /**
- * The repository a folder works in: the one it sits inside, or else the first one found in its subfolders
- * (breadth first, a few levels down), so a folder that holds a repo is treated as that repo.
+ * The repositories a folder works in: the one it sits inside, or else every one found in its subfolders
+ * (a few levels down, not inside another repo), so a folder that holds repos is treated as those repos.
  */
-export async function repoRoot(path: string, depth = 3): Promise<string | null> {
-  if (!(await exists(path))) return null
+export async function repoRoots(path: string, depth = 3): Promise<string[]> {
+  if (!(await exists(path))) return []
   const inside = await git(path, ['rev-parse', '--show-toplevel'])
-  if (inside.ok && inside.out) return path
+  if (inside.ok && inside.out) return [path]
+  const found: string[] = []
   let level = [path]
   for (let i = 0; i < depth && level.length; i++) {
     const next: string[] = []
     for (const dir of level) {
       const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
-      if (entries.some((entry) => entry.name === '.git') && dir !== path) return dir
       for (const entry of entries) {
-        if (entry.isDirectory() && !entry.isSymbolicLink() && !entry.name.startsWith('.') && !SKIP_DIRS.has(entry.name)) next.push(join(dir, entry.name))
+        if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue
+        const child = join(dir, entry.name)
+        if (await exists(join(child, '.git'))) found.push(child)
+        else next.push(child)
       }
     }
-    for (const dir of next) if (await exists(join(dir, '.git'))) return dir
     level = next
   }
-  return null
+  return found.sort()
 }
 
-/** The repository to run Git in for a folder, or the folder itself when none is found. */
+/** The first repository to run Git in for a folder, or the folder itself when none is found. */
 export async function repoCwd(path: string): Promise<string> {
-  return (await repoRoot(path)) ?? path
+  return (await repoRoots(path))[0] ?? path
 }
 
 export async function gitInfo(path: string): Promise<GitInfo> {
-  const root = await repoRoot(path)
-  if (!root) return { isRepo: false, branch: null }
-  const branch = await git(root, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  const roots = await repoRoots(path)
+  if (!roots.length) return { isRepo: false, branch: null }
+  if (roots.length > 1) return { isRepo: true, branch: null }
+  const branch = await git(roots[0], ['rev-parse', '--abbrev-ref', 'HEAD'])
   return { isRepo: true, branch: branch.ok ? branch.out : null }
 }
 
-/** What the review panel needs to pick its main Git action. */
+/** What the review panel needs to pick its main Git action, across every repository in the folder. */
 export async function gitState(cwd: string): Promise<{ isRepo: boolean; dirty: boolean; hasRemote: boolean }> {
-  cwd = await repoCwd(cwd)
-  if (!(await gitInfo(cwd)).isRepo) return { isRepo: false, dirty: false, hasRemote: false }
-  const [status, remotes] = await Promise.all([git(cwd, ['status', '--porcelain']), git(cwd, ['remote'])])
-  return { isRepo: true, dirty: status.ok && status.out !== '', hasRemote: remotes.ok && remotes.out !== '' }
+  const roots = await repoRoots(cwd)
+  if (!roots.length) return { isRepo: false, dirty: false, hasRemote: false }
+  const states = await Promise.all(roots.map(async (root) => {
+    const [status, remotes] = await Promise.all([git(root, ['status', '--porcelain']), git(root, ['remote'])])
+    return { dirty: status.ok && status.out !== '', hasRemote: remotes.ok && remotes.out !== '' }
+  }))
+  return { isRepo: true, dirty: states.some((state) => state.dirty), hasRemote: states.some((state) => state.hasRemote) }
+}
+
+/** Commits every repository in the folder that has changes, each with its own message. */
+export async function instantCommit(cwd: string, push: boolean): Promise<{ hash: string; message: string; pushed: { branch: string; remote: string } | null }> {
+  const roots = await repoRoots(cwd)
+  if (roots.length <= 1) return instantCommitRepo(roots[0] ?? cwd, push)
+  const dirty: string[] = []
+  for (const root of roots) if ((await git(root, ['status', '--porcelain'])).out !== '') dirty.push(root)
+  if (!dirty.length) throw new Error('There are no changes to commit.')
+  const results = []
+  for (const root of dirty) results.push({ root, ...(await instantCommitRepo(root, push)) })
+  return {
+    hash: results.map((result) => `${basename(result.root)} ${result.hash}`).join(', '),
+    message: results.map((result) => `${basename(result.root)}: ${result.message.split('\n')[0]}`).join('\n'),
+    pushed: results.find((result) => result.pushed)?.pushed ?? null
+  }
 }
 
 /** Instant commit: stage everything, have the commit message model write the message, commit, and push when asked. */
-export async function instantCommit(cwd: string, push: boolean): Promise<{ hash: string; message: string; pushed: { branch: string; remote: string } | null }> {
-  cwd = await repoCwd(cwd)
+async function instantCommitRepo(cwd: string, push: boolean): Promise<{ hash: string; message: string; pushed: { branch: string; remote: string } | null }> {
   // An account model falls back to the default when its account is switched off.
   const model = usableUtilityModels(CommitMessageModel, store.settings.accounts, unavailableAccounts(store.settings)).find((entry) => entry.ID === store.settings.commitMessageModelId) ?? CommitMessageModel[0]
   if (model.Subscription === 'Default' && !store.openRouterKey) throw new Error('Instant commit writes the message with an OpenRouter model. Add an OpenRouter key in Settings first.')
@@ -80,7 +101,7 @@ export async function instantCommit(cwd: string, push: boolean): Promise<{ hash:
   const committed = await run('git', ['commit', '-m', message], { cwd, timeout: 120000 })
   if (committed.code !== 0) throw new Error(`git commit failed:\n${(committed.stderr || committed.stdout).trim()}`)
   const hash = (await git(cwd, ['rev-parse', '--short', 'HEAD'])).out
-  return { hash, message, pushed: push ? await pushBranch(cwd) : null }
+  return { hash, message, pushed: push ? await pushRepo(cwd) : null }
 }
 
 /**
@@ -88,7 +109,19 @@ export async function instantCommit(cwd: string, push: boolean): Promise<{ hash:
  * only remote, and becomes tracked there. Never prompts for credentials.
  */
 export async function pushBranch(cwd: string): Promise<{ branch: string; remote: string }> {
-  cwd = await repoCwd(cwd)
+  const roots = await repoRoots(cwd)
+  if (roots.length <= 1) return pushRepo(roots[0] ?? cwd)
+  const pushed = []
+  for (const root of roots) {
+    const ahead = await git(root, ['rev-list', '--count', '@{u}..HEAD'])
+    if (ahead.ok && ahead.out === '0') continue
+    pushed.push(await pushRepo(root))
+  }
+  if (!pushed.length) throw new Error('Every repository is up to date with its remote.')
+  return pushed[0]
+}
+
+async function pushRepo(cwd: string): Promise<{ branch: string; remote: string }> {
   const branch = await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])
   if (!branch.ok || branch.out === 'HEAD') throw new Error('No branch is checked out, so there is nothing to push.')
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' }

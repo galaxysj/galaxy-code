@@ -413,7 +413,9 @@ export function liveContextBlock(ctx: PromptContext): string {
 
 const BRIDGE_TASKS_AND_ARTIFACTS = `# Galaxy Code task list and artifacts
 
-Your task list is Galaxy Code's task.md, and your documents are Galaxy Code artifacts; the user sees only these in the app. Do not use your own todo, task or plan tools (such as TodoWrite, TaskCreate, TaskUpdate, update_plan or a plan update) for them. Write and update task.md and every artifact only with galaxy.Edit, never with your own write or edit tool, and hand finished deliverables to the user with galaxy.Present.`
+Your task list is Galaxy Code's task.md, and your documents are Galaxy Code artifacts; the user sees only these in the app. Do not use your own todo, task or plan tools (such as TodoWrite, TaskCreate, TaskUpdate, update_plan or a plan update) for them. Write and update task.md and every artifact only with galaxy.Edit, never with your own write or edit tool, and hand finished deliverables to the user with galaxy.Present.
+
+When the user asks for an artifact (in any language), a document, a report or the task list, they mean these Galaxy Code files: write them in this chat's artifacts folder, never in the project or workspace. Never create them with other MCP servers or connectors, such as claude.ai Docs, Artifact, Google Drive or Notion tools, unless the user names that service.`
 
 /**
  * For an ACP agent, which has no system prompt of its own to fill: Galaxy Code's whole system prompt, sent with the first message of
@@ -424,7 +426,7 @@ export function acpSystemPrompt(ctx: PromptContext, toolNames: string[]): string
 }
 
 export function acpTurnContext(ctx: PromptContext): string {
-  return `<galaxy_context>\n# Environment\n\n${environmentBlock(ctx)}\n\n${permissionBlock(ctx.permissionMode)}\n\n${liveContextBlock(ctx)}\n</galaxy_context>`
+  return `<galaxy_context>\n# Environment\n\n${environmentBlock(ctx)}\n\n${permissionBlock(ctx.permissionMode)}\n\n${BRIDGE_TASKS_AND_ARTIFACTS}\n\n${liveContextBlock(ctx)}\n</galaxy_context>`
 }
 
 export function buildBridgeInstructions(ctx: PromptContext, bridgeTools: string[], mentions?: PromptMentions, readsOnItsOwn?: string): string {

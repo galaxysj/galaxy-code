@@ -6,7 +6,7 @@ import type { FileDiff } from '@shared/types'
 import type { ReviewCommit, ReviewOptions } from '@shared/api'
 import { isReviewBinaryPath, isReviewTextDiff } from '@shared/review'
 import { diffFromUnified, makeDiff } from '../tools/diff'
-import { gitInfo, repoCwd } from './git'
+import { gitInfo, repoRoots } from './git'
 import { looksBinary } from '../util'
 
 function git(cwd: string, args: string[], timeoutMs = 30000): Promise<string> {
@@ -106,7 +106,13 @@ export async function initReviewRepository(cwd: string): Promise<void> {
 }
 
 export async function reviewCommits(cwd: string): Promise<ReviewCommit[]> {
-  cwd = await repoCwd(cwd)
+  const roots = await repoRoots(cwd)
+  if (roots.length <= 1) return repoCommits(roots[0] ?? cwd)
+  const all = (await Promise.all(roots.map((root) => repoCommits(root).catch(() => [])))).flat()
+  return all.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 100)
+}
+
+async function repoCommits(cwd: string): Promise<ReviewCommit[]> {
   if (!(await gitInfo(cwd)).isRepo) return []
   const refs = await git(cwd, ['for-each-ref', '--count=1', '--format=%(objectname)'])
   const head = await git(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']).catch(() => '')
@@ -119,7 +125,21 @@ export async function reviewCommits(cwd: string): Promise<ReviewCommit[]> {
 }
 
 async function loadReview(cwd: string, options?: ReviewOptions): Promise<{ isRepo: boolean; diffs: FileDiff[] }> {
-  cwd = await repoCwd(cwd)
+  const roots = await repoRoots(cwd)
+  if (roots.length <= 1) return loadRepoReview(roots[0] ?? cwd, options)
+  if (options?.mode === 'commit') {
+    // A commit belongs to one of the repositories.
+    for (const root of roots) {
+      const found = await git(root, ['cat-file', '-e', `${options.commit ?? ''}^{commit}`]).then(() => true, () => false)
+      if (found) return loadRepoReview(root, options)
+    }
+    throw new Error('Select a commit.')
+  }
+  const results = await Promise.all(roots.map((root) => loadRepoReview(root, options).catch(() => ({ isRepo: true, diffs: [] as FileDiff[] }))))
+  return { isRepo: true, diffs: results.flatMap((result) => result.diffs) }
+}
+
+async function loadRepoReview(cwd: string, options?: ReviewOptions): Promise<{ isRepo: boolean; diffs: FileDiff[] }> {
   if (!(await gitInfo(cwd)).isRepo) return { isRepo: false, diffs: [] }
   const mode = options?.mode ?? 'uncommitted'
   const flags = ['--relative', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', '--no-quiet', '--no-exit-code', '--src-prefix=a/', '--dst-prefix=b/']
