@@ -44,7 +44,7 @@ import {
   Scaling,
   X
 } from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import type { FileView, FileDiff } from '@shared/types'
 import type { ReviewCommit } from '@shared/api'
@@ -88,6 +88,46 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
   const pendingComments = useStore((s) => s.composerComments[s.activeChatId ?? 'new']?.length ?? 0)
   const [picked, setPicked] = useState<{ pick: BrowserPick; frame: string } | null>(null)
   const stepAside = (covered && !!frame) || !!picked
+  // Responsive mode, as in Chrome's device toolbar: the page lays out at this size, scaled to fit, and its edges drag.
+  const [responsive, setResponsive] = useState<{ width: number; height: number } | null>(null)
+  const stage = useRef<HTMLDivElement>(null)
+  const [space, setSpace] = useState({ width: 0, height: 0 })
+  useLayoutEffect(() => {
+    const el = stage.current
+    if (!el) return
+    const measure = (): void => setSpace({ width: el.clientWidth, height: el.clientHeight })
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+  const scale = responsive && space.width > 0 ? Math.min(1, (space.width - RESPONSIVE_MARGIN * 2) / responsive.width, (space.height - RESPONSIVE_MARGIN * 2) / responsive.height) : 1
+  const responsiveKey = responsive ? `${responsive.width}x${responsive.height}` : ''
+  useEffect(() => {
+    if (!hasPage) return
+    void window.galaxy.browser.resize(responsive?.width ?? null, responsive?.height ?? null, tabId)
+  }, [responsiveKey, hasPage, tabId])
+  const dragEdge = (edge: 'right' | 'bottom' | 'corner') => (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (!responsive) return
+    event.preventDefault()
+    const start = { x: event.clientX, y: event.clientY, ...responsive, scale }
+    const handle = event.currentTarget
+    handle.setPointerCapture(event.pointerId)
+    const move = (next: PointerEvent): void => {
+      // The page is centered, so a side edge moves half as far as the width changes.
+      const width = edge === 'bottom' ? start.width : Math.round(start.width + ((next.clientX - start.x) * 2) / start.scale)
+      const height = edge === 'right' ? start.height : Math.round(start.height + (next.clientY - start.y) / start.scale)
+      setResponsive({ width: Math.max(200, Math.min(3840, width)), height: Math.max(200, Math.min(2400, height)) })
+    }
+    const end = (): void => {
+      handle.removeEventListener('pointermove', move)
+      handle.removeEventListener('pointerup', end)
+      handle.removeEventListener('pointercancel', end)
+    }
+    handle.addEventListener('pointermove', move)
+    handle.addEventListener('pointerup', end)
+    handle.addEventListener('pointercancel', end)
+  }
 
   useEffect(() => {
     if (!editing) setAddress(state.url)
@@ -198,13 +238,29 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
           </Button>
         )}
         {sending && <CommentBox send x={sending.x} y={sending.y} title="Message" onClose={() => setSending(null)} onSubmit={(note) => { const state = useStore.getState(); const key = state.activeChatId ?? 'new'; const current = state.composerText[key] ?? ''; state.setComposerText(key, current ? `${current.replace(/\s+$/, '')}\n${note.trim()}` : note.trim()) }} />}
-        <ResizeButton tabId={tabId} disabled={!hasPage} />
+        <IconButton label={responsive ? 'Exit responsive mode' : 'Responsive mode: drag the page edges to resize it'} active={!!responsive} disabled={!hasPage} onClick={() => setResponsive(responsive ? null : { width: 390, height: 844 })}>
+          <Scaling size={13.5} />
+        </IconButton>
         <IconButton label="Open in default browser" disabled={!/^https?:/.test(state.url)} onClick={() => void window.galaxy.files.openExternal(state.url)}>
           <ExternalLink size={13.5} />
         </IconButton>
       </div>
-      <div className="relative min-h-0 flex-1">
-        <div ref={host} className="h-full w-full overflow-hidden">
+      {responsive && (
+        <div className="flex h-8 shrink-0 items-center justify-center gap-1.5 border-b border-line text-[11.5px] text-muted">
+          <Dropdown<string>
+            label="Device size"
+            value={RESPONSIVE_SIZES.find((size) => size.width === responsive.width && size.height === responsive.height)?.label ?? 'Custom'}
+            options={[...RESPONSIVE_SIZES.map((size) => ({ value: size.label, label: size.label, hint: `${size.width}×${size.height}` })), { value: 'Custom', label: 'Custom' }]}
+            onChange={(value) => { const size = RESPONSIVE_SIZES.find((entry) => entry.label === value); if (size) setResponsive({ width: size.width, height: size.height }) }}
+          />
+          <SizeInput value={responsive.width} onChange={(width) => setResponsive({ ...responsive, width })} label="Width" />
+          <span>×</span>
+          <SizeInput value={responsive.height} onChange={(height) => setResponsive({ ...responsive, height })} label="Height" />
+          <span className="tabular-nums text-subtle">{Math.round(scale * 100)}%</span>
+        </div>
+      )}
+      <div ref={stage} className={cn('relative min-h-0 flex-1', responsive && 'flex items-center justify-center bg-inset')}>
+        <div ref={host} className={cn('overflow-hidden', !responsive && 'h-full w-full')} style={responsive ? { width: Math.round(responsive.width * scale), height: Math.round(responsive.height * scale) } : undefined}>
           {(picked?.frame ?? frame) && hasPage && <img src={picked?.frame ?? frame ?? ''} alt="" draggable={false} className="h-full w-full" />}
           {picked && (
             <div
@@ -223,6 +279,13 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
           )}
         </div>
         {picked && <BrowserComment picked={picked} host={host} onClose={() => setPicked(null)} />}
+        {responsive && (
+          <div className="pointer-events-none absolute" style={{ width: Math.round(responsive.width * scale) + 2 * RESPONSIVE_HANDLE, height: Math.round(responsive.height * scale) + 2 * RESPONSIVE_HANDLE }}>
+            <div onPointerDown={dragEdge('right')} title="Drag to change the width" className="pointer-events-auto absolute right-0 top-1/2 flex h-10 -translate-y-1/2 cursor-ew-resize items-center justify-center rounded bg-line-strong hover:bg-fg/40" style={{ width: RESPONSIVE_HANDLE - 4 }} />
+            <div onPointerDown={dragEdge('bottom')} title="Drag to change the height" className="pointer-events-auto absolute bottom-0 left-1/2 w-10 -translate-x-1/2 cursor-ns-resize rounded bg-line-strong hover:bg-fg/40" style={{ height: RESPONSIVE_HANDLE - 4 }} />
+            <div onPointerDown={dragEdge('corner')} title="Drag to resize" className="pointer-events-auto absolute bottom-0 right-0 cursor-nwse-resize rounded bg-line-strong hover:bg-fg/40" style={{ width: RESPONSIVE_HANDLE - 4, height: RESPONSIVE_HANDLE - 4 }} />
+          </div>
+        )}
       </div>
     </div>
   )
@@ -1155,39 +1218,33 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
   )
 }
 
-const PAGE_SIZES: { label: string; width: number | null; height: number | null }[] = [
-  { label: 'Fit panel', width: null, height: null },
+
+const RESPONSIVE_MARGIN = 16
+const RESPONSIVE_HANDLE = 12
+const RESPONSIVE_SIZES = [
   { label: 'Phone', width: 390, height: 844 },
   { label: 'Tablet', width: 768, height: 1024 },
   { label: 'Laptop', width: 1280, height: 800 },
   { label: 'Desktop', width: 1440, height: 900 }
 ]
 
-/** Lays the page out at a device size, or back at the panel's size. */
-function ResizeButton({ tabId, disabled }: { tabId?: string; disabled: boolean }): ReactNode {
-  const anchor = useRef<HTMLDivElement>(null)
-  const [open, setOpen] = useState(false)
-  const [current, setCurrent] = useState('Fit panel')
+/** A page dimension in the responsive toolbar; takes effect on Enter or when it loses focus. */
+function SizeInput({ value, label, onChange }: { value: number; label: string; onChange(value: number): void }): ReactNode {
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => setDraft(String(value)), [value])
+  const commit = (): void => {
+    const next = Number.parseInt(draft, 10)
+    if (Number.isFinite(next)) onChange(Math.max(200, Math.min(3840, next)))
+    else setDraft(String(value))
+  }
   return (
-    <div ref={anchor} className="flex">
-      <IconButton label="Resize the page" active={current !== 'Fit panel'} disabled={disabled} onClick={() => setOpen((value) => !value)}>
-        <Scaling size={13.5} />
-      </IconButton>
-      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} placement="bottom-end" className="w-48 p-1">
-        {PAGE_SIZES.map((size) => (
-          <MenuItem
-            key={size.label}
-            label={size.label}
-            hint={size.width ? `${size.width}×${size.height}` : undefined}
-            selected={current === size.label}
-            onClick={() => {
-              setOpen(false)
-              setCurrent(size.label)
-              void window.galaxy.browser.resize(size.width, size.height, tabId)
-            }}
-          />
-        ))}
-      </Popover>
-    </div>
+    <input
+      aria-label={label}
+      value={draft}
+      onChange={(event) => setDraft(event.target.value.replace(/[^0-9]/g, ''))}
+      onBlur={commit}
+      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+      className="h-6 w-14 rounded-md bg-inset px-1.5 text-center tabular-nums text-fg shadow-[0_0_0_1px_var(--border)]"
+    />
   )
 }
