@@ -418,15 +418,11 @@ Your task list is Galaxy Code's task.md, and your documents are Galaxy Code arti
 When the user asks for an artifact (in any language), a document, a report or the task list, they mean these Galaxy Code files: write them in this chat's artifacts folder, never in the project or workspace. Never create them with other MCP servers or connectors, such as claude.ai Docs, Artifact, Google Drive or Notion tools, unless the user names that service.`
 
 /**
- * For an ACP agent, which has no system prompt of its own to fill: Galaxy Code's whole system prompt, sent with the first message of
- * a session, and the context that changes between turns, sent with every later one.
+ * For an ACP agent, which has no system prompt of its own to fill: Galaxy Code's whole system prompt, sent in full with every message,
+ * so a resumed or long session never loses it.
  */
 export function acpSystemPrompt(ctx: PromptContext, toolNames: string[]): string {
   return `<galaxy_system_prompt>\n${buildSystemPrompt(ctx)}\n\n# Where the tools are\n\nThe tools this prompt names (${toolNames.join(', ')}) are on the "galaxy" MCP server. Use them instead of your own tools that do the same job.\n\n${BRIDGE_TASKS_AND_ARTIFACTS}\n</galaxy_system_prompt>`
-}
-
-export function acpTurnContext(ctx: PromptContext): string {
-  return `<galaxy_context>\n# Environment\n\n${environmentBlock(ctx)}\n\n${permissionBlock(ctx.permissionMode)}\n\n${BRIDGE_TASKS_AND_ARTIFACTS}\n\n${liveContextBlock(ctx)}\n</galaxy_context>`
 }
 
 export function buildBridgeInstructions(ctx: PromptContext, bridgeTools: string[], mentions?: PromptMentions, readsOnItsOwn?: string): string {
