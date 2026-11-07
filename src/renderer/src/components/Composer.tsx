@@ -1213,7 +1213,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
           }}
           onPaste={onPaste}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && event.metaKey && !event.nativeEvent.isComposing) {
+            if (event.key === 'Enter' && event.metaKey) {
               event.preventDefault()
               void submit(true)
               return
