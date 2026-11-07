@@ -420,24 +420,6 @@ class BrowserService {
     return size
   }
 
-  /** Opens Chrome DevTools for the page in device mode, with its own responsive toolbar. A second call toggles device mode. */
-  openDeviceMode(): void {
-    const wc = this.ensureView().webContents
-    const toggle = (): void => {
-      const devtools = wc.devToolsWebContents
-      if (!devtools || devtools.isDestroyed()) return
-      devtools.focus()
-      // DevTools' own shortcut for the device toolbar.
-      devtools.sendInputEvent({ type: 'keyDown', keyCode: 'M', modifiers: ['meta', 'shift'] })
-      devtools.sendInputEvent({ type: 'keyUp', keyCode: 'M', modifiers: ['meta', 'shift'] })
-    }
-    if (wc.isDevToolsOpened()) toggle()
-    else {
-      wc.once('devtools-opened', () => setTimeout(toggle, 800))
-      wc.openDevTools({ mode: 'detach' })
-    }
-  }
-
   /** A page size set by resize. However large, the user sees it scaled down to fit the panel. */
   private pageSize: { width: number; height: number } | null = null
   private fitScale(size: { width: number; height: number }): number {
@@ -1050,7 +1032,6 @@ class BrowserTabs {
   forward(id?: string, window?: BrowserWindow): void { this.get(id, window).forward() }
   reload(id?: string, window?: BrowserWindow): void { this.get(id, window).reload() }
   async resize(width: number | null, height: number | null, id?: string, window?: BrowserWindow): Promise<void> { await this.get(id, window).resize(width, height) }
-  openDeviceMode(id?: string, window?: BrowserWindow): void { this.get(id, window).openDeviceMode() }
   stop(id?: string, window?: BrowserWindow): void { this.get(id, window).stop() }
   async clearData(kind: BrowserDataKind): Promise<void> {
     const data = session.fromPartition(PARTITION)
