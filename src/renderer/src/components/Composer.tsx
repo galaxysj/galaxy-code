@@ -1056,11 +1056,11 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
       {/* Just above the box, below any suggestion chips and queued messages. The shortcuts stay in the compact one-line input too, where the chips are left out. */}
       {!edit && !chat?.side && (!compact || chat) && (
         <div className="relative mb-1.5 flex min-h-6 items-center gap-1.5 pl-1">
-          {/* Everything at the left shrinks and clips, so it never runs under the shortcuts. Bubbles wait while the agent runs; the task bar shows only then. */}
+          {/* Everything at the left shrinks and clips, so it never runs under the shortcuts. Chips wait while the agent runs; the usage bubble covers the task bar. */}
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden py-1.5 -my-1.5 pr-2">
           {!compact && !chat && <ProjectChip chat={chat} />}
           {!compact && <WorkspaceToggle chat={chat} />}
-          {usageBubble && !running && (
+          {usageBubble && (
             <div className="group/att relative flex min-w-0 max-w-full">
               <button type="button" title="Open usage in Settings" onClick={() => { setUsageBubble(null); useStore.setState({ settingsOpen: 'usage' }) }} className={SUGGESTION_CHIP}>
                 <Gauge size={13.5} className="shrink-0" />
@@ -1072,7 +1072,7 @@ export function Composer({ centered, edit, footer }: { centered?: boolean; edit?
             </div>
           )}
           {/* The task in progress shares the row too, so it sits on the box like the chips. */}
-          {chat && !(usageBubble && !running) && <CurrentTask chat={chat} items={items} />}
+          {chat && !usageBubble && <CurrentTask chat={chat} items={items} />}
           {/* The suggestion chips share this row, at the left, with the shortcuts at the right. */}
           {followUp && chat && !chat.side && !errorShown && !running && <ChatChips chat={chat} items={items} />}
           </div>
