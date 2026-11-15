@@ -112,19 +112,6 @@ export const AutoTiers: { ID: string; DisplayName: string; Description: string; 
 ]
 
 export const AgentModel: AgentModelSpec[] = [
-  
-  //stealth
-  {
-    DisplayName: 'Crouton Alpha',
-    ID: 'stealth/crouton-alpha',
-    Subscription: 'Default',
-    Efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
-    DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
-    FastMode: false,
-    Free: true
-  },  
-  
   // OpenRouter claude
   
   {
