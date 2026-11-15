@@ -145,8 +145,7 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
     UltraEffort: 'xhigh',
-    FastMode: true,
-    Off: true
+    FastMode: true
   },
   {
     DisplayName: 'Fable 5.1',
