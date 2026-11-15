@@ -150,6 +150,18 @@ export const AgentModel: AgentModelSpec[] = [
     FastMode: true
   },
   {
+    DisplayName: 'Fable 5.2',
+    ID: 'anthropic/claude-fable-5.2',
+    ContextOptions: [300_000, 1_000_000],
+    Brand: 'Claude',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    DefaultEffort: 'high',
+    UltraEffort: 'xhigh',
+    FastMode: true,
+    Off: true
+  },
+  {
     DisplayName: 'Fable 5.1',
     ID: 'anthropic/claude-fable-5.1',
     ContextOptions: [300_000, 1_000_000],
@@ -568,6 +580,30 @@ export const AgentModel: AgentModelSpec[] = [
     FastMode: false,
   },
   {
+    DisplayName: 'Gemini 4 Carbon',
+    ID: 'google/gemini-4-carbon',
+    ContextOptions: [272_000, 1_048_576],
+    Brand: 'Gemini',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    DefaultEffort: 'high',
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'Gemini 4 Hydrogen',
+    ID: 'google/gemini-4-hydrogen',
+    ContextOptions: [272_000, 1_048_576],
+    Brand: 'Gemini',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh'],
+    DefaultEffort: 'high',
+    UltraEffort: 'xhigh',
+    FastMode: false,
+    Off: true
+  },
+  {
     DisplayName: 'Gemini 3.7 Flash',
     ID: 'google/gemini-3.7-flash',
     ContextWindow: 272_000,
@@ -764,6 +800,17 @@ export const AgentModel: AgentModelSpec[] = [
     FastMode: false,
   },
   {
+    DisplayName: 'Muse Ember',
+    ID: 'meta/muse-ember',
+    ContextOptions: [272_000, 1_048_576],
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    DefaultEffort: 'medium',
+    UltraEffort: 'high',
+    FastMode: false,
+    Off: true
+  },
+  {
     DisplayName: 'Muse Spark 1.3',
     ID: 'meta/muse-spark-1.3',
     ContextOptions: [272_000, 1_048_576],
@@ -783,6 +830,18 @@ export const AgentModel: AgentModelSpec[] = [
     DefaultEffort: 'high',
     UltraEffort: 'high',
     FastMode: false,
+    Off: true
+  },
+  {
+    DisplayName: 'GLM 5.3 Prime',
+    ID: 'z-ai/glm-5.3-prime',
+    ContextOptions: [272_000, 1_048_576],
+    Subscription: 'Default',
+    Efforts: ['low', 'high', 'max'],
+    DefaultEffort: 'high',
+    UltraEffort: 'max',
+    FastMode: false,
+    Vision: false,
     Off: true
   },
   {
@@ -820,6 +879,16 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'Opus 5.5',
     ID: 'claude-opus-5-5',
+    Brand: 'Claude',
+    Subscription: 'Claude',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    DefaultEffort: 'high',
+    UltraEffort: 'xhigh',
+    FastMode: true
+  },
+  {
+    DisplayName: 'Fable 5.2',
+    ID: 'claude-fable-5-2',
     Brand: 'Claude',
     Subscription: 'Claude',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
