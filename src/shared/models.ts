@@ -578,6 +578,7 @@ export const AgentModel: AgentModelSpec[] = [
     DefaultEffort: 'high',
     UltraEffort: 'high',
     FastMode: false,
+    Off: true
   },
   {
     DisplayName: 'Gemini 4 Carbon',
@@ -588,8 +589,7 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['low', 'medium', 'high'],
     DefaultEffort: 'high',
     UltraEffort: 'high',
-    FastMode: false,
-    Off: true
+    FastMode: false
   },
   {
     DisplayName: 'Gemini 4 Hydrogen',
@@ -904,7 +904,8 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
     UltraEffort: 'xhigh',
-    FastMode: false
+    FastMode: false,
+    Off: true
   },
   {
     DisplayName: 'Sonnet 5.5',
