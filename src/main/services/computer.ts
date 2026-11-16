@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { app, BrowserWindow, desktopCapturer, globalShortcut, nativeImage, screen, shell, systemPreferences, type Rectangle } from 'electron'
-import type { ComputerCursor, ComputerPermission, ComputerPermissions, ComputerWindow, InstalledApp } from '@shared/types'
+import type { ComputerCursor, ComputerPermission, ComputerPermissions, ComputerWindow, DesktopInput, DesktopWindow, InstalledApp } from '@shared/types'
 import { store } from '../store'
 import { errorMessage, newId, sleep, truncateEnd } from '../util'
 import { agentCursorScript } from './browserCursor'
@@ -173,6 +173,13 @@ function parseKey(input: string): { code: number; flags: number } {
   return { code, flags }
 }
 
+/** A picture in the format chosen in Settings. PNG keeps a window's transparent rounded corners, which JPEG shows black. */
+function encode(image: Electron.NativeImage): { mime: string; base64: string } {
+  return store.settings.computerImageFormat === 'jpeg'
+    ? { mime: 'image/jpeg', base64: image.toJPEG(80).toString('base64') }
+    : { mime: 'image/png', base64: image.toPNG().toString('base64') }
+}
+
 function helperPath(): string {
   return join(app.getAppPath().replace(/app\.asar$/, 'app.asar.unpacked'), 'resources', 'bin', 'computer-helper')
 }
@@ -222,7 +229,7 @@ class ComputerService {
   onWindow: (chatId: string, window: ComputerWindow | null) => void = () => {}
   /** The overlay is a window of its own, so a capture of the target misses it and the live view draws the cursor itself. */
   onCursor: (cursor: ComputerCursor) => void = () => {}
-  onFrame: (windowId: number, jpeg: Uint8Array) => void = () => {}
+  onFrame: (windowId: number, image: Uint8Array, mime: string) => void = () => {}
   /** The apps found on this computer, and when. */
   private installed: { at: number; apps: InstalledApp[] } | null = null
   /** The App Context shortcut now registered. */
@@ -497,6 +504,7 @@ class ComputerService {
       const window = findWindow(windows, action.app, action.window)
       if (current?.window.id === window.id) {
         current.window = window
+        await this.raiseIfInFront(chatId, current)
         return current
       }
       const target: Target = { window, nodes: new Map(), lines: {}, image: null }
@@ -510,7 +518,13 @@ class ComputerService {
     const window = windows.find((entry) => entry.id === current.window.id)
     if (!window) throw new Error(`The ${current.window.app} window was closed or minimized. Pass \`app\` to pick a window.`)
     current.window = window
+    await this.raiseIfInFront(chatId, current)
     return current
+  }
+
+  /** In full screen mode every step, reads included, brings the window forward. */
+  private async raiseIfInFront(chatId: string, target: Target): Promise<void> {
+    if (this.inFront.has(chatId) && target.window.id) await helper(this.request(target, 'bringForward')).catch(() => {})
   }
 
   /** Full control works on the main display as a whole, as if it were one big window. */
@@ -604,18 +618,18 @@ class ComputerService {
         // A close look keeps the frame of the last full screenshot, so its coordinates stay valid.
         const [x, y, width, height] = action.region
         const crop = image.crop({ x: Math.round(x * scale), y: Math.round(y * scale), width: Math.round(width * scale), height: Math.round(height * scale) })
-        return { text: `Close look at ${width}x${height} pixels of the latest screenshot. Coordinates still refer to the full screenshot.`, image: { mime: 'image/jpeg', base64: crop.toJPEG(82).toString('base64') } }
+        return { text: `Close look at ${width}x${height} pixels of the latest screenshot. Coordinates still refer to the full screenshot.`, image: encode(crop) }
       }
       if (image.getSize().width > SCREENSHOT_WIDTH) image = image.resize({ width: SCREENSHOT_WIDTH, quality: 'good' })
-      const jpeg = image.toJPEG(72)
-      if (jpeg.length === 0) throw new Error(`The ${window.app} window could not be captured`)
+      const encoded = encode(image)
+      if (encoded.base64.length === 0) throw new Error(`The ${window.app} window could not be captured`)
       const size = image.getSize()
       target.image = { width: size.width, height: size.height, windowWidth: window.width, windowHeight: window.height, alert }
       await this.markRead(target)
       const title = window.title ? ` "${window.title}"` : ''
-      if (!window.id) return { text: `Screenshot of the whole main display, ${size.width}x${size.height} pixels. Use x and y in these pixels.`, image: { mime: 'image/jpeg', base64: jpeg.toString('base64') } }
+      if (!window.id) return { text: `Screenshot of the whole main display, ${size.width}x${size.height} pixels. Use x and y in these pixels.`, image: encoded }
       const scope = alert ? 'The alert blocks the window behind it, so x and y point into the alert until it closes.' : 'Later steps act on this window.'
-      return { text: `Screenshot of the ${window.app} ${alert ? 'alert' : 'window'}${title}, ${size.width}x${size.height} pixels. Use x and y in these pixels. ${scope}`, image: { mime: 'image/jpeg', base64: jpeg.toString('base64') } }
+      return { text: `Screenshot of the ${window.app} ${alert ? 'alert' : 'window'}${title}, ${size.width}x${size.height} pixels. Use x and y in these pixels. ${scope}`, image: encoded }
     } finally {
       await rm(file, { force: true })
     }
@@ -845,6 +859,101 @@ class ComputerService {
   releaseAll(): void {
     for (const chatId of this.held.keys()) void this.release(chatId)
     this.watch([])
+    for (const id of [...this.userLive.keys()]) this.stopDesktop(id)
+  }
+
+  /** The user's own live views of app windows, from the Desktop Apps tab: the picture stream and the input helper per window. */
+  private userLive = new Map<number, { stream: ChildProcess; input: ChildProcess | null; pid: number; viewers: number }>()
+
+  /** App windows the user can pick in the Desktop Apps tab. */
+  async desktopWindows(): Promise<DesktopWindow[]> {
+    if (process.platform !== 'darwin') throw new Error('Desktop Apps is only available on macOS.')
+    const windows = (await listWindows()).filter((window) => window.layer === 0)
+    await Promise.all([...new Set(windows.map((window) => window.pid))].filter((pid) => !this.icons.has(pid)).map(async (pid) => {
+      const reply = await helper<{ icon: string }>({ op: 'icon', pid }).catch(() => null)
+      if (reply) this.icons.set(pid, `data:image/png;base64,${reply.icon}`)
+    }))
+    return windows.map(({ id, pid, app, title, width, height }) => ({ id, pid, app, title, width, height, icon: this.icons.get(pid) }))
+  }
+
+  /** Starts streaming a window the user picked. Frames arrive as computer-frame events. */
+  async viewDesktop(windowId: number): Promise<DesktopWindow> {
+    if (!this.permissions().screen) throw new Error('Galaxy Code needs Screen Recording permission. Turn it on in Settings > Computer use.')
+    const window = (await this.desktopWindows()).find((entry) => entry.id === windowId)
+    if (!window) throw new Error('That window is no longer open.')
+    const live = this.userLive.get(windowId)
+    if (live) { live.viewers++; return window }
+    this.userLive.set(windowId, { stream: this.spawnDesktopStream(windowId), input: null, pid: window.pid, viewers: 1 })
+    return window
+  }
+
+  /** Streams a viewed window. A stream that ends while the window is still viewed and open starts again, so the view does not freeze. */
+  private spawnDesktopStream(windowId: number): ChildProcess {
+    const stream = spawn(helperPath(), ['stream', String(windowId), '1600', '30', store.settings.computerImageFormat], { stdio: ['ignore', 'pipe', 'ignore'] })
+    const mime = store.settings.computerImageFormat === 'jpeg' ? 'image/jpeg' : 'image/png'
+    let pending = Buffer.alloc(0)
+    stream.on('error', () => {})
+    stream.on('exit', () => {
+      if (this.userLive.get(windowId)?.stream !== stream) return
+      setTimeout(() => void this.restartDesktopStream(windowId, stream), 500)
+    })
+    stream.stdout?.on('data', (chunk: Buffer) => {
+      pending = Buffer.concat([pending, chunk])
+      while (pending.length >= 4) {
+        const size = pending.readUInt32BE(0)
+        if (pending.length < 4 + size) break
+        this.onFrame(windowId, pending.subarray(4, 4 + size), mime)
+        pending = pending.subarray(4 + size)
+      }
+    })
+    return stream
+  }
+
+  private async restartDesktopStream(windowId: number, ended: ChildProcess): Promise<void> {
+    const live = this.userLive.get(windowId)
+    if (!live || live.stream !== ended) return
+    const open = await listWindows().then((windows) => windows.some((window) => window.id === windowId), () => true)
+    if (this.userLive.get(windowId) !== live) return
+    if (!open) { this.stopDesktop(windowId); return }
+    live.stream = this.spawnDesktopStream(windowId)
+  }
+
+  /** Starts the stream again when the view has gone quiet, as when the user acts on a window whose capture stalled. */
+  reviveDesktop(windowId: number): void {
+    const live = this.userLive.get(windowId)
+    if (!live) return
+    // Its exit starts the next one.
+    live.stream.kill()
+  }
+
+  unviewDesktop(windowId: number): void {
+    const live = this.userLive.get(windowId)
+    if (live && --live.viewers <= 0) this.stopDesktop(windowId)
+  }
+
+  private stopDesktop(windowId: number): void {
+    const live = this.userLive.get(windowId)
+    if (!live) return
+    this.userLive.delete(windowId)
+    live.stream.kill()
+    if (live.input) {
+      live.input.stdin?.end(`${JSON.stringify({ t: 'end' })}\n`)
+      setTimeout(() => live.input?.kill(), 500)
+    }
+  }
+
+  /** The user's mouse, wheel and key events on a window they are viewing, posted to it in place. */
+  desktopInput(windowId: number, events: DesktopInput[]): void {
+    const live = this.userLive.get(windowId)
+    if (!live) return
+    if (!this.permissions().accessibility) throw new Error('Galaxy Code needs Accessibility permission to control apps. Turn it on in Settings > Computer use.')
+    if (!live.input || live.input.exitCode !== null) {
+      const input = spawn(helperPath(), ['input', String(live.pid), String(windowId)], { stdio: ['pipe', 'ignore', 'ignore'] })
+      input.on('error', () => {})
+      input.stdin?.on('error', () => {})
+      live.input = input
+    }
+    live.input.stdin?.write(events.map((event) => JSON.stringify(event)).join('\n') + '\n')
   }
 
   /** Streams these windows for the live view. Only windows an agent has worked in, so the live view cannot be pointed at anything else. */
@@ -859,18 +968,26 @@ class ComputerService {
   }
 
   private streamWindow(windowId: number): void {
-    const process = spawn(helperPath(), ['stream', String(windowId)], { stdio: ['ignore', 'pipe', 'ignore'] })
+    const process = spawn(helperPath(), ['stream', String(windowId), '640', '12', store.settings.computerImageFormat], { stdio: ['ignore', 'pipe', 'ignore'] })
     this.live.set(windowId, process)
     let pending = Buffer.alloc(0)
+    const mime = store.settings.computerImageFormat === 'jpeg' ? 'image/jpeg' : 'image/png'
     process.on('error', () => {})
-    // A closed window ends its stream, and the same number can then be watched again.
-    process.on('exit', () => { if (this.live.get(windowId) === process) this.live.delete(windowId) })
+    // A closed window ends its stream, and the same number can then be watched again. A stream that ends while its window is open starts again.
+    process.on('exit', () => {
+      if (this.live.get(windowId) !== process) return
+      this.live.delete(windowId)
+      setTimeout(() => {
+        if (this.live.has(windowId) || ![...this.visited.values()].some((windows) => windows.has(windowId))) return
+        void listWindows().then((windows) => { if (windows.some((window) => window.id === windowId) && !this.live.has(windowId)) this.streamWindow(windowId) }, () => {})
+      }, 500)
+    })
     process.stdout.on('data', (chunk: Buffer) => {
       pending = Buffer.concat([pending, chunk])
       while (pending.length >= 4) {
         const size = pending.readUInt32BE(0)
         if (pending.length < 4 + size) break
-        this.onFrame(windowId, pending.subarray(4, 4 + size))
+        this.onFrame(windowId, pending.subarray(4, 4 + size), mime)
         pending = pending.subarray(4 + size)
       }
     })

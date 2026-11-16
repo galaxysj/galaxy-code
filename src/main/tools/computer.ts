@@ -161,7 +161,8 @@ Actions:
     if (computer.wantsFullControl(chatId) && !ctx.signal.aborted && (await askFullControl(ctx, 'Your default control mode is full screen.')).allowed) {
       outputs.push(await startFullControl(ctx, chatId, images, files, ''))
     }
-    computer.setInFront(chatId, ctx.permissionMode === 'full')
+    // Full screen mode works in front, so the window comes forward. Background mode never raises it over what the user is doing.
+    computer.setInFront(chatId, store.settings.computerMode === 'full')
     let app: Awaited<ReturnType<typeof computer.currentApp>>
     /** Puts the app on the timeline as soon as it is known. A step that fails has not changed that, so it shows there too. */
     const showApp = async (): Promise<void> => {

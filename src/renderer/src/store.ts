@@ -94,6 +94,7 @@ export type QueuedMention =
 export type PanelTab = (
   | { id: string; type: 'file'; path: string; title: string }
   | { id: string; type: 'browser'; title: string }
+  | { id: string; type: 'desktop'; title: string; /** The viewed app's icon as a data URL. */ icon?: string }
   | { id: string; type: 'terminal'; title: string; cwd: string; chatId: string | null }
   | { id: string; type: 'review'; title: string; cwd: string; chatId: string | null }
   | { id: string; type: 'agent'; title: string; agentId: string; chatId: string; root: string | null }
@@ -201,6 +202,8 @@ interface State {
   /** The windows each chat's agent has worked in during its run, the latest last, for the live view. */
   computerWindows: Record<string, ComputerWindow[]>
   computerCursor: ComputerCursor | null
+  /** Windows open in Desktop Apps tabs, by tab. The PIP leaves them out, so one window is not streamed twice. */
+  desktopViews: Record<string, number>
   attachmentPreview: Attachment | null
   imageModels: ResolvedImageModel[]
   mcp: McpServerStatus[]
@@ -530,6 +533,7 @@ export const useStore = create<State>((set, get) => {
     creditsLocked: false,
     pageFavicons: loadFavicons(),
     computerCursor: null,
+    desktopViews: {},
     attachmentPreview: null,
     imageModels: resolveImageModels(),
     mcp: [],

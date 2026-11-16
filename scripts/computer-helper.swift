@@ -9,6 +9,7 @@
 // With full control, requests marked global act on the whole screen with the real pointer and keyboard.
 // Run with the argument hide-cursor, it hides the real cursor until it is killed.
 // Run with the arguments stream and a window number, it writes that window's picture to stdout until it is killed.
+// Run with the arguments input, a process and a window number, it posts the user's live input from stdin, one JSON event per line, to that window in place.
 
 import AppKit
 import ApplicationServices
@@ -23,9 +24,10 @@ typealias Request = [String: Any]
 
 let MAX_NODES = 500
 let ICON_SIZE = 64
-let STREAM_WIDTH = 640
-let STREAM_FRAME_RATE: CMTimeScale = 12
-let STREAM_QUALITY = 0.6
+var STREAM_WIDTH = 640
+var STREAM_FRAME_RATE: CMTimeScale = 12
+/** PNG keeps a window's transparent rounded corners. JPEG is far smaller, but shows them black. */
+var STREAM_JPEG = false
 /** The event field AppKit reads a window number from. */
 let WINDOW_FIELD = CGEventField(rawValue: 51)!
 let skyLight = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_NOW)
@@ -849,7 +851,7 @@ func hideCursor() -> Never {
   exit(0)
 }
 
-/** Writes each new picture of a window as a JPEG after its length. */
+/** Writes each new picture of a window as a PNG after its length. */
 @available(macOS 12.3, *)
 final class WindowStream: NSObject, SCStreamOutput, SCStreamDelegate {
   let context = CIContext()
@@ -857,16 +859,29 @@ final class WindowStream: NSObject, SCStreamOutput, SCStreamDelegate {
   func stream(_ stream: SCStream, didOutputSampleBuffer buffer: CMSampleBuffer, of type: SCStreamOutputType) {
     // A frame with no change holds no image.
     guard type == .screen, let pixels = CMSampleBufferGetImageBuffer(buffer) else { return }
-    let options = [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): STREAM_QUALITY]
     let image = CIImage(cvPixelBuffer: pixels)
     let scale = min(1, CGFloat(STREAM_WIDTH) / image.extent.width)
-    guard let jpeg = context.jpegRepresentation(of: image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)), colorSpace: CGColorSpaceCreateDeviceRGB(), options: options) else { return }
-    var length = UInt32(jpeg.count).bigEndian
+    let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    let space = CGColorSpace(name: CGColorSpace.sRGB)!
+    let encoded = STREAM_JPEG
+      ? context.jpegRepresentation(of: scaled, colorSpace: space, options: [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.7])
+      : context.pngRepresentation(of: scaled, format: .RGBA8, colorSpace: space)
+    guard let data = encoded else { return }
+    var length = UInt32(data.count).bigEndian
     FileHandle.standardOutput.write(Data(bytes: &length, count: 4))
-    FileHandle.standardOutput.write(jpeg)
+    FileHandle.standardOutput.write(data)
   }
 
   func stream(_ stream: SCStream, didStopWithError error: Error) { exit(0) }
+}
+
+/** The pixel density of the display that holds most of a window. */
+func windowDensity(_ frame: CGRect) -> CGFloat {
+  let primary = NSScreen.screens.first?.frame.height ?? 0
+  // Window bounds count down from the top of the main display, and screen frames up from its bottom.
+  let flipped = CGRect(x: frame.minX, y: primary - frame.maxY, width: frame.width, height: frame.height)
+  let screen = NSScreen.screens.max { $0.frame.intersection(flipped).width * $0.frame.intersection(flipped).height < $1.frame.intersection(flipped).width * $1.frame.intersection(flipped).height }
+  return screen?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
 }
 
 /** Chromium's capture always draws the user's cursor over a window. This one leaves it out. */
@@ -882,15 +897,31 @@ func streamWindow(_ id: CGWindowID) -> Never {
       guard let window = content.windows.first(where: { $0.windowID == id }) else { exit(1) }
       let config = SCStreamConfiguration()
       config.showsCursor = false
+      config.pixelFormat = kCVPixelFormatType_32BGRA
+      config.backgroundColor = .clear
       // The stream crops to this size rather than scaling, so it takes the whole window and each frame is scaled down.
-      let density = NSScreen.main?.backingScaleFactor ?? 2
-      config.width = max(1, Int(window.frame.width * density))
-      config.height = max(1, Int(window.frame.height * density))
+      func fit(_ frame: CGRect) {
+        let density = windowDensity(frame)
+        config.width = max(1, Int(frame.width * density))
+        config.height = max(1, Int(frame.height * density))
+      }
+      fit(window.frame)
       config.minimumFrameInterval = CMTime(value: 1, timescale: STREAM_FRAME_RATE)
       config.queueDepth = 3
       let stream = SCStream(filter: SCContentFilter(desktopIndependentWindow: window), configuration: config, delegate: output)
       try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: DispatchQueue(label: "stream"))
       try await stream.startCapture()
+      // A resized window, or one moved to a display of another density, would otherwise come out cropped or with black bars.
+      var size = window.frame.size
+      // The task runs off the main thread, whose run loop is the one that fires timers.
+      DispatchQueue.main.async { Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
+        guard let frame = liveFrame(Int64(id)), frame.width >= 1, frame.height >= 1 else { return }
+        let density = windowDensity(frame)
+        guard frame.size != size || Int(frame.width * density) != config.width else { return }
+        size = frame.size
+        fit(frame)
+        stream.updateConfiguration(config) { _ in }
+      } }
       running = stream
     } catch {
       exit(1)
@@ -901,10 +932,74 @@ func streamWindow(_ id: CGWindowID) -> Never {
   exit(0)
 }
 
+/** The window's bounds now, since the user may move it while viewing it. */
+func liveFrame(_ id: Int64) -> CGRect? {
+  let rows = (CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(id)) as? [[String: Any]]) ?? []
+  guard let bounds = rows.first?[kCGWindowBounds as String] as? [String: Double] else { return nil }
+  return CGRect(x: bounds["X"] ?? 0, y: bounds["Y"] ?? 0, width: bounds["Width"] ?? 0, height: bounds["Height"] ?? 0)
+}
+
+/** Posts the user's own mouse, wheel and key events from the live view to one window, leaving the real pointer and front app alone. */
+func liveInput(pid target: pid_t, window id: Int64) -> Never {
+  var keyedAt = Date.distantPast
+  /** Has the app act as active with this window key before input. An agent's step may have deactivated it since, so this is done every press rather than once. */
+  func wake(_ request: Request) {
+    guard (try? isReallyFront(request)) == false else { return }
+    try? postActivation(request, .applicationActivated)
+    try? makeKey(request)
+    usleep(30_000)
+    keyedAt = Date()
+  }
+  while let line = readLine() {
+    guard let data = line.data(using: .utf8), let event = (try? JSONSerialization.jsonObject(with: data)) as? Request, let frame = liveFrame(id) else { continue }
+    let request: Request = ["pid": Int(target), "windowId": id, "x": frame.minX, "y": frame.minY, "width": frame.width, "height": frame.height]
+    let flags = UInt64((event["flags"] as? NSNumber)?.intValue ?? 0)
+    let point = CGPoint(x: frame.minX + CGFloat((event["x"] as? NSNumber)?.doubleValue ?? 0), y: frame.minY + CGFloat((event["y"] as? NSNumber)?.doubleValue ?? 0))
+    let right = (event["button"] as? NSNumber)?.intValue == 2
+    let clicks = Int64((event["clicks"] as? NSNumber)?.intValue ?? 1)
+    switch event["t"] as? String {
+    case "down":
+      // A window that is not key takes the first click only to become key, so make it key first.
+      wake(request)
+      try? postInPlace(request, right ? .rightMouseDown : .leftMouseDown, point, button: right ? .right : .left, clicks: clicks, flags: flags)
+    case "up":
+      try? postInPlace(request, right ? .rightMouseUp : .leftMouseUp, point, button: right ? .right : .left, clicks: clicks, flags: flags)
+    case "drag":
+      try? postInPlace(request, right ? .rightMouseDragged : .leftMouseDragged, point, button: right ? .right : .left, clicks: 1, flags: flags)
+    case "move":
+      try? postInPlace(request, .mouseMoved, point, flags: flags)
+    case "scroll":
+      let dx = Int32((event["dx"] as? NSNumber)?.doubleValue ?? 0), dy = Int32((event["dy"] as? NSNumber)?.doubleValue ?? 0)
+      guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: -dy, wheel2: -dx, wheel3: 0) else { continue }
+      wheel.location = point
+      try? address(wheel, request, point)
+      wheel.postToPid(target)
+    case "key":
+      if Date().timeIntervalSince(keyedAt) > 1 { wake(request) }
+      let code = CGKeyCode((event["code"] as? NSNumber)?.intValue ?? 0)
+      let down = (event["down"] as? Bool) ?? true
+      guard let key = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down) else { continue }
+      key.flags = CGEventFlags(rawValue: flags)
+      if let text = event["text"] as? String, !text.isEmpty { let units = Array(text.utf16); key.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units) }
+      key.postToPid(target)
+    case "end":
+      try? unfocusInPlace(request)
+    default: break
+    }
+  }
+  exit(0)
+}
+
 if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "hide-cursor" { hideCursor() }
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "stream", let id = CGWindowID(CommandLine.arguments[2]) {
   guard #available(macOS 12.3, *) else { exit(1) }
+  // The user's live view asks for a sharper and smoother picture than the agent's.
+  if CommandLine.arguments.count > 4, let width = Int(CommandLine.arguments[3]), let rate = Int32(CommandLine.arguments[4]) { STREAM_WIDTH = width; STREAM_FRAME_RATE = rate }
+  if CommandLine.arguments.count > 5 { STREAM_JPEG = CommandLine.arguments[5] == "jpeg" }
   streamWindow(id)
+}
+if CommandLine.arguments.count > 3, CommandLine.arguments[1] == "input", let target = pid_t(CommandLine.arguments[2]), let id = Int64(CommandLine.arguments[3]) {
+  liveInput(pid: target, window: id)
 }
 
 // An action that opens a modal alert does not answer until the alert closes, so do not wait on it for long.

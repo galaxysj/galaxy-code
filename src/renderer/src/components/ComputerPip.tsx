@@ -40,7 +40,7 @@ function windowTitle(entry: ComputerWindow): string {
 }
 
 /** The agent cursor over the picture. It lives in a window of its own on the desktop, so the capture never shows it. */
-function LiveCursor({ windowId }: { windowId: number }): ReactNode {
+export function LiveCursor({ windowId }: { windowId: number }): ReactNode {
   const cursor = useStore((s) => s.computerCursor)
   const glyph = useRef<SVGSVGElement>(null)
   const pressing = useRef<Animation | undefined>(undefined)
@@ -130,7 +130,8 @@ export function ComputerPip({ inset = 0 }: { inset?: number }): ReactNode {
   const frontId = useRef<number | null>(null)
   const [, redraw] = useState(0)
 
-  const open = windows.filter(({ id }) => !closed.includes(id))
+  const viewed = useStore((s) => s.desktopViews)
+  const open = windows.filter(({ id }) => !closed.includes(id) && !Object.values(viewed).includes(id))
   const latest = open[open.length - 1]
   const front = latest && ((chosen?.latest === latest.id && open.find(({ id }) => id === chosen.id)) || latest)
   const behind = front ? open.filter(({ id }) => id !== front.id).slice(-MAX_BEHIND) : []
@@ -145,7 +146,7 @@ export function ComputerPip({ inset = 0 }: { inset?: number }): ReactNode {
     if (event.type !== 'computer-frame') return
     const previous = frames.current.get(event.windowId)
     if (previous) URL.revokeObjectURL(previous)
-    frames.current.set(event.windowId, URL.createObjectURL(new Blob([event.jpeg as BlobPart], { type: 'image/jpeg' })))
+    frames.current.set(event.windowId, URL.createObjectURL(new Blob([event.image as BlobPart], { type: event.mime })))
     if (event.windowId === frontId.current) redraw((count) => count + 1)
   }), [])
 

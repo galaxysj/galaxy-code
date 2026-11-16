@@ -14,6 +14,7 @@ import type {
   BrowserDataKind,
   ChatEvent,
   ComputerPermission,
+  DesktopInput,
   CreateProjectInput,
   FileView,
   NewChatInput,
@@ -176,7 +177,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
   terminals.emit = emitUi
   computer.onWindow = (chatId, window) => emitUi({ type: 'computer-window', chatId, window })
   computer.onCursor = (cursor) => emitUi({ type: 'computer-cursor', cursor })
-  computer.onFrame = (windowId, jpeg) => emitUi({ type: 'computer-frame', windowId, jpeg })
+  computer.onFrame = (windowId, image, mime) => emitUi({ type: 'computer-frame', windowId, image, mime })
   onCreditLock((locked) => emitUi({ type: 'credits-locked', locked }))
   const captureAppContext = async (): Promise<void> => {
     try {
@@ -431,6 +432,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
     'computer.requestPermission': (kind: ComputerPermission) => computer.requestPermission(kind),
     'computer.searchApps': (query: string) => computer.searchApps(query),
     'computer.watch': (windowIds: number[]) => computer.watch(windowIds),
+    'computer.desktopWindows': () => computer.desktopWindows(),
+    'computer.viewDesktop': (windowId: number) => computer.viewDesktop(windowId),
+    'computer.unviewDesktop': (windowId: number) => computer.unviewDesktop(windowId),
+    'computer.reviveDesktop': (windowId: number) => computer.reviveDesktop(windowId),
+    'computer.desktopInput': (windowId: number, events: DesktopInput[]) => computer.desktopInput(windowId, events),
     'terminal.create': (cwd: string, id = newId('terminal_')) => {
       const win = requestWindow()
       if (win) tabWindows.set(id, win.id)

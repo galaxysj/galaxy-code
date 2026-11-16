@@ -122,7 +122,12 @@ const api: GalaxyApi = {
     permissions: call('computer.permissions'),
     requestPermission: call('computer.requestPermission'),
     searchApps: call('computer.searchApps'),
-    watch: call('computer.watch')
+    watch: call('computer.watch'),
+    desktopWindows: call('computer.desktopWindows'),
+    viewDesktop: call('computer.viewDesktop'),
+    unviewDesktop: call('computer.unviewDesktop'),
+    reviveDesktop: call('computer.reviveDesktop'),
+    desktopInput: call('computer.desktopInput')
   },
   terminal: {
     create: call('terminal.create'), write: call('terminal.write'), resize: call('terminal.resize'), interrupt: call('terminal.interrupt'), close: call('terminal.close')

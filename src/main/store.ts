@@ -88,6 +88,7 @@ function defaultSettings(): Settings {
     appContext: true,
     appContextShortcut: 'CommandOrControl+Shift+7',
     computerMode: 'background',
+    computerImageFormat: 'png',
     sidebarWidth: 272,
     panelWidth: 560,
     collapsedProjects: []

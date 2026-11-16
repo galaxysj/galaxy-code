@@ -1,5 +1,6 @@
 import { artifactTitle, isDocumentArtifact, isScreenshotArtifact, isTasksArtifact, parseFrontMatter, parseTaskMarkdown, userEditable } from '@shared/artifacts'
 import { TaskMark } from './TaskMark'
+import { DesktopPane } from './DesktopPane'
 import hljs from 'highlight.js/lib/common'
 import { unavailableAccounts } from '@shared/catalog'
 import { Terminal } from '@xterm/xterm'
@@ -40,6 +41,8 @@ import {
   SquareCheck,
   SquareDashed,
   SquareTerminal,
+  AppWindow,
+  MoreHorizontal,
   RotateCw,
   Scaling,
   X
@@ -77,8 +80,6 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
   const [address, setAddress] = useState(state.url)
   const [editing, setEditing] = useState(false)
   const hasPage = state.url !== ''
-  const createTab = useStore((s) => s.createPanelTab)
-  const openSideChat = useStore((s) => s.openSideChat)
   const covered = usePopoverShown()
   // A still of the page, shown in place of the native view while a popover needs to sit above it.
   const [frame, setFrame] = useState<string | null>(null)
@@ -281,9 +282,7 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
           {!hasPage && (
             <div className="flex h-full flex-col items-center justify-center gap-5 px-5 text-center">
               <div><div className="mb-2 text-[19px] font-medium text-fg">New tab</div><div className="text-[12px] text-subtle">Enter a website above, or open a tool.</div></div>
-              <div className="grid w-full max-w-[460px] grid-cols-4 gap-2">
-                {([{ type: 'file', label: 'Files', Icon: FolderOpen }, { type: 'terminal', label: 'Terminal', Icon: SquareTerminal }, { type: 'review', label: 'Review', Icon: GitCompare }, { type: 'side', label: 'Side chat', Icon: MessagesSquare }] as const).map(({ type, label, Icon }) => <button key={type} type="button" disabled={type === 'file' && !root} title={type === 'file' && !root ? 'Select a project to browse files' : label} onClick={() => { if (type === 'side') { useStore.getState().closePanelTab(tabId); void openSideChat() } else void createTab(type, root, tabId) }} className="flex min-w-0 flex-col items-center gap-2 rounded-xl border border-line bg-elev px-2 py-4 text-[12px] text-muted transition-all hover:border-line-strong hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-elev"><Icon size={18} /><span>{label}</span></button>)}
-              </div>
+              <NewTabTools tabId={tabId} root={root} />
               {!root && <div className="text-[11.5px] text-subtle">Choose a project to enable Files.</div>}
             </div>
           )}
@@ -1129,7 +1128,7 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
     const titles = Object.fromEntries(browserTabs.filter((entry) => entry.customTitle).map((entry) => [entry.id, entry.customTitle!]))
     void window.galaxy.browser.setTabOrder(browserTabs.map((entry) => entry.id), titles).catch(() => {})
   }, [tabs])
-  const icons = { browser: Globe, file: FileText, files: FolderOpen, terminal: SquareTerminal, review: GitCompare, agent: PanelRight, side: MessagesSquare }
+  const icons = { desktop: AppWindow, browser: Globe, file: FileText, files: FolderOpen, terminal: SquareTerminal, review: GitCompare, agent: PanelRight, side: MessagesSquare }
   const contextTab = tabs.find((entry) => entry.id === context?.id)
   const titleFor = (entry: PanelTab): string => (entry.type === 'file' && (['Plan', 'Task'].includes(artifactTitle(entry.path) ?? '') || isScreenshotArtifact(entry.path)) ? artifactTitle(entry.path) : null) ?? entry.customTitle ?? (entry.type === 'browser' ? browserStates[entry.id]?.title || (browserStates[entry.id]?.url ? browserStates[entry.id].url : 'New tab') : entry.type === 'side' && chats[entry.chatId] && chats[entry.chatId].title !== 'New chat' ? chats[entry.chatId].title : entry.title)
   const commitRename = (): void => { if (renaming && renameValue.trim()) updateTab(renaming, { customTitle: renameValue.trim() }); setRenaming(null) }
@@ -1172,7 +1171,7 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
               style={entry.pinned ? { flex: '0 0 54px', width: 54 } : { flex: '1 1 200px', minWidth: 105, maxWidth: 220 }}
             >
               {renaming === entry.id ? <input autoFocus value={renameValue} aria-label="Tab name" onChange={(event) => setRenameValue(event.target.value)} onBlur={commitRename} onKeyDown={(event) => { if (event.key === 'Enter') commitRename(); if (event.key === 'Escape') setRenaming(null) }} className="min-w-0 flex-1 rounded border border-line-strong bg-elev px-1 text-[12px] text-fg" /> : <button type="button" onClick={() => setPanel(true, entry.id)} className="flex h-full min-w-0 flex-1 items-center gap-2" title={title}>
-                {entry.type === 'browser' ? <TabFavicon src={browserStates[entry.id]?.favicon} /> : <Icon size={14} className="shrink-0" />}
+                {entry.type === 'browser' ? <TabFavicon src={browserStates[entry.id]?.favicon} /> : entry.type === 'desktop' && entry.icon ? <img src={entry.icon} alt="" className="h-[14px] w-[14px] shrink-0" /> : <Icon size={14} className="shrink-0" />}
                 {!entry.pinned && <span className="min-w-0 truncate">{title}</span>}
               </button>}
               <button
@@ -1218,7 +1217,7 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
           if (entry.type === 'files') return <div key={entry.id} className={cn('h-full', activeTab !== entry.id && 'hidden')}><ProjectFilesPane tab={entry} available={!!root} renderFile={(file) => <FilePane file={file} visible={activeTab === entry.id} root={entry.root} />} /></div>
           if (entry.type === 'file') { const file = openFiles.find((file) => file.path === entry.path); return file ? <FilePane key={entry.id} file={file} visible={activeTab === entry.id} root={root} /> : null }
           return <div key={entry.id} className={cn('h-full', activeTab !== entry.id && 'hidden')}>
-            {entry.type === 'side' ? <SideChatPane tab={entry} /> : entry.type === 'terminal' ? <TerminalPane tab={entry} visible={activeTab === entry.id} /> : entry.type === 'review' ? <ReviewPane tab={entry} visible={activeTab === entry.id} /> : <AgentTimeline chatId={entry.chatId} agentId={entry.agentId} root={entry.root} />}
+            {entry.type === 'desktop' ? <DesktopPane tabId={entry.id} visible={activeTab === entry.id} /> : entry.type === 'side' ? <SideChatPane tab={entry} /> : entry.type === 'terminal' ? <TerminalPane tab={entry} visible={activeTab === entry.id} /> : entry.type === 'review' ? <ReviewPane tab={entry} visible={activeTab === entry.id} /> : <AgentTimeline chatId={entry.chatId} agentId={entry.agentId} root={entry.root} />}
           </div>
         })}
         {!activeTab && <Placeholder icon={<Plus size={22} />} title="Open a tab" detail="Select a tab above, or use + to open a new tab." />}
@@ -1256,5 +1255,54 @@ function SizeInput({ value, label, onChange }: { value: number; label: string; o
       onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
       className="h-6 w-14 rounded-md bg-inset px-1.5 text-center tabular-nums text-fg shadow-[0_0_0_1px_var(--border)]"
     />
+  )
+}
+
+const NEW_TAB_TOOLS = [
+  { type: 'file', label: 'Files', Icon: FolderOpen },
+  { type: 'terminal', label: 'Terminal', Icon: SquareTerminal },
+  { type: 'review', label: 'Review', Icon: GitCompare },
+  { type: 'side', label: 'Side chat', Icon: MessagesSquare },
+  { type: 'desktop', label: 'Desktop Apps', Icon: AppWindow }
+] as const
+/** The narrowest a tool button gets before the rightmost ones move into Other Tools. */
+const TOOL_MIN_WIDTH = 92
+const TOOL_GAP = 8
+
+/** The tools on an empty tab. Those that do not fit move, from the right, into an Other Tools menu. */
+function NewTabTools({ tabId, root }: { tabId: string; root: string | null }): ReactNode {
+  const box = useRef<HTMLDivElement>(null)
+  const more = useRef<HTMLButtonElement>(null)
+  const [width, setWidth] = useState(580)
+  const [menu, setMenu] = useState(false)
+  useEffect(() => {
+    const node = box.current
+    if (!node) return
+    const observer = new ResizeObserver(() => setWidth(node.clientWidth))
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+  const fits = (count: number): boolean => count * TOOL_MIN_WIDTH + (count - 1) * TOOL_GAP <= width
+  const all = NEW_TAB_TOOLS.length
+  const shown = fits(all) ? all : Math.max(0, Array.from({ length: all }, (_, index) => all - 1 - index).find((count) => fits(count + 1)) ?? 0)
+  const visible = NEW_TAB_TOOLS.slice(0, shown)
+  const hidden = NEW_TAB_TOOLS.slice(shown)
+  const open = (type: (typeof NEW_TAB_TOOLS)[number]['type']): void => {
+    const store = useStore.getState()
+    if (type === 'side') { store.closePanelTab(tabId); void store.openSideChat() }
+    else if (type === 'desktop') { store.closePanelTab(tabId); store.addPanelTab({ id: `desktop:${crypto.randomUUID()}`, type: 'desktop', title: 'Desktop Apps' }) }
+    else void store.createPanelTab(type, root, tabId)
+  }
+  const button = 'flex min-w-0 flex-col items-center gap-2 rounded-xl border border-line bg-elev px-2 py-4 text-[12px] text-muted transition-all hover:border-line-strong hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-elev'
+  return (
+    <div ref={box} className="grid w-full max-w-[580px] gap-2" style={{ gridTemplateColumns: `repeat(${visible.length + (hidden.length ? 1 : 0)}, minmax(0, 1fr))` }}>
+      {visible.map(({ type, label, Icon }) => <button key={type} type="button" disabled={type === 'file' && !root} title={type === 'file' && !root ? 'Select a project to browse files' : label} onClick={() => open(type)} className={button}><Icon size={18} /><span className="max-w-full truncate">{label}</span></button>)}
+      {hidden.length > 0 && <>
+        <button ref={more} type="button" title="Other Tools" onClick={() => setMenu(true)} className={button}><MoreHorizontal size={18} /><span className="max-w-full truncate">Other Tools...</span></button>
+        <Popover open={menu} onClose={() => setMenu(false)} anchor={more} placement="bottom-end" className="w-48 p-1">
+          {hidden.map(({ type, label, Icon }) => <MenuItem key={type} icon={<Icon size={14} />} label={label} disabled={type === 'file' && !root} onClick={() => { setMenu(false); open(type) }} />)}
+        </Popover>
+      </>}
+    </div>
   )
 }

@@ -15,6 +15,8 @@ import type {
   Chat,
   ChatEvent,
   ComputerPermission,
+  DesktopInput,
+  DesktopWindow,
   ComputerPermissions,
   InstalledApp,
   CreateProjectInput,
@@ -201,6 +203,15 @@ export interface GalaxyApi {
     searchApps(query: string): Promise<InstalledApp[]>
     /** Streams exactly these windows an agent has worked in as computer-frame events. */
     watch(windowIds: number[]): Promise<void>
+    /** App windows the user can view and control in the Desktop Apps tab. */
+    desktopWindows(): Promise<DesktopWindow[]>
+    /** Streams a window the user picked as computer-frame events, until unviewDesktop. */
+    viewDesktop(windowId: number): Promise<DesktopWindow>
+    unviewDesktop(windowId: number): Promise<void>
+    /** Restarts a viewed window's stream that has gone quiet. */
+    reviveDesktop(windowId: number): Promise<void>
+    /** Posts the user's own input to a window being viewed. */
+    desktopInput(windowId: number, events: DesktopInput[]): Promise<void>
   }
 
   terminal: {

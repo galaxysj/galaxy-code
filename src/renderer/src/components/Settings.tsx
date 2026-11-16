@@ -36,6 +36,7 @@ import {
   type BrowserLinkTarget,
   type BrowserSearchEngine,
   type ComputerMode,
+  type ComputerImageFormat,
   type ComputerPermission,
   type ComputerPermissions,
   type AcpAgentConfig,
@@ -2168,6 +2169,16 @@ function ComputerSection(): ReactNode {
               />
             </RowItem>
           )}
+          <RowItem label="Image format" hint="How window pictures and screenshots are captured. PNG keeps rounded corners transparent; JPEG is much lighter but shows them black. Applies to newly opened views.">
+            <Segmented<ComputerImageFormat>
+              value={settings.computerImageFormat}
+              onChange={(computerImageFormat) => void update({ computerImageFormat })}
+              options={[
+                { value: 'png', label: 'PNG' },
+                { value: 'jpeg', label: 'JPEG' }
+              ]}
+            />
+          </RowItem>
         </Card>
       </Section>
       <Section title="macOS permissions" description="You may need to restart Galaxy Code after granting these.">

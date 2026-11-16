@@ -193,6 +193,8 @@ export interface ComputerPermissions {
 }
 export type ComputerPermission = keyof ComputerPermissions
 export type ComputerMode = 'background' | 'full'
+/** How computer use encodes window pictures: PNG keeps rounded corners transparent, JPEG is lighter. */
+export type ComputerImageFormat = 'png' | 'jpeg'
 /** A desktop app found on this computer. */
 export interface InstalledApp {
   name: string
@@ -218,6 +220,23 @@ export interface ComputerWindow {
   width: number
   height: number
 }
+
+/** An app window the user can view and control from the Desktop Apps tab. */
+export interface DesktopWindow {
+  id: number
+  pid: number
+  app: string
+  title: string
+  width: number
+  height: number
+  icon?: string
+}
+
+/** One input event from the Desktop Apps tab. `x` and `y` are points from the window's top left. */
+export type DesktopInput =
+  | { t: 'down' | 'up' | 'drag' | 'move'; x: number; y: number; button?: number; clicks?: number; flags?: number }
+  | { t: 'scroll'; x: number; y: number; dx: number; dy: number }
+  | { t: 'key'; code: number; down: boolean; flags?: number }
 
 export interface Settings {
   theme: ThemeMode
@@ -284,6 +303,7 @@ export interface Settings {
   appContextShortcut: string
   /** How agents start on the computer. 'full' asks for full access on the first Computer call of a turn. */
   computerMode: ComputerMode
+  computerImageFormat: ComputerImageFormat
   sidebarWidth: number
   panelWidth: number
   collapsedProjects: string[]
@@ -670,7 +690,7 @@ export type UiEvent =
   | { type: 'credits-locked'; locked: boolean }
   | { type: 'computer-window'; chatId: string; window: ComputerWindow | null }
   | { type: 'computer-cursor'; cursor: ComputerCursor }
-  | { type: 'computer-frame'; windowId: number; jpeg: Uint8Array }
+  | { type: 'computer-frame'; windowId: number; image: Uint8Array; mime: string }
   | { type: 'browser-state'; state: BrowserState; tabId?: string }
   | { type: 'menu'; action: 'new-chat' | 'settings' | 'toggle-sidebar' | 'toggle-panel' | 'open-files' | 'open-browser' | 'open-terminal' }
 
