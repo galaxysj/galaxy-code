@@ -82,14 +82,13 @@ export async function outlineAreas(src: string, areas: { n: number; rect: Commen
     const x = rect.x * sx
     const y = rect.y * sy
     ctx.lineWidth = line
-    ctx.strokeStyle = '#ff3b30'
-    ctx.fillStyle = 'rgba(255,59,48,0.12)'
-    ctx.fillRect(x, y, rect.width * sx, rect.height * sy)
+    // Only a border, so what it marks, such as a drawing, shows as it is.
+    ctx.strokeStyle = '#0a84ff'
     ctx.strokeRect(x, y, rect.width * sx, rect.height * sy)
     // The number sits on the top left corner, inside the picture.
     const bx = Math.max(0, Math.min(x, img.naturalWidth - badge))
     const by = Math.max(0, Math.min(y - badge, img.naturalHeight - badge))
-    ctx.fillStyle = '#ff3b30'
+    ctx.fillStyle = '#0a84ff'
     ctx.fillRect(bx, by, badge, badge)
     ctx.fillStyle = '#ffffff'
     ctx.font = `bold ${Math.round(badge * 0.7)}px -apple-system, system-ui, sans-serif`
@@ -98,6 +97,32 @@ export async function outlineAreas(src: string, areas: { n: number; rect: Commen
     ctx.fillText(String(n), bx + badge / 2, by + badge / 2 + 1)
   }
   return canvas.toDataURL('image/png')
+}
+
+/** A small grayscale copy of a picture, for telling whether two screenshots show the same screen. */
+async function fingerprint(src: string): Promise<{ thumb: Uint8ClampedArray; ratio: number } | null> {
+  try {
+    const img = await load(src)
+    const size = 48
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return null
+    ctx.drawImage(img, 0, 0, size, size)
+    const data = ctx.getImageData(0, 0, size, size).data
+    const thumb = new Uint8ClampedArray(size * size)
+    for (let i = 0; i < thumb.length; i++) thumb[i] = (data[i * 4] + data[i * 4 + 1] + data[i * 4 + 2]) / 3
+    return { thumb, ratio: img.naturalWidth / img.naturalHeight }
+  } catch {
+    return null
+  }
+}
+
+function difference(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
+  let total = 0
+  for (let i = 0; i < a.length; i++) total += Math.abs(a[i] - b[i])
+  return total / a.length
 }
 
 /** The comments as text for the prompt, and the pictures they point at, each with its areas numbered as in the text. */
@@ -110,13 +135,21 @@ export async function buildComments(comments: ComposerComment[]): Promise<{ text
     group.areas.push({ n: index + 1, rect: area.rect, reference: area.reference })
     groups.set(area.group, group)
   })
-  const images: { name: string; dataUrl: string }[] = []
-  let picture = 0
-  const names = new Map<string, number>()
+  // Screenshots of the same screen are never byte-identical (a fresh capture each time), so ones that look alike share one picture.
+  const merged: { src: string; thumb: Uint8ClampedArray | null; ratio: number; areas: { n: number; rect: CommentArea['rect']; reference: CommentArea['reference'] }[]; keys: string[] }[] = []
   for (const [group, { src, areas }] of groups) {
-    picture += 1
-    names.set(group, picture)
-    images.push({ name: `comments-picture-${picture}.png`, dataUrl: await outlineAreas(src, areas) })
+    const look = await fingerprint(src)
+    const same = merged.find((item) => look && item.thumb && Math.abs(item.ratio - look.ratio) < 0.01 && difference(item.thumb, look.thumb) < 6)
+    if (same) {
+      same.areas.push(...areas)
+      same.keys.push(group)
+    } else merged.push({ src, thumb: look?.thumb ?? null, ratio: look?.ratio ?? 0, areas: [...areas], keys: [group] })
+  }
+  const images: { name: string; dataUrl: string }[] = []
+  const names = new Map<string, number>()
+  for (const [index, item] of merged.entries()) {
+    for (const key of item.keys) names.set(key, index + 1)
+    images.push({ name: `comments-picture-${index + 1}.png`, dataUrl: await outlineAreas(item.src, item.areas.sort((a, b) => a.n - b.n)) })
   }
   const lines = comments.map((comment, index) => {
     const clip = comment.quote ? comment.quote.replace(/\s+/g, ' ').slice(0, 300) : ''

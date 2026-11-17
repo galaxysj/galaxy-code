@@ -175,7 +175,7 @@ export function CommentableImage({ src, source, alt, className }: { src: string;
           setAt({ x: event.clientX, y: event.clientY })
         }}
       >
-        {area && <div className="pointer-events-none absolute border-2 border-[#ff3b30] bg-[#ff3b30]/10" style={{ left: area.x, top: area.y, width: area.width, height: area.height }} />}
+        {area && <div className="pointer-events-none absolute border-2 border-[#0a84ff]" style={{ left: area.x, top: area.y, width: area.width, height: area.height }} />}
       </div>
       {area && at && (
         <CommentBox
