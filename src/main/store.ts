@@ -80,6 +80,7 @@ function defaultSettings(): Settings {
     acpAgents: AcpLibrary.map(libraryAcpAgent),
     mcpServers: [],
     browserOpenLinks: 'built-in',
+    browserAnnotationMode: 'design',
     browserSearchEngine: 'duckduckgo',
     browserBlockPopups: false,
     browserAgentControl: true,

@@ -1,4 +1,4 @@
-import { isDocumentArtifact, isScreenshotArtifact, parseFrontMatter } from '@shared/artifacts'
+import { isDocumentArtifact, isScreenshotArtifact, isVisualArtifact, parseFrontMatter, visualViewName } from '@shared/artifacts'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
@@ -412,7 +412,7 @@ export const presentTool: ToolDef = {
       if (!info || !info.isFile()) missing.push(p)
       else {
         // A document artifact is presented under the name in its front matter.
-        const title = isDocumentArtifact(abs) ? parseFrontMatter(await readFile(abs, 'utf8').catch(() => '')).meta.name?.trim() : ''
+        const title = isDocumentArtifact(abs) ? parseFrontMatter(await readFile(abs, 'utf8').catch(() => '')).meta.name?.trim() : isVisualArtifact(abs) ? visualViewName(await readFile(abs, 'utf8').catch(() => '')) : ''
         files.push({ path: abs, name: isScreenshotArtifact(abs) ? 'Screenshot' : title || basename(abs), mime: mimeOf(abs), size: info.size })
       }
     }

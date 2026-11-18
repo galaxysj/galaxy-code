@@ -34,6 +34,7 @@ import {
   type AnalyticsRow,
   type BrowserDataKind,
   type BrowserLinkTarget,
+  type BrowserAnnotationMode,
   type BrowserSearchEngine,
   type ComputerMode,
   type ComputerImageFormat,
@@ -1980,6 +1981,16 @@ function BrowserSection(): ReactNode {
               options={[
                 { value: 'built-in', label: 'Built-in' },
                 { value: 'default', label: 'Default browser' }
+              ]}
+            />
+          </RowItem>
+          <RowItem label="Default annotation mode" hint="Comment marks an element or area. Design draws freely with a pen, or picks an element.">
+            <Segmented<BrowserAnnotationMode>
+              value={settings.browserAnnotationMode}
+              onChange={(browserAnnotationMode) => void update({ browserAnnotationMode })}
+              options={[
+                { value: 'comment', label: 'Comment' },
+                { value: 'design', label: 'Design' }
               ]}
             />
           </RowItem>

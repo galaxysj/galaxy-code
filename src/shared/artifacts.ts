@@ -16,7 +16,24 @@ export function artifactTitle(path: string): string | null {
   const name = artifactName(path)
   if (!name) return null
   const lower = name.toLowerCase()
-  return lower === PLAN_ARTIFACT ? 'Plan' : lower === TASKS_ARTIFACT ? 'Task' : isScreenshotName(lower) ? screenshotTitle(name) : name
+  return lower === PLAN_ARTIFACT ? 'Plan' : lower === TASKS_ARTIFACT ? 'Task' : isScreenshotName(lower) ? screenshotTitle(name) : /\.html?$/.test(lower) ? VISUAL_VIEW_NAME : name
+}
+
+/** The name a Visual View shows when its HTML does not give one. */
+export const VISUAL_VIEW_NAME = 'Visual View'
+
+/** A Visual View: an HTML page the agent wrote to the chat's artifacts folder, shown in the side panel. */
+export const isVisualArtifact = (path: string): boolean => /\.html?$/i.test(artifactName(path) ?? '')
+
+/** The name in `<meta name="galaxy-artifact-name" content="...">`, or "Visual View" when the page leaves it out. */
+export function visualViewName(html: string): string {
+  for (const tag of html.match(/<meta\b[^>]*>/gi) ?? []) {
+    if (!/\bname\s*=\s*(["']?)galaxy-artifact-name\1(?=[\s/>])/i.test(tag)) continue
+    const content = /\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i.exec(tag)
+    const name = (content?.[1] ?? content?.[2] ?? content?.[3] ?? '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim()
+    if (name) return name
+  }
+  return VISUAL_VIEW_NAME
 }
 
 /** When a browser screenshot was taken, read from its file name (browser-2026-11-06T12-39-21-060Z-...), or null. */

@@ -36,7 +36,7 @@ import {
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { EXPLORE_KINDS, type AskQuestion, type FileDiff, type Item, type ReasoningItem, type TaskEntry, type ToolItem, type ToolKind } from '@shared/types'
 import { basename, cn, formatBytes, formatDuration, pageHost, plural, relativeTo } from '../../lib/utils'
-import { attemptedTitle, baseName, editFileStats, editStats, isNoChange, isTerminalRead, isToolOutputRead, readPath, thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
+import { attemptedTitle, baseName, editFileStats, editStats, isNoChange, isTerminalRead, isToolOutputRead, liveArtifactTitle, readPath, thinkingTopic, toolActivityTitle } from '../../lib/toolActivity'
 import { useStore } from '../../store'
 import { DiffStat, DiffView, LiveDiffStat } from '../DiffView'
 import { Markdown } from '../Markdown'
@@ -728,7 +728,7 @@ function LiveEditLines({ item, icon }: { item: ToolItem; icon: ReactNode }): Rea
         <div key={file?.path ?? index} className="flex h-7 min-w-0 items-center gap-2 text-[13.8px] font-[450] text-muted" title={file && !artifactTitle(file.path) ? file.path : undefined}>
           {/* Every file being written spins, not only the first. */}
           <span className="flex w-4 shrink-0 justify-center">{file || index === 0 ? <Spinner size={13} /> : icon}</span>
-          <span className="shimmer min-w-0 truncate">{leadWord(file ? `${verb} ${artifactTitle(file.path) ?? baseName(file.path)}` : verb)}</span>
+          <span className="shimmer min-w-0 truncate">{leadWord(file ? `${verb} ${liveArtifactTitle(file) ?? baseName(file.path)}` : verb)}</span>
           {file && <LiveDiffStat added={file.added} removed={file.removed} live />}
         </div>
       ))}
@@ -749,7 +749,7 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
   const followPatch = useRef(true)
   const Icon = artifactsIcon(item.meta?.diffs?.map((diff) => diff.path) ?? []) ?? KIND_ICON[item.tool]
   // While it is written, the card shows only the spinner and the name of the file being written.
-  const writing = live ? editFileStats(item).at(-1)?.path : undefined
+  const writingFile = live ? editFileStats(item).at(-1) : undefined
   const inputPreview = useMemo(() => {
     const input = (item.input ?? {}) as Record<string, unknown>
     if (diffs.length > 0 || isNoChange(item)) return null
@@ -765,6 +765,9 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
     if (live && preview && followPatch.current && patchViewport.current) patchViewport.current.scrollTop = patchViewport.current.scrollHeight
   }, [diffs, inputPreview, live, preview])
 
+  // An artifact being written is a line with its name and counts, not a boxed card, as when the edit sits in a group.
+  if (live && artifactEdit && diffs.length === 0) return <LiveEditLines item={item} icon={<ToolIcon item={item} icon={Icon} />} />
+
   // A finished patch that touched several files shows one card per file instead of a single "Edited 12 files", and so
   // does one waiting for approval or declined, whose diffs were previewed before it would run.
   if (!live && (item.status === 'done' || item.status === 'awaiting' || item.status === 'denied') && diffs.length > 1 && !allArtifacts(diffs)) {
@@ -776,10 +779,10 @@ function EditTool({ item, ctx }: { item: ToolItem; ctx: TimelineContext }): Reac
       <div className="px-3 py-1">
       <Row
         icon={<Icon size={13.5} className="text-subtle" />}
-        title={attemptedTitle(item) ?? (live ? (writing ? basename(writing) : 'Preparing changes…') : editedTitle(item, diffs))}
+        title={attemptedTitle(item) ?? (live ? (writingFile ? liveArtifactTitle(writingFile) ?? basename(writingFile.path) : 'Preparing changes…') : editedTitle(item, diffs))}
         plain={live}
         hint={failureReason(item)}
-        detail={live || artifactsIcon(diffs.map((diff) => diff.path)) ? undefined : item.tool === 'memory' ? item.detail : item.detail && item.detail !== basename(item.detail) ? item.detail : undefined}
+        detail={live || artifactsIcon(diffs.map((diff) => diff.path)) ? undefined : item.tool === 'memory' ? item.detail : item.detail && item.detail !== basename(item.detail) && !/[/\\]\.galaxy[/\\]/.test(item.detail) ? item.detail : undefined}
         live={live}
         open={open}
         onToggle={live || isNoChange(item) ? undefined : toggle}

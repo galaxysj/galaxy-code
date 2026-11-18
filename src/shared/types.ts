@@ -182,6 +182,8 @@ export interface AccountStatus {
 
 /** Where links in messages and documents open. */
 export type BrowserLinkTarget = 'built-in' | 'default'
+/** What the browser's annotate button does: Comment marks an element or area; Design draws freely with a pen or picks an element. */
+export type BrowserAnnotationMode = 'comment' | 'design'
 export type BrowserSearchEngine = 'duckduckgo' | 'google' | 'bing' | 'brave'
 /** What Clear removes from the built-in browser. */
 export type BrowserDataKind = 'cache' | 'site-data'
@@ -287,6 +289,7 @@ export interface Settings {
   removedAccounts?: AccountId[]
   mcpServers: McpServerConfig[]
   browserOpenLinks: BrowserLinkTarget
+  browserAnnotationMode: BrowserAnnotationMode
   /** Answers address bar text that is not a URL. */
   browserSearchEngine: BrowserSearchEngine
   /** Refuse window.open pop-ups. Links that open in a new tab still work. */

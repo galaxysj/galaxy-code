@@ -1,3 +1,4 @@
+import { artifactTitle, isDocumentArtifact, isVisualArtifact, parseFrontMatter, visualViewName } from '@shared/artifacts'
 import type { ToolItem } from '@shared/types'
 
 // Explicit forms also cover irregular verbs; never change filenames or URL text.
@@ -199,4 +200,15 @@ export function editTitleWithFile(item: ToolItem, title: string): string {
   const { paths } = editStats(item)
   if (!paths.length) return title
   return `${title.trim()} ${paths.length === 1 ? baseName(paths[0]) : `${paths.length} files`}`
+}
+
+/** The name an artifact shows while it is still being written: the name already in its front matter or meta tag, else its usual title. Null outside the artifacts folder. */
+export function liveArtifactTitle(file: EditFileStat): string | null {
+  const title = artifactTitle(file.path)
+  if (!title) return null
+  // A patch marks its new lines with a plus.
+  const text = (file.text ?? '').split('\n').map((line) => (line.startsWith('+') ? line.slice(1) : line)).join('\n')
+  if (isVisualArtifact(file.path)) return visualViewName(text)
+  if (isDocumentArtifact(file.path)) return parseFrontMatter(text).meta.name?.trim() || title
+  return title
 }

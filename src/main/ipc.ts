@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { copyFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
-import { isDocumentArtifact, parseFrontMatter } from '@shared/artifacts'
+import { isDocumentArtifact, isVisualArtifact, parseFrontMatter, visualViewName } from '@shared/artifacts'
 import { listShells, runningShellCount, stopShells } from './tools/shell'
 import { IPC_CHAT_EVENT, IPC_INVOKE, IPC_UI_EVENT, type Rect } from '@shared/api'
 import { resolveImageModels, resolveModels, type ProviderId } from '@shared/catalog'
@@ -376,7 +376,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, getWindows: (
       const files = await Promise.all(names.map(async (name) => {
         const path = join(dir, name)
         const info = await stat(path).catch(() => null)
-        const title = isDocumentArtifact(path) ? parseFrontMatter(await readFile(path, 'utf8').catch(() => '')).meta.name?.trim() || null : null
+        const title = isDocumentArtifact(path) ? parseFrontMatter(await readFile(path, 'utf8').catch(() => '')).meta.name?.trim() || null : isVisualArtifact(path) ? visualViewName(await readFile(path, 'utf8').catch(() => '')) : null
         return { path, title, time: info?.mtimeMs ?? 0 }
       }))
       return files.sort((a, b) => b.time - a.time).map(({ path, title }) => ({ path, title }))

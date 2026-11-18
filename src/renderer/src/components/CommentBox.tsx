@@ -8,15 +8,34 @@ import { Button } from './ui'
 const WIDTH = 300
 
 /** A small note box at a point on screen. Add puts the comment into the message being written. */
-export function CommentBox({ x, y, title, send = false, onSubmit, onClose }: { x: number; y: number; title?: string; /** The box writes the final message and sends it, instead of adding a comment. */ send?: boolean; onSubmit(note: string): void | Promise<void>; onClose(): void }): ReactNode {
+export function CommentBox({ x, y, avoid, within, title, send = false, onSubmit, onClose }: { x: number; y: number; /** A screen area to keep clear of, such as a drawing; the box only covers it when nothing else fits. */ avoid?: { left: number; top: number; right: number; bottom: number }; /** The box stays inside this screen area instead of the whole window. */ within?: { left: number; top: number; right: number; bottom: number }; title?: string; /** The box writes the final message and sends it, instead of adding a comment. */ send?: boolean; onSubmit(note: string): void | Promise<void>; onClose(): void }): ReactNode {
   const [note, setNote] = useState('')
   const [pos, setPos] = useState({ left: x, top: y })
   const box = useRef<HTMLDivElement>(null)
   const area = useRef<HTMLTextAreaElement>(null)
   useLayoutEffect(() => {
     const height = box.current?.offsetHeight ?? 130
-    setPos({ left: Math.max(8, Math.min(x, window.innerWidth - WIDTH - 8)), top: Math.max(8, Math.min(y, window.innerHeight - height - 8)) })
-  }, [x, y])
+    const edge = { left: (within?.left ?? 0) + 8, top: (within?.top ?? 0) + 8, right: (within?.right ?? window.innerWidth) - 8, bottom: (within?.bottom ?? window.innerHeight) - 8 }
+    const clampX = (value: number): number => Math.max(edge.left, Math.min(value, edge.right - WIDTH))
+    const clampY = (value: number): number => Math.max(edge.top, Math.min(value, edge.bottom - height))
+    if (avoid) {
+      const gap = 10
+      const fits = (left: number, top: number): boolean => left >= edge.left && top >= edge.top && left + WIDTH <= edge.right && top + height <= edge.bottom
+      const middle = clampY((avoid.top + avoid.bottom) / 2 - height / 2)
+      const tries = [
+        { left: clampX(x), top: avoid.bottom + gap },
+        { left: clampX(x), top: avoid.top - gap - height },
+        { left: avoid.right + gap, top: middle },
+        { left: avoid.left - gap - WIDTH, top: middle }
+      ]
+      const spot = tries.find((item) => fits(item.left, item.top))
+      if (spot) {
+        setPos(spot)
+        return
+      }
+    }
+    setPos({ left: clampX(x), top: clampY(y) })
+  }, [x, y, avoid?.left, avoid?.top, avoid?.right, avoid?.bottom, within?.left, within?.top, within?.right, within?.bottom])
   useEffect(() => area.current?.focus(), [])
   const submit = (): void => {
     if (!note.trim()) return
@@ -175,7 +194,7 @@ export function CommentableImage({ src, source, alt, className }: { src: string;
           setAt({ x: event.clientX, y: event.clientY })
         }}
       >
-        {area && <div className="pointer-events-none absolute border-2 border-[#0a84ff]" style={{ left: area.x, top: area.y, width: area.width, height: area.height }} />}
+        {area && <div className="pointer-events-none absolute border-2 border-[#0a84ff] bg-[#0a84ff]/30" style={{ left: area.x, top: area.y, width: area.width, height: area.height }} />}
       </div>
       {area && at && (
         <CommentBox

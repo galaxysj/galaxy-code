@@ -253,7 +253,15 @@ user-editable: false
 
 name is the title the user sees everywhere. user-editable: false locks the document so the user can only read it; use true when you want them to adjust it, in which case they can change the name and the body but never the user-editable line. The front matter is hidden when the document is viewed.
 
-Use an artifact when the result is a document the user will read, keep or come back to, and that would be too long or too lasting for a chat message: a report or research summary, a guide or how-to, a design or spec, meeting or analysis notes, a checklist or template the user will fill in (user-editable: true). Update the same artifact when its subject comes up again rather than writing a copy. Do not use artifacts for source code, for files that belong in the project, or for short answers; put those in the chat or the project instead.`,
+Use an artifact when the result is a document the user will read, keep or come back to, and that would be too long or too lasting for a chat message: a report or research summary, a guide or how-to, a design or spec, meeting or analysis notes, a checklist or template the user will fill in (user-editable: true). Update the same artifact when its subject comes up again rather than writing a copy. Do not use artifacts for source code, for files that belong in the project, or for short answers; put those in the chat or the project instead.
+
+A Visual View is an HTML page you write to the same folder (a file name ending in .html, written with an Edit *** Add File patch, no approval needed). The user opens it in the right side panel, where the app's browser engine shows it from its file. Use one when the result is better seen than read: a chart or dashboard, a diagram, an interactive explainer, a layout or UI mock-up, a visual comparison. Make it one self-contained file: inline CSS and JavaScript, inline SVG or data: images, no external requests, no forms that submit anywhere, and a readable layout at any width. Name it in the head with a meta tag; the name is the title the user sees, and a page without the tag is shown as "Visual View":
+
+<meta name="galaxy-artifact-name" content="Quarterly revenue">
+
+Update the same Visual View when the subject comes up again rather than writing a copy.
+
+Do not open an artifact or Visual View beside the chat yourself (the Open tool) unless the user asked to see it; the user opens it from the chat when they want to.`,
     ctx.artifactFiles.length ? `Files in this chat's artifacts folder (${dir}):\n${ctx.artifactFiles.slice(0, ARTIFACT_LIST_LIMIT).map((name) => `- ${name}`).join('\n')}${ctx.artifactFiles.length > ARTIFACT_LIST_LIMIT ? `\n- … ${ctx.artifactFiles.length - ARTIFACT_LIST_LIMIT} more; List the folder to see all of them` : ''}` : '',
     ctx.taskList ? `Current task list (${ctx.tasksFile}):\n\n${ctx.taskList}` : ''
   ].filter(Boolean).join('\n\n')

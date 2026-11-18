@@ -1,6 +1,8 @@
-import { artifactTitle, isDocumentArtifact, isScreenshotArtifact, isTasksArtifact, parseFrontMatter, parseTaskMarkdown, userEditable } from '@shared/artifacts'
+import { artifactTitle, isDocumentArtifact, isScreenshotArtifact, isTasksArtifact, isVisualArtifact, parseFrontMatter, parseTaskMarkdown, userEditable, visualViewName } from '@shared/artifacts'
 import { TaskMark } from './TaskMark'
 import { DesktopPane } from './DesktopPane'
+import { BrowserDesign } from './BrowserDesign'
+import { VisualViewBody } from './VisualView'
 import hljs from 'highlight.js/lib/common'
 import { unavailableAccounts } from '@shared/catalog'
 import { Terminal } from '@xterm/xterm'
@@ -71,7 +73,6 @@ import type { BrowserPick, GitCommand, WorktreeMergeStrategy, WorktreeStatus } f
 
 // Browser
 
-const WINDOW_SESSION = crypto.randomUUID()
 const BLANK_BROWSER = { url: '', title: '', loading: false, canGoBack: false, canGoForward: false, agentActive: false }
 
 function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string; root: string | null }): ReactNode {
@@ -80,15 +81,20 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
   const [address, setAddress] = useState(state.url)
   const [editing, setEditing] = useState(false)
   const hasPage = state.url !== ''
-  const covered = usePopoverShown()
+  const popoverShown = usePopoverShown()
   // A still of the page, shown in place of the native view while a popover needs to sit above it.
   const [frame, setFrame] = useState<string | null>(null)
   // Comment mode: the user marks something on the page; the note is written over a still of the page.
   const [commenting, setCommenting] = useState(false)
   const [sending, setSending] = useState<{ x: number; y: number } | null>(null)
+  // The note box for the final Comment button sits over the page, so the native view steps aside for a still while it is open.
+  const covered = popoverShown || !!sending
   const pendingComments = useStore((s) => s.composerComments[s.activeChatId ?? 'new']?.length ?? 0)
   const [picked, setPicked] = useState<{ pick: BrowserPick; frame: string } | null>(null)
-  const stepAside = (covered && !!frame) || !!picked
+  // Design mode: a still of the page to draw on with a pen.
+  const annotationMode = useStore((s) => s.settings.browserAnnotationMode ?? 'design')
+  const [designing, setDesigning] = useState<string | null>(null)
+  const stepAside = (covered && !!frame) || !!picked || !!designing
   // Responsive mode, as in Chrome's device toolbar: the page lays out at this size, scaled to fit, and its edges drag.
   const [responsive, setResponsive] = useState<{ width: number; height: number } | null>(null)
   const stage = useRef<HTMLDivElement>(null)
@@ -186,6 +192,18 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
       void window.galaxy.browser.cancelPick(tabId)
       return
     }
+    if (designing) {
+      setDesigning(null)
+      return
+    }
+    if (annotationMode === 'design') {
+      setPicked(null)
+      void window.galaxy.browser.frame(tabId).then((image) => { if (image) setDesigning(image) }).catch(() => {})
+      return
+    }
+    startPick()
+  }
+  const startPick = (): void => {
     setCommenting(true)
     void window.galaxy.browser.pick(tabId).then(async (pick) => {
       setCommenting(false)
@@ -196,6 +214,7 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
   }
   useEffect(() => () => void window.galaxy.browser.cancelPick(tabId), [tabId])
   useEffect(() => { if (!visible && commenting) void window.galaxy.browser.cancelPick(tabId) }, [visible, commenting, tabId])
+  useEffect(() => { if (!visible) setDesigning(null) }, [visible])
 
   const go = (): void => {
     const value = address.trim()
@@ -240,7 +259,7 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
           />
           {state.agentActive && <span className="shimmer shrink-0 text-[11px]">Agent is browsing</span>}
         </div>
-        <IconButton label={commenting ? 'Cancel commenting' : 'Comment on the page: click an element or drag an area'} active={commenting} disabled={!hasPage} onClick={toggleComment}>
+        <IconButton label={commenting ? 'Cancel commenting' : designing ? 'Leave design mode' : annotationMode === 'design' ? 'Design: draw on the page with a pen, or select an element' : 'Comment on the page: click an element or drag an area'} active={commenting || !!designing} disabled={!hasPage} onClick={toggleComment}>
           <MessageSquarePlus size={14} />
         </IconButton>
         {pendingComments > 0 && (
@@ -271,11 +290,12 @@ function BrowserPane({ visible, tabId, root }: { visible: boolean; tabId: string
         </div>
       )}
       <div ref={stage} className={cn('relative min-h-0 flex-1', responsive && 'flex items-center justify-center bg-inset')}>
-        <div ref={host} className={cn('overflow-hidden', !responsive && 'h-full w-full')} style={responsive ? { width: Math.round(responsive.width * scale), height: Math.round(responsive.height * scale) } : undefined}>
+        <div ref={host} className={cn('relative overflow-hidden', !responsive && 'h-full w-full')} style={responsive ? { width: Math.round(responsive.width * scale), height: Math.round(responsive.height * scale) } : undefined}>
           {(picked?.frame ?? frame) && hasPage && <img src={picked?.frame ?? frame ?? ''} alt="" draggable={false} className="h-full w-full" />}
+          {designing && hasPage && <BrowserDesign frame={designing} url={state.url} title={state.title} onClose={() => setDesigning(null)} onPickElement={() => { setDesigning(null); startPick() }} />}
           {picked && (
             <div
-              className="pointer-events-none absolute border-2 border-[#ff3b30] bg-[#ff3b30]/10"
+              className="pointer-events-none absolute border-2 border-[#0a84ff] bg-[#0a84ff]/30"
               style={{ left: `${(picked.pick.rect.x / picked.pick.viewport.width) * 100}%`, top: `${(picked.pick.rect.y / picked.pick.viewport.height) * 100}%`, width: `${(picked.pick.rect.width / picked.pick.viewport.width) * 100}%`, height: `${(picked.pick.rect.height / picked.pick.viewport.height) * 100}%` }}
             />
           )}
@@ -382,7 +402,6 @@ async function buildPlan(path: string, root: string | null): Promise<void> {
 
 function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; root: string | null }): ReactNode {
   const homeDir = useStore((s) => s.homeDir)
-  const showBrowser = useStore((s) => s.showBrowser)
   const [view, setView] = useState<FileView | null>(null)
   const [mode, setMode] = useState<'preview' | 'source'>('preview')
   const [reload, setReload] = useState(0)
@@ -442,7 +461,6 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
   const artifact = !!artifactTitle(file.path)
   const [commenting, setCommenting] = useState<{ x: number; y: number } | null>(null)
   const [sending, setSending] = useState<{ x: number; y: number } | null>(null)
-  const isHtml = /\.html?$/i.test(file.path)
   const isSvg = view?.mime === 'image/svg+xml'
   /** A background process's output: shown read-only and kept current while it runs. */
   const processLog = /[/\\]galaxy-code[/\\]bg-[^/\\]+\.log$/.test(file.path)
@@ -457,18 +475,23 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
   const document = isDocumentArtifact(file.path) && view?.kind === 'text'
   const front = document ? parseFrontMatter(view?.content ?? '') : null
   const locked = document && !userEditable(view?.content ?? '')
-  const hasPreview = (isMarkdown || isSvg) && !tasksFile && !locked
-  // The document's name is its tab title.
+  /** A Visual View: an HTML page the agent wrote, shown in the app's Chromium view. Its name comes from the galaxy-artifact-name meta tag. */
+  const visual = isVisualArtifact(file.path) && view?.kind === 'text'
+  const visualName = visual ? visualViewName(view?.content ?? '') : null
+  /** Continuous Comment on a Visual View: picking goes on, one comment after another, until it is turned off. */
+  const [picking, setPicking] = useState(false)
+  const hasPreview = (isMarkdown || isSvg || visual) && !tasksFile && !locked
+  // The document's or Visual View's name is its tab title.
   useEffect(() => {
-    const name = front?.meta.name
-    if (document && name) useStore.getState().updatePanelTab(file.path, { customTitle: name })
-  }, [document, front?.meta.name, file.path])
+    const name = front?.meta.name || visualName
+    if (name) useStore.getState().updatePanelTab(file.path, { customTitle: name })
+  }, [front?.meta.name, visualName, file.path])
 
   return (
     <div className={cn('flex h-full flex-col', !visible && 'hidden')}>
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line pl-3 pr-2">
         {artifact ? (
-          <span className="min-w-0 truncate text-[12.5px] font-medium text-fg">{front?.meta.name || artifactTitle(file.path)}</span>
+          <span className="min-w-0 truncate text-[12.5px] font-medium text-fg">{front?.meta.name || visualName || artifactTitle(file.path)}</span>
         ) : (
           <span className="min-w-0 truncate font-mono text-[11.5px] text-muted" title={file.path}>
             {relativeTo(root, file.path, homeDir)}
@@ -493,18 +516,6 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
             ]}
           />
         )}
-        {isHtml && (
-          <IconButton
-            label="Preview in the browser panel"
-            onClick={() => {
-              const tabId = `preview:${WINDOW_SESSION}:${file.path}`
-              showBrowser(tabId)
-              void window.galaxy.browser.navigate(`file://${file.path}`, tabId).catch((error) => useStore.getState().notify(String(error), 'error'))
-            }}
-          >
-            <Globe size={13.5} />
-          </IconButton>
-        )}
         {view?.content !== undefined && <CopyButton text={view.content} label="Copy contents" />}
         <IconButton label="Reload" size="sm" onClick={() => setReload((n) => n + 1)}>
           <RotateCw size={12.5} />
@@ -514,7 +525,7 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
             <IconButton label="Save a copy" size="sm" onClick={() => void window.galaxy.files.saveCopy(file.path, basename(file.path)).then((saved) => { if (saved) useStore.getState().notify(`Saved a copy to ${saved}`, 'info') }).catch((error: unknown) => useStore.getState().notify(String(error), 'error'))}>
               <Download size={13} />
             </IconButton>
-            <IconButton label="Comment: add a note to send with your next message" size="sm" active={!!commenting} onClick={(event) => { const box = event.currentTarget.getBoundingClientRect(); setCommenting((current) => current ? null : { x: box.right - 300, y: box.bottom + 6 }) }}>
+            <IconButton label={visual && mode === 'preview' ? (picking ? 'Stop Continuous Comment' : 'Continuous Comment: click an element or drag an area, again and again') : 'Comment: add a note to send with your next message'} size="sm" active={visual && mode === 'preview' ? picking : !!commenting} onClick={(event) => { if (visual && mode === 'preview') { setPicking(!picking); return } const box = event.currentTarget.getBoundingClientRect(); setCommenting((current) => current ? null : { x: box.right - 300, y: box.bottom + 6 }) }}>
               <MessageSquarePlus size={13} />
             </IconButton>
           </>
@@ -534,7 +545,7 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
           </Button>
         )}
         {sending && <CommentBox send x={sending.x} y={sending.y} title="Message" onClose={() => setSending(null)} onSubmit={(note) => { const state = useStore.getState(); const key = state.activeChatId ?? 'new'; const current = state.composerText[key] ?? ''; state.setComposerText(key, current ? `${current.replace(/\s+$/, '')}\n${note.trim()}` : note.trim()) }} />}
-        {commenting && <CommentBox x={commenting.x} y={commenting.y} title={`Comment on ${front?.meta.name || artifactTitle(file.path)}`} onClose={() => setCommenting(null)} onSubmit={(note) => addComment({ source: front?.meta.name || artifactTitle(file.path) || basename(file.path), note })} />}
+        {commenting && <CommentBox x={commenting.x} y={commenting.y} title={`Comment on ${front?.meta.name || visualName || artifactTitle(file.path)}`} onClose={() => setCommenting(null)} onSubmit={(note) => addComment({ source: front?.meta.name || visualName || artifactTitle(file.path) || basename(file.path), note })} />}
         {PLAN_FILE.test(file.path) && view?.kind === 'text' && (
           <Button variant="primary" size="sm" className="ml-1" disabled={dirty} title={dirty ? 'Save the plan before building' : 'Send this plan to the agent and start building'} onClick={() => void buildPlan(file.path, root)}>
             <Hammer size={12.5} />
@@ -553,6 +564,8 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
           <div className="flex h-full items-center justify-center overflow-auto p-6" style={{ background: 'repeating-conic-gradient(var(--bg-hover) 0% 25%, transparent 0% 50%) 50% / 18px 18px' }}>
             <CommentableImage src={view.dataUrl ?? ''} source={artifactTitle(file.path) ?? view.name} alt={view.name} className="rounded shadow-pop" />
           </div>
+        ) : visual && mode === 'preview' && !view.truncated ? (
+          <VisualViewBody path={file.path} name={visualName ?? 'Visual View'} visible={visible} reloadKey={`${file.nonce}:${reload}`} picking={picking} onPickingChange={setPicking} covered={!!sending || !!commenting} />
         ) : tasksFile && view.kind === 'text' ? (
           <SelectionComment source={artifactTitle(file.path) ?? basename(file.path)} content={view.content} className="h-full overflow-y-auto px-6 py-5">
             <div className="space-y-2">
@@ -576,6 +589,9 @@ function FilePane({ file, visible, root }: { file: OpenFile; visible: boolean; r
           <SelectionComment source={artifactTitle(file.path) || basename(file.path)} content={view.content} className="h-full overflow-y-auto px-6 py-5">
             <Markdown text={view.content ?? ''} root={file.path.slice(0, file.path.lastIndexOf('/'))} html />
           </SelectionComment>
+        ) : visual ? (
+          // A Visual View is the agent's page: its source can be read and copied here but not edited.
+          <SelectionComment source={visualName ?? 'Visual View'} content={view.content} className="h-full"><SourceView content={view.content ?? ''} path={file.path} line={file.line} /></SelectionComment>
         ) : processLog && view.kind === 'text' ? (
           <SelectionComment source={relativeTo(root, file.path, homeDir)} content={view.content} className="h-full"><SourceView content={view.content ?? ''} path={file.path} line={file.line} /></SelectionComment>
         ) : view.kind === 'text' && !view.truncated ? (
@@ -1159,7 +1175,7 @@ export function SidePanel({ root, covered }: { root: string | null; covered: boo
       <div className="relative flex h-[46px] shrink-0 items-center gap-1.5 bg-bg px-2">
         <div ref={strip} className="panel-tab-strip no-drag relative flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1.5 px-px" style={{ maxWidth: tabs.reduce((width, tab) => width + (tab.pinned ? 58 : 224), 0) }}>
           {tabs.map((entry) => {
-            const Icon = entry.type === 'file' && /[/\\]galaxy-code[/\\]bg-[^/\\]+\.log$/.test(entry.path) ? SquareTerminal : entry.type === 'file' && artifactTitle(entry.path) ? (artifactTitle(entry.path) === 'Plan' ? FileText : artifactTitle(entry.path) === 'Task' ? ListTodo : isScreenshotArtifact(entry.path) ? Camera : FileIcon) : icons[entry.type]
+            const Icon = entry.type === 'file' && /[/\\]galaxy-code[/\\]bg-[^/\\]+\.log$/.test(entry.path) ? SquareTerminal : entry.type === 'file' && artifactTitle(entry.path) ? (artifactTitle(entry.path) === 'Plan' ? FileText : artifactTitle(entry.path) === 'Task' ? ListTodo : isScreenshotArtifact(entry.path) ? Camera : isVisualArtifact(entry.path) ? Eye : FileIcon) : icons[entry.type]
             const title = titleFor(entry)
             const active = activeTab === entry.id
             return (

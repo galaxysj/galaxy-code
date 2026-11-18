@@ -256,7 +256,7 @@ export function DesktopPane({ tabId, visible }: { tabId: string; visible: boolea
               {agentHere && <LiveCursor windowId={target.id} />}
               {area && (commenting || picked) && (
                 <div
-                  className="pointer-events-none absolute border-2 border-[#ff3b30] bg-[#ff3b30]/10"
+                  className="pointer-events-none absolute border-2 border-[#0a84ff] bg-[#0a84ff]/30"
                   style={{ left: `${(area.x / target.width) * 100}%`, top: `${(area.y / target.height) * 100}%`, width: `${(area.width / target.width) * 100}%`, height: `${(area.height / target.height) * 100}%` }}
                 />
               )}

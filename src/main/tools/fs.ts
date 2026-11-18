@@ -3,7 +3,7 @@ import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promise
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join, sep } from 'node:path'
 import { rgPath as bundledRgPath } from '@vscode/ripgrep'
-import { artifactName, frontMatterProblem, isDocumentArtifact, isTasksArtifact, parseFrontMatter, parseTaskMarkdown } from '@shared/artifacts'
+import { artifactName, frontMatterProblem, isDocumentArtifact, isVisualArtifact, visualViewName, isTasksArtifact, parseFrontMatter, parseTaskMarkdown } from '@shared/artifacts'
 import type { FileDiff, ToolItem } from '@shared/types'
 import { outsideReadApproval } from '../agent/approval'
 import { skillNameForPath } from '../services/skills'
@@ -266,9 +266,9 @@ export const listTool: ToolDef = {
   }
 }
 
-/** Markdown directly in a chat's artifacts folder, which the agent writes without approval. */
+/** Markdown and HTML directly in a chat's artifacts folder, which the agent writes without approval. */
 function isFreeArtifact(path: string): boolean {
-  return /\.md$/i.test(artifactName(path) ?? '') && path.startsWith(join(homedir(), '.galaxy') + sep)
+  return /\.(md|html?)$/i.test(artifactName(path) ?? '') && path.startsWith(join(homedir(), '.galaxy') + sep)
 }
 
 const earlyArtifacts = new WeakMap<Record<string, unknown>, ToolResult>()
@@ -327,7 +327,8 @@ Update File hunks use a space for unchanged context, - for removed lines and + f
   },
   present(input, ctx) {
     const paths = patchFiles(parseEditPatch(str(input, 'patch', true), ctx.cwd), ctx.cwd)
-    return { title: `Edit ${paths.length === 1 ? basename(paths[0]) : plural(paths.length, 'file')}`, detail: paths.map((path) => displayPath(ctx.cwd, path)).join(', ') }
+    // An artifact is shown by its name, never by where it is stored.
+    return { title: `Edit ${paths.length === 1 ? basename(paths[0]) : plural(paths.length, 'file')}`, detail: paths.every((path) => artifactName(path)) ? undefined : paths.map((path) => displayPath(ctx.cwd, path)).join(', ') }
   },
   approval(input, ctx) {
     const patch = str(input, 'patch', true)
@@ -372,6 +373,10 @@ Update File hunks use a space for unchanged context, - for removed lines and + f
     const planned = await plannedContents(patch, ctx.cwd)
     const titles = new Map<string, string>()
     for (const [path, content] of planned) {
+      if (content !== null && isVisualArtifact(path)) {
+        titles.set(path, visualViewName(content))
+        continue
+      }
       if (content === null || !isDocumentArtifact(path)) continue
       const problem = frontMatterProblem(content)
       if (problem) throw new ToolInputError(`${basename(path)}: ${problem}`)
