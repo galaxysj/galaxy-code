@@ -302,8 +302,8 @@ export const AgentModel: AgentModelSpec[] = [
 //Openrouter GPT
   
   {
-    DisplayName: 'GPT-6.2 Sol',
-    ID: 'openai/gpt-6.2-sol',
+    DisplayName: 'GPT-6.2 Astra',
+    ID: 'openai/gpt-6.2-astra',
     ContextOptions: [272_000, 1_050_000],
     Brand: 'GPT',
     Subscription: 'Default',
@@ -313,25 +313,15 @@ export const AgentModel: AgentModelSpec[] = [
     UltrafastMode: true
   },
   {
-    DisplayName: 'GPT-6.2 Terra',
-    ID: 'openai/gpt-6.2-terra',
+    DisplayName: 'GPT-6.2 Sol',
+    ID: 'openai/gpt-6.2-sol',
     ContextOptions: [272_000, 1_050_000],
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     UltraEffort: 'xhigh',
-    FastMode: true
-  },
-  {
-    DisplayName: 'GPT-6.2 Luna',
-    ID: 'openai/gpt-6.2-luna',
-    ContextOptions: [272_000, 1_050_000],
-    Brand: 'GPT',
-    Subscription: 'Default',
-    Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
-    DefaultEffort: 'medium',
-    UltraEffort: 'max',
-    FastMode: true
+    FastMode: true,
+    UltrafastMode: true
   },
   {
     DisplayName: 'GPT-6 Astra',
