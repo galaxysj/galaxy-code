@@ -355,8 +355,7 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     UltraEffort: 'xhigh',
-    FastMode: true,
-    Off: true
+    FastMode: true
   },
   {
     DisplayName: 'GPT-6 Luna',
@@ -367,8 +366,7 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'medium',
     UltraEffort: 'max',
-    FastMode: true,
-    Off: true
+    FastMode: true
   },
 
 //Legacy GPT
