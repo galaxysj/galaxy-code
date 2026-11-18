@@ -315,6 +315,28 @@ export const AgentModel: AgentModelSpec[] = [
     UltrafastMode: true
   },
   {
+    DisplayName: 'GPT-6.2 Astra',
+    ID: 'openai/gpt-6.2-astra',
+    ContextOptions: [272_000, 1_050_000],
+    Brand: 'GPT',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    UltraEffort: 'xhigh',
+    FastMode: true,
+    UltrafastMode: true
+  },
+  {
+    DisplayName: 'GPT-6.2 Sol',
+    ID: 'openai/gpt-6.2-sol',
+    ContextOptions: [272_000, 1_050_000],
+    Brand: 'GPT',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    UltraEffort: 'xhigh',
+    FastMode: true,
+    UltrafastMode: true
+  },
+  {
     DisplayName: 'GPT-6.1 Sol',
     ID: 'openai/gpt-6.1-sol',
     ContextOptions: [272_000, 1_050_000],
@@ -865,6 +887,24 @@ export const AgentModel: AgentModelSpec[] = [
   {
     DisplayName: 'GPT-6 Astra',
     ID: 'gpt-6-astra',
+    Brand: 'GPT',
+    Subscription: 'Codex',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    UltraEffort: 'xhigh',
+    FastMode: true
+  },
+  {
+    DisplayName: 'GPT-6.2 Astra',
+    ID: 'gpt-6.2-astra',
+    Brand: 'GPT',
+    Subscription: 'Codex',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    UltraEffort: 'xhigh',
+    FastMode: true
+  },
+  {
+    DisplayName: 'GPT-6.2 Sol',
+    ID: 'gpt-6.2-sol',
     Brand: 'GPT',
     Subscription: 'Codex',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
