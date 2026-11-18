@@ -353,7 +353,7 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     UltraEffort: 'xhigh',
-    FastMode: true
+    FastMode: true,
     UltrafastMode: true,
     Off: true
   },
