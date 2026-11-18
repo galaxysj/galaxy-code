@@ -161,7 +161,7 @@ async function loginAcp(id: AccountId, label: string): Promise<{ ok: boolean; me
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, auth: { terminal: true }, _meta: { 'terminal-auth': true } },
         clientInfo: { name: 'galaxy-code', title: 'Galaxy Code', version: '0.1.0' }
       },
-      id === 'antigravity' ? 180000 : 30000
+      30000
     )
     const methods = Array.isArray(init.authMethods) ? (init.authMethods as Json[]) : []
     // An older convention puts the terminal command in _meta; the protocol's own terminal method reruns the agent with its args.

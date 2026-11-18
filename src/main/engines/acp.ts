@@ -217,7 +217,7 @@ export function probeAcpOptions(id: AccountId, cwd: string, fresh = false): Prom
     const launch = await acpLaunch(id, 'ask')
     const rpc = new RpcProcess({ ...launch, cwd, strict: true })
     try {
-      await rpc.request('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'galaxy-code', title: 'Galaxy Code', version: '0.1.0' } }, id === 'antigravity' ? 180000 : 30000)
+      await rpc.request('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'galaxy-code', title: 'Galaxy Code', version: '0.1.0' } }, 30000)
       const opened = await rpc.request<Json>('session/new', { cwd, mcpServers: [] }, 60000)
       acpSignedIn.set(id, true)
       return optionsOf(opened).options
@@ -323,7 +323,7 @@ async function connect(account: AccountId, session: Session, env: ToolEnv, mode:
         clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false },
         clientInfo: { name: 'galaxy-code', title: 'Galaxy Code', version: '0.1.0' }
       },
-      account === 'antigravity' ? 180000 : 30000
+      30000
     )
     const connection: Connection = {
       account,

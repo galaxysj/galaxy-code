@@ -111,10 +111,13 @@ export const AcpLibrary: AcpAgentSpec[] = [
   {
     ID: 'antigravity',
     DisplayName: 'Antigravity',
-    Description: "Google's Antigravity ACP server from the ACP registry. Downloads on first use.",
-    Binaries: [],
-    RegistryId: 'antigravity-acp',
-    Args: []
+    Description: "Connects to Google's agy CLI, which serves Antigravity over ACP.",
+    Binaries: ['agy'],
+    RegistryIds: ['antigravity-acp'],
+    Args: ['acp'],
+    // agy asks before tools run unless told not to; Full access skips its prompts.
+    FullAccessArgs: ['acp', '--dangerously-skip-permissions'],
+    Login: ['--login']
   }
 ]
 
