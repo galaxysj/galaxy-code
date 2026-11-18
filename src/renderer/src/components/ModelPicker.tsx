@@ -1,5 +1,5 @@
 import { Check, ChevronDown, ChevronLeft, ChevronRight, RotateCcw, Search, Settings2, Sparkles, Zap } from 'lucide-react'
-import { AUTO_MODEL, AUTO_TIER_MODELS, needsCredits, PREMIUM_MODEL, type ProviderId } from '@shared/catalog'
+import { AUTO_MODEL, autoPickerStops, needsCredits, PREMIUM_MODEL, type ProviderId } from '@shared/catalog'
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { AcpLibrary } from '@shared/acp-registry'
 import { EFFORT_LABELS, type AcpConfigOption, type Effort, type ResolvedModel, type Subscription } from '@shared/types'
@@ -61,20 +61,60 @@ function autoTier(model: ResolvedModel | null): string {
   return model.key === AUTO_MODEL.key ? 'Free' : model.key === PREMIUM_MODEL.key ? 'Balanced' : model.name
 }
 
-/** Auto's slider: Free, then the router tiers from AutoTiers in models.ts. */
-function AutoSlider({ model, onPick }: { model: ResolvedModel; onPick(key: string): void }): ReactNode {
-  const entries = [{ key: AUTO_MODEL.key, name: 'Free' }, ...AUTO_TIER_MODELS]
+/** Auto's stops: Free, then the tiers chosen in Settings under Models. */
+function useAutoStops(): { key: string; name: string }[] {
+  const settings = useStore((s) => s.settings)
+  return useMemo(() => autoPickerStops(settings), [settings])
+}
+
+/** The stop Auto is on. With no stop picked, it sits where Balanced is, or on the first stop when Balanced is hidden. */
+function autoIndex(entries: { key: string; name: string }[], model: ResolvedModel): number {
   const found = entries.findIndex((entry) => entry.key === model.key)
-  // The unrestricted router Auto used to offer sits where Balanced is.
-  const index = found >= 0 ? found : Math.max(0, entries.findIndex((entry) => entry.name === 'Balanced'))
+  return found >= 0 ? found : Math.max(0, entries.findIndex((entry) => entry.name === 'Balanced'))
+}
+
+/** Full names show for up to three stops, Free included, and only while their names fit on one line. Otherwise the picker falls back to dots. */
+const NAMED_STOPS_MAX = 3
+const NAMED_STOPS_CHARS = 24
+
+function namedStopsFit(entries: { name: string }[]): boolean {
+  return entries.length <= NAMED_STOPS_MAX && entries.reduce((total, entry) => total + entry.name.length, 0) <= NAMED_STOPS_CHARS
+}
+
+/** Auto's stops with their full names, one button each. */
+function AutoNamedStops({ entries, model, onPick }: { entries: { key: string; name: string }[]; model: ResolvedModel; onPick(key: string): void }): ReactNode {
+  return (
+    <div role="radiogroup" aria-label="Auto routing" className="flex gap-0.5 rounded-md bg-hover p-0.5">
+      {entries.map((entry) => {
+        const on = entry.key === model.key
+        return (
+          <button
+            key={entry.key}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => onPick(entry.key)}
+            className={cn('h-6 flex-auto whitespace-nowrap rounded px-1.5 text-[12px] transition-colors', on ? 'bg-elev text-fg shadow-[0_0_0_1px_var(--border)]' : 'text-muted hover:text-fg')}
+          >
+            {entry.name}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Auto's slider: Free, then the router tiers chosen in Settings. */
+function AutoSlider({ model, onPick }: { model: ResolvedModel; onPick(key: string): void }): ReactNode {
+  const entries = useAutoStops()
+  const index = autoIndex(entries, model)
   return <StopSlider stops={entries.map((entry) => entry.key)} index={index} label={entries[index].name} ariaLabel="Auto routing" ultra={false} labels={entries.map((entry) => entry.name)} onSelect={onPick} />
 }
 
 /** Auto's stops as a card that slides along a bar of dots, built like StopSlider: the card follows the pointer and glides between stops. */
 function AutoTabs({ model, onPick }: { model: ResolvedModel; onPick(key: string): void }): ReactNode {
-  const entries = [{ key: AUTO_MODEL.key, name: 'Free' }, ...AUTO_TIER_MODELS]
-  const found = entries.findIndex((entry) => entry.key === model.key)
-  const index = found >= 0 ? found : entries.findIndex((entry) => entry.name === 'Balanced')
+  const entries = useAutoStops()
+  const index = autoIndex(entries, model)
   const last = entries.length - 1
   const track = useRef<HTMLDivElement>(null)
   const CARD_WIDTH = 84
@@ -103,6 +143,7 @@ function AutoTabs({ model, onPick }: { model: ResolvedModel; onPick(key: string)
     onPick(entries[Math.max(0, Math.min(last, index + step))].key)
   }
 
+  if (namedStopsFit(entries)) return <AutoNamedStops entries={entries} model={model} onPick={onPick} />
   return (
     <div
       ref={track}

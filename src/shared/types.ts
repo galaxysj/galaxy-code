@@ -240,6 +240,14 @@ export type DesktopInput =
   | { t: 'scroll'; x: number; y: number; dx: number; dy: number }
   | { t: 'key'; code: number; down: boolean; flags?: number }
 
+/** Auto's router: which tiers the picker offers, and the models each tier may route to. */
+export interface AutoRouterSettings {
+  /** Stop IDs the picker shows: 'free' and the tier IDs from AutoTiers in models.ts. Never empty. */
+  tiers: string[]
+  /** Models each tier ID may route to, as OpenRouter ids. Never empty per tier. */
+  tierModels: Record<string, string[]>
+}
+
 export interface Settings {
   theme: ThemeMode
   terminalOutput: TerminalOutputMode
@@ -280,6 +288,8 @@ export interface Settings {
   customProviders: CustomProvider[]
   /** Dollars of total OpenRouter usage at which agent turns stop. Null for no limit. */
   creditLimit: number | null
+  /** Auto's router, set in Settings under Models. */
+  autoRouter: AutoRouterSettings
   accounts: Record<AccountId, AccountSettings>
   /** Master switch for the agents reached over the Agent Client Protocol. */
   acpEnabled: boolean

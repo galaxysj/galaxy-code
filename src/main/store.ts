@@ -1,7 +1,7 @@
 import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ACP_MODEL_ID, modelKey, type ProviderId } from '@shared/catalog'
+import { ACP_MODEL_ID, defaultAutoRouter, modelKey, type ProviderId } from '@shared/catalog'
 import { AcpLibrary } from '@shared/acp-registry'
 import { ACP_ACCOUNTS, acpAgentFor, applyAcpAgents, libraryAcpAgent, type AccountId, type Chat, type Item, type Project, type SecretState, type Settings } from '@shared/types'
 import { writeJsonAtomic } from './util'
@@ -75,6 +75,7 @@ function defaultSettings(): Settings {
     disabledProviders: [],
     customProviders: [],
     creditLimit: null,
+    autoRouter: defaultAutoRouter(),
     accounts,
     acpEnabled: true,
     acpAgents: AcpLibrary.map(libraryAcpAgent),

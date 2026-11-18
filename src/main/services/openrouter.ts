@@ -421,7 +421,7 @@ export async function streamChat(req: StreamRequest): Promise<StreamResult> {
   const direct = route.provider
   // Auto runs on free models, so the credit limit does not stop it. Premium and every paid model still stop at the limit.
   if (!direct && !isAutoId(req.model)) await assertCreditLimit()
-  const tier = direct ? null : autoTierModels(req.model)
+  const tier = direct ? null : autoTierModels(req.model, store.settings)
   const body: Record<string, unknown> = {
     model: tier ? 'openrouter/auto' : route.model,
     messages: direct ? directMessages(direct, req.messages) : withCacheMarkers(req.model, req.messages),

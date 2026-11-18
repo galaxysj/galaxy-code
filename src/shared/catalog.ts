@@ -1,6 +1,6 @@
 import { AcpAgents } from './acp-registry'
 import { AgentModel, AutoTiers, ImageModel, type AgentModelSpec, type Effort } from './models'
-import { ACP_ACCOUNTS, SUBSCRIPTION_ACCOUNT, SUBSCRIPTIONS, type AccountId, type AccountStatus, type CustomModel, type ResolvedImageModel, type ResolvedModel, type SecretState, type Settings, type Subscription } from './types'
+import { ACP_ACCOUNTS, SUBSCRIPTION_ACCOUNT, SUBSCRIPTIONS, type AccountId, type AccountStatus, type AutoRouterSettings, type CustomModel, type ResolvedImageModel, type ResolvedModel, type SecretState, type Settings, type Subscription } from './types'
 
 const EFFORT_ORDER: Effort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
@@ -166,12 +166,80 @@ export const PREMIUM_MODEL: ResolvedModel = {
 /** Prefix of a tier's id. The id after it names a stop in AutoTiers, and the request goes to openrouter/auto limited to that stop's models. */
 export const AUTO_TIER_PREFIX = 'openrouter/auto:'
 
-/** The models an Auto tier id may route to, or null when the id is not a tier. */
-export function autoTierModels(id: string): string[] | null {
-  return id.startsWith(AUTO_TIER_PREFIX) ? (AutoTiers.find((tier) => tier.ID === id.slice(AUTO_TIER_PREFIX.length))?.Models ?? null) : null
+/** The picker stop for Free. It is not a router tier: it sends to OpenRouter's free router. */
+export const AUTO_FREE_STOP = 'free'
+
+/** Every stop Auto's picker can show, in order: Free, then the AutoTiers. */
+export const AUTO_STOP_IDS: string[] = [AUTO_FREE_STOP, ...AutoTiers.map((tier) => tier.ID)]
+
+/** Display names for the routable models. The '-latest' aliases are OpenRouter's, and each names the model it currently points at. */
+const ROUTABLE_NAMES: Record<string, string> = {
+  '~anthropic/claude-haiku-latest': 'Claude Haiku Latest',
+  '~anthropic/claude-sonnet-latest': 'Claude Sonnet Latest',
+  '~anthropic/claude-opus-latest': 'Claude Opus Latest',
+  '~anthropic/claude-fable-latest': 'Claude Fable Latest',
+  '~openai/gpt-luna-latest': 'GPT Luna Latest',
+  '~openai/gpt-terra-latest': 'GPT Terra Latest',
+  '~openai/gpt-sol-latest': 'GPT Sol Latest',
+  '~openai/gpt-astra-latest': 'GPT Astra Latest',
+  '~z-ai/glm-flash-latest': 'GLM Flash Latest',
+  '~z-ai/glm-latest': 'GLM Latest',
+  '~deepseek/deepseek-flash-latest': 'DeepSeek Flash Latest',
+  '~deepseek/deepseek-pro-latest': 'DeepSeek Pro Latest',
+  '~google/gemini-flash-latest': 'Gemini Flash Latest',
+  '~google/gemini-pro-latest': 'Gemini Pro Latest',
+  '~moonshotai/kimi-latest': 'Kimi Latest',
+  'meta/muse-spark-1.3': 'Muse Spark 1.3',
+  'meta/muse-wonder': 'Muse Wonder',
+  'moonshotai/kimi-k3.1-pro': 'Kimi K3.1 Pro'
 }
 
-/** The stops above Free on Auto's slider, in order. */
+/** The name of a routable model, or its id when it has none. */
+export function routableModelName(id: string): string {
+  return ROUTABLE_NAMES[id] ?? id
+}
+
+/** Whether a routable model is a '-latest' alias, which the Auto router lists first. */
+export function isLatestAlias(id: string): boolean {
+  return id.includes('-latest')
+}
+
+/** The tier whose AutoTiers defaults name a '-latest' alias. Each alias belongs to that one tier only. */
+export function latestOwner(id: string): string | undefined {
+  return AutoTiers.find((tier) => tier.Models.includes(id))?.ID
+}
+
+/** A tier's routable models: its saved list without other tiers' '-latest' aliases, or its defaults when nothing usable is saved. */
+function routesOf(tierId: string, saved: string[] | undefined): string[] {
+  const own = (saved ?? []).filter((id) => !isLatestAlias(id) || latestOwner(id) === tierId)
+  return own.length ? own : [...(AutoTiers.find((tier) => tier.ID === tierId)?.Models ?? [])]
+}
+
+/** Auto's router settings as they were shipped: every stop shown, each tier with its AutoTiers models. */
+export function defaultAutoRouter(): AutoRouterSettings {
+  return { tiers: [...AUTO_STOP_IDS], tierModels: Object.fromEntries(AutoTiers.map((tier) => [tier.ID, [...tier.Models]])) }
+}
+
+/** The router settings with anything missing or unknown filled in from the defaults. */
+export function autoRouterOf(settings: { autoRouter?: AutoRouterSettings }): AutoRouterSettings {
+  const saved = settings.autoRouter
+  const shown = (saved?.tiers ?? []).filter((id) => AUTO_STOP_IDS.includes(id))
+  const defaults = defaultAutoRouter()
+  return {
+    // Kept in picker order, whatever order they were saved in.
+    tiers: shown.length ? AUTO_STOP_IDS.filter((id) => shown.includes(id)) : defaults.tiers,
+    tierModels: Object.fromEntries(AutoTiers.map((tier) => [tier.ID, routesOf(tier.ID, saved?.tierModels?.[tier.ID])]))
+  }
+}
+
+/** The models an Auto tier id may route to, or null when the id is not a tier. */
+export function autoTierModels(id: string, settings: { autoRouter?: AutoRouterSettings } = {}): string[] | null {
+  if (!id.startsWith(AUTO_TIER_PREFIX)) return null
+  const tier = id.slice(AUTO_TIER_PREFIX.length)
+  return AutoTiers.some((entry) => entry.ID === tier) ? autoRouterOf(settings).tierModels[tier] : null
+}
+
+/** The stops above Free on Auto's slider, in order, for every tier in AutoTiers. */
 export const AUTO_TIER_MODELS: ResolvedModel[] = AutoTiers.map((tier) => ({
   ...PREMIUM_MODEL,
   key: modelKey('Default', AUTO_TIER_PREFIX + tier.ID),
@@ -179,6 +247,21 @@ export const AUTO_TIER_MODELS: ResolvedModel[] = AutoTiers.map((tier) => ({
   id: AUTO_TIER_PREFIX + tier.ID,
   description: tier.Description
 }))
+
+/** The tier stops the picker offers under Auto, from the tiers chosen in Settings. Free is not included. */
+export function autoPickerTiers(settings: { autoRouter?: AutoRouterSettings }): ResolvedModel[] {
+  const shown = autoRouterOf(settings).tiers
+  return AUTO_TIER_MODELS.filter((model) => shown.includes(model.id.slice(AUTO_TIER_PREFIX.length)))
+}
+
+/** Every stop Auto's picker shows, in order, with the name each stop carries: Free when it is on, then the chosen tiers. */
+export function autoPickerStops(settings: { autoRouter?: AutoRouterSettings }): { key: string; name: string }[] {
+  const shown = autoRouterOf(settings).tiers
+  return [
+    ...(shown.includes(AUTO_FREE_STOP) ? [{ key: AUTO_MODEL.key, name: 'Free' }] : []),
+    ...autoPickerTiers(settings).map((model) => ({ key: model.key, name: model.name }))
+  ]
+}
 
 /** ACP agents pick their model inside the session, so each gets one entry that stands for the agent. */
 function fromAcpAgent(name: string): ResolvedModel {

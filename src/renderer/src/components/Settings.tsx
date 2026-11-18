@@ -32,6 +32,7 @@ import {
   accountSubscription,
   type AccountId,
   type AnalyticsRow,
+  type AutoRouterSettings,
   type BrowserDataKind,
   type BrowserLinkTarget,
   type BrowserAnnotationMode,
@@ -55,9 +56,9 @@ import {
   type UsageReport,
   type UsageWindow
 } from '@shared/types'
-import { isAutoId, BYOK_PROVIDERS, customModelId, resolveImageModels, unavailableAccounts, type ByokProvider } from '@shared/catalog'
+import { AUTO_FREE_STOP, AUTO_MODEL, AUTO_STOP_IDS, autoRouterOf, isAutoId, isLatestAlias, latestOwner, BYOK_PROVIDERS, customModelId, resolveImageModels, routableModelName, unavailableAccounts, type ByokProvider } from '@shared/catalog'
 import { AcpAgents, AcpLibrary } from '@shared/acp-registry'
-import { AutoApprovalModel, CommitMessageModel, CompletionModel, InlineModel, resolveAutoApprovalModel, usableUtilityModels, utilityModelLabel } from '@shared/models'
+import { AutoApprovalModel, AutoTiers, CommitMessageModel, CompletionModel, InlineModel, resolveAutoApprovalModel, usableUtilityModels, utilityModelLabel } from '@shared/models'
 import { cn, tildify } from '../lib/utils'
 import { useStore, type SettingsSection } from '../store'
 import { LiveMarkdown } from './LiveMarkdown'
@@ -276,6 +277,7 @@ function ModelsSection(): ReactNode {
   const [id, setId] = useState('')
   const [subscription, setSubscription] = useState<Subscription>('Default')
   const [adding, setAdding] = useState(false)
+  const [routing, setRouting] = useState(false)
   /** Under Galaxy: 'openrouter', a built-in provider's id, or 'custom:<id>' for a custom provider. */
   const [provider, setProvider] = useState('openrouter')
   const customApis = settings.customProviders.filter((entry) => entry.enabled && entry.api !== 'decisions')
@@ -331,8 +333,18 @@ function ModelsSection(): ReactNode {
   const groups = MODEL_SUBSCRIPTIONS.map((sub) => ({ sub, models: ranked.filter((m) => m.subscription === sub) })).filter((g) => g.models.length > 0)
   const imageKey = imageModels.some((m) => m.key === settings.imageModelKey) ? (settings.imageModelKey as string) : (imageModels[0]?.key ?? '')
 
+  if (routing) return <AutoRouterPage onBack={() => setRouting(false)} />
+
   return (
     <>
+      <Section title="Auto router" description="Auto sends each request to a model from one of its tiers. Choose which tiers the picker shows and which models each tier may use.">
+        <Card>
+          <RowItem label="Stops and routable models" hint={autoRouterOf(settings).tiers.map((id) => (id === AUTO_FREE_STOP ? 'Free' : AutoTiers.find((tier) => tier.ID === id)?.DisplayName)).join(', ')}>
+            <Button size="sm" onClick={() => setRouting(true)}>Configure</Button>
+          </RowItem>
+        </Card>
+      </Section>
+
       <Section title="Image generation" description="The model the ImageGeneration tool uses.">
         <Card>
           <RowItem label="Image Generation Model">
@@ -448,6 +460,94 @@ function ModelsSection(): ReactNode {
         </div>
       </Section>
 
+    </>
+  )
+}
+
+/** Auto's router, opened from Models: which tiers the picker shows, and the models each tier may route to. */
+function AutoRouterPage({ onBack }: { onBack(): void }): ReactNode {
+  const settings = useStore((s) => s.settings)
+  const models = useStore((s) => s.models)
+  const update = useStore((s) => s.updateSettings)
+  const notify = useStore((s) => s.notify)
+  const router = autoRouterOf(settings)
+  const [tierId, setTierId] = useState(AutoTiers[0].ID)
+  const selected = AutoTiers.find((tier) => tier.ID === tierId) ?? AutoTiers[0]
+  // Every model a tier may route to: the AutoTiers defaults and the models the user can pick under Default. The '-latest' aliases lead, the rest keep their order.
+  const pool = useMemo(() => {
+    const ids = [...new Set([...AutoTiers.flatMap((tier) => tier.Models), ...models.filter((m) => !m.auto && m.subscription === 'Default').map((m) => m.id)])]
+    return [...ids.filter(isLatestAlias), ...ids.filter((id) => !isLatestAlias(id))]
+  }, [models])
+  const nameOf = (id: string): string => models.find((m) => m.id === id && m.subscription === 'Default')?.name ?? routableModelName(id)
+  const save = (next: AutoRouterSettings): void => void update({ autoRouter: next })
+
+  const setTier = (id: string, on: boolean): void => {
+    const tiers = AUTO_STOP_IDS.filter((stop) => (stop === id ? on : router.tiers.includes(stop)))
+    if (!tiers.length) {
+      notify('Keep at least one tier in the picker', 'error')
+      return
+    }
+    save({ ...router, tiers })
+  }
+
+  const setModel = (tier: string, id: string, on: boolean): void => {
+    const next = on ? [...router.tierModels[tier], id] : router.tierModels[tier].filter((m) => m !== id)
+    if (!next.length) {
+      notify('A tier needs at least one model to route to', 'error')
+      return
+    }
+    save({ ...router, tierModels: { ...router.tierModels, [tier]: next } })
+  }
+
+  const reset = (tier: string): void => {
+    const defaults = AutoTiers.find((entry) => entry.ID === tier)?.Models ?? []
+    save({ ...router, tierModels: { ...router.tierModels, [tier]: [...defaults] } })
+  }
+
+  return (
+    <>
+      <div className="mb-5 flex items-center gap-2">
+        <IconButton label="Back to models" onClick={onBack}>
+          <ArrowLeft size={15} />
+        </IconButton>
+        <span className="text-[13px] font-semibold text-fg">Auto router</span>
+      </div>
+
+      <Section title="Stops in the picker" description="Auto offers these stops. Up to three, Free included, show their full names in the picker when the names fit on one line.">
+        <Card>
+          <RowItem label="Free" hint={AUTO_MODEL.description}>
+            <Switch checked={router.tiers.includes(AUTO_FREE_STOP)} onChange={(on) => setTier(AUTO_FREE_STOP, on)} label="Show Free" />
+          </RowItem>
+          {AutoTiers.map((tier) => (
+            <RowItem key={tier.ID} label={tier.DisplayName} hint={tier.Description}>
+              <Switch checked={router.tiers.includes(tier.ID)} onChange={(on) => setTier(tier.ID, on)} label={`Show ${tier.DisplayName}`} />
+            </RowItem>
+          ))}
+        </Card>
+      </Section>
+
+      <Section title="Routable models" description={selected.Description} action={<Button size="sm" onClick={() => reset(selected.ID)}>Reset</Button>}>
+        <div className="mb-2.5">
+          <Select<string>
+            label="Tier"
+            value={selected.ID}
+            onChange={setTierId}
+            className="max-w-none"
+            options={AutoTiers.map((tier) => ({ value: tier.ID, label: tier.DisplayName }))}
+          />
+        </div>
+        <Card>
+          {pool.filter((id) => !isLatestAlias(id) || latestOwner(id) === selected.ID).map((id) => (
+            <div key={id} className="flex h-10 items-center gap-3 px-3.5">
+              <div className="min-w-0 flex-1">
+                <span className="text-[12.5px] text-fg">{nameOf(id)}</span>
+                <span className="ml-2 font-mono text-[11px] text-subtle">{id}</span>
+              </div>
+              <Switch checked={router.tierModels[selected.ID].includes(id)} onChange={(on) => setModel(selected.ID, id, on)} label={`Route ${selected.DisplayName} to ${nameOf(id)}`} />
+            </div>
+          ))}
+        </Card>
+      </Section>
     </>
   )
 }
