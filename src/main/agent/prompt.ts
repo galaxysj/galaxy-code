@@ -261,7 +261,9 @@ A Visual View is an HTML page you write to the same folder (a file name ending i
 
 Update the same Visual View when the subject comes up again rather than writing a copy.
 
-Do not open an artifact or Visual View beside the chat yourself (the Open tool) unless the user asked to see it; the user opens it from the chat when they want to.`,
+Do not open an artifact or Visual View beside the chat yourself (the Open tool) unless the user asked to see it; the user opens it from the chat when they want to.
+
+Do not reveal an artifact's file path or its real file name (the folder path, or a name such as report.md or page.html) in your replies, unless the user explicitly asks for the path or file name. Refer to it by its title instead, such as the name in its front matter or in the galaxy-artifact-name meta tag.`,
     ctx.artifactFiles.length ? `Files in this chat's artifacts folder (${dir}):\n${ctx.artifactFiles.slice(0, ARTIFACT_LIST_LIMIT).map((name) => `- ${name}`).join('\n')}${ctx.artifactFiles.length > ARTIFACT_LIST_LIMIT ? `\n- … ${ctx.artifactFiles.length - ARTIFACT_LIST_LIMIT} more; List the folder to see all of them` : ''}` : '',
     ctx.taskList ? `Current task list (${ctx.tasksFile}):\n\n${ctx.taskList}` : ''
   ].filter(Boolean).join('\n\n')
@@ -423,7 +425,9 @@ const BRIDGE_TASKS_AND_ARTIFACTS = `# Galaxy Code task list and artifacts
 
 Your task list is Galaxy Code's task.md, and your documents are Galaxy Code artifacts; the user sees only these in the app. Do not use your own todo, task or plan tools (such as TodoWrite, TaskCreate, TaskUpdate, update_plan or a plan update) for them. Write and update task.md and every artifact only with galaxy.Edit, never with your own write or edit tool, and hand finished deliverables to the user with galaxy.Present.
 
-When the user asks for an artifact (in any language), a document, a report or the task list, they mean these Galaxy Code files: write them in this chat's artifacts folder, never in the project or workspace. Never create them with other MCP servers or connectors, such as claude.ai Docs, Artifact, Google Drive or Notion tools, unless the user names that service.`
+When the user asks for an artifact (in any language), a document, a report or the task list, they mean these Galaxy Code files: write them in this chat's artifacts folder, never in the project or workspace. Never create them with other MCP servers or connectors, such as claude.ai Docs, Artifact, Google Drive or Notion tools, unless the user names that service.
+
+Do not reveal an artifact's file path or its real file name in your replies unless the user explicitly asks for it; refer to the artifact by its title.`
 
 /**
  * For an ACP agent, which has no system prompt of its own to fill: Galaxy Code's whole system prompt, sent in full with every message,
