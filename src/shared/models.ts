@@ -10,8 +10,6 @@
  *                 their own models, so they are not listed here.
  *   Efforts       Reasoning efforts the slider offers, lowest to highest.
  *                 Leave empty for models without adjustable reasoning.
- *   UltraEffort   Effort used when Ultra is selected. Empty string means the
- *                 model cannot run Ultra.
  *   FastMode      true lets the user switch Fast on for this model.
  *   UltrafastMode true adds Ultrafast above Fast. Needs FastMode.
  *   Off           true ships the model switched off; users turn it on in Settings.
@@ -31,7 +29,6 @@ export interface AgentModelSpec {
   ID: string
   Subscription: Subscription
   Efforts: Effort[]
-  UltraEffort: Effort | ''
   FastMode: boolean
   /** true offers Ultrafast (service tier 'ultrafast') on top of Fast. */
   UltrafastMode?: boolean
@@ -122,7 +119,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: false
   },
   {
@@ -133,7 +129,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: true
   },
   {
@@ -144,7 +139,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: true
   },
   {
@@ -155,7 +149,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -167,7 +160,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: '',
     FastMode: false,
     Off: true
   },
@@ -180,7 +172,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -191,7 +182,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: [],
-    UltraEffort: '',
     FastMode: false,
     Off: true
   },
@@ -203,7 +193,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: true,
     Off: true
   },
@@ -214,7 +203,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -225,7 +213,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -236,7 +223,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -247,7 +233,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -258,7 +243,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -269,7 +253,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -280,7 +263,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -291,7 +273,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Claude',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -308,7 +289,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: true,
     UltrafastMode: true
   },
@@ -319,7 +299,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: true,
     UltrafastMode: true
   },
@@ -330,7 +309,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: true,
     UltrafastMode: true,
     Off: true
@@ -342,7 +320,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: true,
     UltrafastMode: true,
     Off: true
@@ -354,7 +331,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: true
   },
   {
@@ -365,7 +341,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'medium',
-    UltraEffort: 'max',
     FastMode: true
   },
 
@@ -379,7 +354,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
     DefaultEffort: 'medium',
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -391,7 +365,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'medium',
-    UltraEffort: 'xhigh',
     FastMode: true,
     Off: true
   },
@@ -403,7 +376,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'medium',
-    UltraEffort: 'xhigh',
     FastMode: true,
     Off: true
   },
@@ -415,7 +387,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'medium',
-    UltraEffort: 'max',
     FastMode: true,
     Off: true
   },
@@ -427,7 +398,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
     DefaultEffort: 'medium',
-    UltraEffort: 'xhigh',
     FastMode: true,
     Off: true
   },
@@ -438,7 +408,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -449,7 +418,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -460,7 +428,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -471,7 +438,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -482,7 +448,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -493,7 +458,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -504,7 +468,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -515,7 +478,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -526,7 +488,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -537,7 +498,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['none', 'low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -548,7 +508,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['minimal', 'low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -559,7 +518,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['minimal', 'low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -570,7 +528,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Default',
     Efforts: ['minimal', 'low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -585,7 +542,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
     DefaultEffort: 'high',
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -597,7 +553,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
     DefaultEffort: 'high',
-    UltraEffort: 'high',
     FastMode: false
   },
   {
@@ -608,7 +563,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -619,7 +573,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -630,7 +583,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -641,7 +593,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -652,7 +603,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -663,7 +613,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -674,7 +623,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -685,7 +633,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -696,7 +643,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Gemini',
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -708,7 +654,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: true,
     DefaultSpeed: 'Fast',
     Off: true
@@ -720,7 +665,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'high',
     FastMode: true,
     Off: true
   },
@@ -731,7 +675,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'high',
     FastMode: true,
     Off: true
   },
@@ -742,7 +685,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'max',
     FastMode: false,
     Vision: false,
     Off: true
@@ -754,7 +696,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'max',
     FastMode: true,
     DefaultSpeed: 'Fast',
     Vision: false,
@@ -767,7 +708,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'max',
     FastMode: false,
     Vision: false,
     Off: true
@@ -780,7 +720,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: true,
     DefaultSpeed: 'Fast',
     Off: true
@@ -793,7 +732,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high', 'xhigh'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: true,
     DefaultSpeed: 'Fast',
     Off: true
@@ -805,7 +743,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
     DefaultEffort: 'medium',
-    UltraEffort: 'high',
     FastMode: false,
   },
   {
@@ -815,7 +752,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
     DefaultEffort: 'medium',
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -826,7 +762,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'medium', 'high'],
     DefaultEffort: 'medium',
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -837,7 +772,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'high',
     FastMode: false,
     Off: true
   },
@@ -848,7 +782,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'max',
     FastMode: false,
     Vision: false,
     Off: true
@@ -860,7 +793,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'max',
     FastMode: false,
     Vision: false,
     Off: true
@@ -872,7 +804,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Default',
     Efforts: ['low', 'high', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'max',
     FastMode: false,
     Vision: false,
     Off: true
@@ -892,7 +823,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Claude',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: true
   },
   {
@@ -902,7 +832,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Claude',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: true
   },
   {
@@ -912,7 +841,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Claude',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: false,
     Off: true
   },
@@ -923,7 +851,6 @@ export const AgentModel: AgentModelSpec[] = [
     Subscription: 'Claude',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'high',
-    UltraEffort: 'xhigh',
     FastMode: false
   },
   {
@@ -932,7 +859,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'Claude',
     Subscription: 'Claude',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: false
   },
 
@@ -947,7 +873,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Codex',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: true
   },
   {
@@ -956,7 +881,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Codex',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: true
   },
   {
@@ -965,7 +889,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Codex',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'xhigh',
     FastMode: true
   },
   {
@@ -974,7 +897,6 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Codex',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    UltraEffort: 'max',
     FastMode: true
   },
 ]

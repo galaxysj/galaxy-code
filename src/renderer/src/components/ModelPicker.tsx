@@ -22,7 +22,6 @@ export const SUBSCRIPTION_LABELS: Record<Subscription, string> = {
   ...Object.fromEntries(AcpLibrary.map((agent) => [agent.DisplayName, agent.DisplayName]))
 }
 
-type Stop = Effort | 'ultra'
 
 const TRACK_HEIGHT = 22
 const THUMB = 22
@@ -32,27 +31,14 @@ const INSET = TRACK_HEIGHT / 2
 interface EffortSliderProps {
   model: ResolvedModel
   effort: Effort | null
-  ultra: boolean
-  /** Leaves out the Ultra stop, for modes that cannot run with it. */
-  allowUltra: boolean
-  onChange(next: { effort?: Effort; ultra: boolean }): void
+  onChange(next: { effort?: Effort }): void
 }
 
-/** A pill slider over the model's efforts. Ultra, when the model has it, is the final stop. */
-function EffortSlider({ model, effort, ultra, allowUltra, onChange }: EffortSliderProps): ReactNode {
-  const stops = useMemo<Stop[]>(() => [...model.efforts, ...(model.ultraEffort && allowUltra ? (['ultra'] as const) : [])], [model, allowUltra])
-  const index = ultra ? stops.length - 1 : Math.max(0, stops.indexOf(effort ?? model.defaultEffort ?? model.efforts[0]))
-  const label = ultra ? 'Ultra' : EFFORT_LABELS[stops[index] as Effort]
-  return (
-    <StopSlider
-      stops={stops}
-      index={index}
-      label={label}
-      ariaLabel="Reasoning effort"
-      ultra={ultra}
-      onSelect={(stop) => (stop === 'ultra' ? onChange({ ultra: true }) : onChange({ effort: stop as Effort, ultra: false }))}
-    />
-  )
+/** A pill slider over the model's efforts. Ultra is a switch of its own, under Auto. */
+function EffortSlider({ model, effort, onChange }: EffortSliderProps): ReactNode {
+  const stops = model.efforts
+  const index = Math.max(0, stops.indexOf(effort ?? model.defaultEffort ?? model.efforts[0]))
+  return <StopSlider stops={stops} index={index} label={EFFORT_LABELS[stops[index]]} ariaLabel="Reasoning effort" ultra={false} onSelect={(stop) => onChange({ effort: stop as Effort })} />
 }
 
 /** The stop Auto is on, shown after its name like an effort: Free, Cost, Balanced and so on. */
@@ -277,7 +263,7 @@ function useCreditLock(): { locked: boolean; note: boolean; isLocked(model: Reso
 
 const CREDIT_LOCK_NOTE = "You've used all your credits. Add a BYOK key or credits to keep using other models."
 
-function ModelList({ models, acp, current, subscription, allowUltra, onPick, onBack, onClose }: { models: ResolvedModel[]; acp: boolean; current: ResolvedModel | null; subscription: Subscription | null; allowUltra: boolean; onPick(key: string): void; onBack(): void; onClose(): void }): ReactNode {
+function ModelList({ models, acp, current, subscription, onPick, onBack, onClose }: { models: ResolvedModel[]; acp: boolean; current: ResolvedModel | null; subscription: Subscription | null; onPick(key: string): void; onBack(): void; onClose(): void }): ReactNode {
   const { note, isLocked } = useCreditLock()
   const hasKey = useStore((s) => s.secrets.openRouterKey || s.settings.customProviders.length > 0 || Object.keys(s.secrets.providerKeys).some((id) => !s.settings.disabledProviders.includes(id as ProviderId)))
   const [query, setQuery] = useState('')
@@ -341,7 +327,6 @@ function ModelList({ models, acp, current, subscription, allowUltra, onPick, onB
                 )}
               >
                 <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-                {entry.ultraEffort && allowUltra && <span className="shrink-0 text-[10.5px] text-ultra/80">Ultra</span>}
                 {entry.fastMode && <Zap size={11} className="shrink-0 text-subtle" />}
                 <span className="flex w-3.5 shrink-0 justify-end">{entry.key === current?.key && <Check size={13} />}</span>
               </button>
@@ -361,9 +346,9 @@ function contextLabel(tokens: number): string {
 }
 
 /** A model's effort and speed in a few words, as the list shows them beside its name. */
-function optionSummary(model: ResolvedModel, options: { effort: Effort | null; ultra: boolean; fast: boolean; ultrafast: boolean; context?: number | null }, allowUltra: boolean): string {
+function optionSummary(model: ResolvedModel, options: { effort: Effort | null; fast: boolean; ultrafast: boolean; context?: number | null }): string {
   if (model.auto) return ''
-  const effort = options.ultra && allowUltra && model.ultraEffort ? 'Ultra' : options.effort ? EFFORT_LABELS[options.effort] : ''
+  const effort = options.effort ? EFFORT_LABELS[options.effort] : ''
   const speed = options.ultrafast ? 'Ultrafast' : options.fast ? 'Fast' : ''
   const context = options.context != null && options.context !== (model.contextOptions?.[0] ?? model.contextWindow ?? 200_000) ? contextLabel(options.context) : ''
   return [context, effort, speed].filter(Boolean).join(' ')
@@ -447,7 +432,6 @@ function usePickerSource(): ReturnType<typeof useRunConfig> & {
     name,
     efforts: [...efforts.keys()],
     defaultEffort: effort,
-    ultraEffort: null,
     fastMode: false,
     ultrafastMode: false,
     contextOptions: undefined
@@ -515,7 +499,7 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
   const auto = !!model?.auto
   if (model && !auto) lastManualKey = model.key
   // Effort and speed in words, such as "High Fast", instead of the slider style's icons.
-  const label = auto ? autoTier(model) : !model ? '' : optionSummary(model, { effort, ultra, fast, ultrafast, context }, !noUltra)
+  const label = auto ? autoTier(model) : !model ? '' : optionSummary(model, { effort, fast, ultrafast, context })
   // With Auto on there is no search box, so a search left from before must not keep the list open.
   const needle = auto ? '' : query.trim().toLowerCase()
   const { locked, note, isLocked } = useCreditLock()
@@ -560,6 +544,12 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
                 <span>Auto</span>
                 <Switch checked={auto} onChange={(on) => config.pick(on ? AUTO_MODEL.key : ((visible.find((m) => m.key === lastManualKey) ?? visible[0])?.key ?? AUTO_MODEL.key))} label="Auto" />
               </div>
+              {!noUltra && !auto && (
+                <div className="-mt-1 flex h-7 items-center justify-between">
+                  <span className={cn(ultra ? 'font-medium text-ultra' : 'text-fg')}>Ultra</span>
+                  <Switch checked={ultra} onChange={(on) => config.setOptions({ ultra: on })} label="Ultra" glow />
+                </div>
+              )}
               {/* With Auto on, the slider picks Free or an OpenRouter Auto Router tier. */}
               {auto && <>
                 {!locked && model && <div className="pb-1 pt-1"><AutoTabs model={model} onPick={config.pick} /></div>}
@@ -573,10 +563,10 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
             {visible.map((entry) => {
               const checked = entry.key === model?.key
               const options = checked ? { ...current, context } : rememberedRunOptions(entry)
-              const summary = optionSummary(entry, options, !noUltra)
+              const summary = optionSummary(entry, options)
               const defaultFast = entry.fastMode && (entry.defaultSpeed === 'Fast' || entry.defaultSpeed === 'Ultrafast')
               const defaultUltrafast = defaultFast && entry.ultrafastMode && entry.defaultSpeed === 'Ultrafast'
-              const isDefault = (options.effort ?? entry.defaultEffort) === entry.defaultEffort && !options.ultra && options.fast === defaultFast && options.ultrafast === defaultUltrafast && (options.context == null || options.context === (entry.contextOptions?.[0] ?? entry.contextWindow))
+              const isDefault = (options.effort ?? entry.defaultEffort) === entry.defaultEffort && options.fast === defaultFast && options.ultrafast === defaultUltrafast && (options.context == null || options.context === (entry.contextOptions?.[0] ?? entry.contextWindow))
               return (
                 <div key={entry.key} className="group/model flex h-6 w-full items-center rounded-md transition-colors hover:bg-hover">
                   <button type="button" onClick={() => { config.pick(entry.key); setEditing(null) }} className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2 text-left text-[12px] text-fg">
@@ -616,9 +606,7 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
             {model.efforts.length > 0 && <>
               {!!model.contextOptions?.length && <div className="my-1 border-t border-line" />}
               <MenuHeading>Effort</MenuHeading>
-              {model.efforts.map((value) => <MenuRow key={value} label={EFFORT_LABELS[value]} checked={!ultra && (effort ?? model.defaultEffort) === value} onClick={() => config.setOptions({ effort: value, ultra: false })} />)}
-              {/* Ultra sits below the highest effort, in purple. */}
-              {model.ultraEffort && !noUltra && <MenuRow label="Ultra" checked={ultra} onClick={() => config.setOptions({ ultra: true })} className="font-medium text-ultra" />}
+              {model.efforts.map((value) => <MenuRow key={value} label={EFFORT_LABELS[value]} checked={!ultra && (effort ?? model.defaultEffort) === value} onClick={() => config.setOptions({ effort: value })} />)}
             </>}
             {model.fastMode && <>
               <div className="my-1 border-t border-line" />
@@ -636,11 +624,11 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
 /** Picks the style chosen in Settings > General > Composer. `noUltra` hides Ultra, for modes that cannot run with it. */
 export function ModelPicker({ noUltra = false }: { noUltra?: boolean }): ReactNode {
   const style = useStore((s) => s.settings.modelPickerStyle ?? 'default')
-  return style === 'slider' ? <SliderPicker noUltra={noUltra} /> : <ListPicker noUltra={noUltra} />
+  return style === 'slider' ? <SliderPicker /> : <ListPicker noUltra={noUltra} />
 }
 
 /** The Slider style: one model, with an effort slider. */
-function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
+function SliderPicker(): ReactNode {
   const creditsLocked = useStore((s) => s.creditsLocked)
   const { note: creditNote } = useCreditLock()
   const anchor = useRef<HTMLButtonElement>(null)
@@ -648,7 +636,8 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
   const [listing, setListing] = useState(false)
   const config = usePickerSource()
   const { model, subscription, effort, fast, ultrafast } = config
-  const ultra = config.ultra && !noUltra
+  // Ultra is switched on in the default picker only.
+  const ultra = false
 
   const close = useCallback(() => {
     setOpen(false)
@@ -706,7 +695,6 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
             acp={!!config.acp}
             current={model}
             subscription={subscription}
-            allowUltra={!noUltra}
             onBack={() => (model ? setListing(false) : close())}
             onClose={close}
             onPick={(key) => {
@@ -747,7 +735,7 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
                 type="button"
                 title="Reset to default"
                 disabled={auto || isDefault || (!hasEffort && fast === defaultFast && ultrafast === defaultUltrafast)}
-                onClick={() => config.setOptions({ ...(model.defaultEffort ? { effort: model.defaultEffort } : {}), ultra: false, fast: defaultFast, ultrafast: defaultUltrafast })}
+                onClick={() => config.setOptions({ ...(model.defaultEffort ? { effort: model.defaultEffort } : {}), fast: defaultFast, ultrafast: defaultUltrafast })}
                 className="-mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-25"
               >
                 <RotateCcw size={13} />
@@ -756,8 +744,8 @@ function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
             {auto && !creditsLocked && <div className="mt-2.5"><AutoSlider model={model} onPick={config.pick} /></div>}
             {(creditNote || model.description) && <p className="mt-2 px-1 text-center text-[11.5px] leading-snug text-subtle">{creditNote ? CREDIT_LOCK_NOTE : model.description}</p>}
             {hasEffort && (
-              <div className="mt-2.5" title={ultra ? `Ultra orchestrates parallel subagents at ${EFFORT_LABELS[model.ultraEffort as Effort].toLowerCase()} effort` : undefined}>
-                <EffortSlider model={model} effort={effort} ultra={ultra} allowUltra={!noUltra} onChange={(next) => config.setOptions(next)} />
+              <div className="mt-2.5">
+                <EffortSlider model={model} effort={effort} onChange={(next) => config.setOptions(next)} />
               </div>
             )}
           </div>

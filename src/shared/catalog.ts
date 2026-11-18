@@ -105,7 +105,6 @@ function fromSpec(spec: AgentModelSpec, disabled: Set<string>, enabled: Set<stri
     subscription: spec.Subscription,
     efforts,
     defaultEffort: pickDefaultEffort(spec),
-    ultraEffort: spec.UltraEffort === '' ? null : spec.UltraEffort,
     fastMode: spec.FastMode,
     ultrafastMode: spec.FastMode && spec.UltrafastMode === true,
     vision: spec.Vision !== false,
@@ -127,7 +126,6 @@ function fromCustom(model: CustomModel, disabled: Set<string>): ResolvedModel {
     subscription: model.subscription,
     efforts: [],
     defaultEffort: null,
-    ultraEffort: null,
     fastMode: false,
     ultrafastMode: false,
     vision: true,
@@ -144,7 +142,6 @@ export const AUTO_MODEL: ResolvedModel = {
   subscription: 'Default',
   efforts: [],
   defaultEffort: null,
-  ultraEffort: null,
   fastMode: false,
   ultrafastMode: false,
   vision: true,
@@ -272,7 +269,6 @@ function fromAcpAgent(name: string): ResolvedModel {
     subscription: name,
     efforts: [],
     defaultEffort: null,
-    ultraEffort: null,
     fastMode: false,
     ultrafastMode: false,
     vision: true,
@@ -362,8 +358,3 @@ export function normalizeEffort(model: ResolvedModel, effort: Effort | null): Ef
   return model.defaultEffort
 }
 
-/** The effort a request actually runs at, accounting for Ultra. */
-export function effectiveEffort(model: ResolvedModel, effort: Effort | null, ultra: boolean): Effort | null {
-  if (ultra && model.ultraEffort) return model.ultraEffort
-  return normalizeEffort(model, effort)
-}

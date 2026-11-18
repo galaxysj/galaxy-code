@@ -139,7 +139,7 @@ export function Button({ variant = 'secondary', size = 'md', className, children
   )
 }
 
-export function Switch({ checked, onChange, disabled, label }: { checked: boolean; onChange(next: boolean): void; disabled?: boolean; label?: string }): ReactNode {
+export function Switch({ checked, onChange, disabled, label, glow = false }: { checked: boolean; onChange(next: boolean): void; disabled?: boolean; label?: string; glow?: boolean }): ReactNode {
   return (
     <button
       type="button"
@@ -150,7 +150,7 @@ export function Switch({ checked, onChange, disabled, label }: { checked: boolea
       onClick={() => onChange(!checked)}
       className={cn(
         'relative h-[18px] w-[30px] shrink-0 rounded-full transition-colors disabled:opacity-40',
-        checked ? 'bg-accent' : 'bg-line-strong'
+        checked ? (glow ? 'aurora-fill aurora-glow' : 'bg-accent') : 'bg-line-strong'
       )}
     >
       <span

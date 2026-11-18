@@ -1,4 +1,4 @@
-import { accountEnabled, usesGalaxyTools, effectiveEffort, findModel, normalizeEffort, resolveModels } from '@shared/catalog'
+import { accountEnabled, usesGalaxyTools, findModel, normalizeEffort, resolveModels } from '@shared/catalog'
 import {
   ACCOUNT_LABELS,
   ACP_ACCOUNTS,
@@ -572,14 +572,14 @@ class ChatManager {
       }
 
       // Multitask runs its own subagents and cannot be combined with Ultra; Settings can turn Ultra off altogether.
-      const ultra = chat.ultra && store.settings.ultraMode !== false && model.ultraEffort !== null && mode !== 'multitask'
+      const ultra = chat.ultra && store.settings.ultraMode !== false && mode !== 'multitask'
       delete session.doc.engine.replay
       const turn: Turn = {
         text: [parent.text, replay, missed.length ? `<events_while_stopped>\nThese events fired while you were stopped:\n\n${missed.map((entry) => entry.text).join('\n\n')}\n</events_while_stopped>` : '', text].filter(Boolean).join('\n\n'),
         attachments: [...shared, ...attachments],
         mentions,
         model,
-        effort: effectiveEffort(model, normalizeEffort(model, chat.effort), ultra),
+        effort: normalizeEffort(model, chat.effort),
         ultra,
         fast: chat.fast && model.fastMode,
         ultrafast: chat.fast && chat.ultrafast === true && model.ultrafastMode,

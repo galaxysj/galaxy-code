@@ -148,6 +148,9 @@ function loadPrefs(): Prefs {
 }
 
 /** The speed the user last picked for a model, or the model's DefaultSpeed until they pick one. */
+/** Ultra is one switch for every model, so it is kept under this key instead of each model's own. */
+const ULTRA_KEY = '*'
+
 function speedPref(model: ResolvedModel, key: string): { fast: boolean; ultrafast: boolean } {
   const fast = prefs.fast[key] ?? (model.defaultSpeed === 'Fast' || model.defaultSpeed === 'Ultrafast')
   const ultrafast = prefs.ultrafast[key] ?? model.defaultSpeed === 'Ultrafast'
@@ -162,7 +165,7 @@ function contextPref(model: ResolvedModel, key: string): number | null {
 
 /** A model's remembered options, for showing them beside it in the picker's list. */
 export function rememberedRunOptions(model: ResolvedModel): { effort: Effort | null; ultra: boolean; fast: boolean; ultrafast: boolean; context: number | null } {
-  return { effort: normalizeEffort(model, prefs.efforts[model.key] ?? null), ultra: !!model.ultraEffort && prefs.ultra[model.key] === true, ...speedPref(model, model.key), context: contextPref(model, model.key) }
+  return { effort: normalizeEffort(model, prefs.efforts[model.key] ?? null), ultra: prefs.ultra[ULTRA_KEY] === true, ...speedPref(model, model.key), context: contextPref(model, model.key) }
 }
 
 /** Saves the mode chips that are on; turned-off ones are dropped. */
@@ -296,7 +299,7 @@ function draftFor(models: ResolvedModel[], settings: Settings, projectId: string
     workspace: 'local',
     modelKey: key,
     effort: model ? normalizeEffort(model, prefs.efforts[key] ?? null) : null,
-    ultra: !!model?.ultraEffort && prefs.ultra[key] === true,
+    ultra: prefs.ultra[ULTRA_KEY] === true,
     fast: !!model && speedPref(model, key).fast,
     ultrafast: !!model && speedPref(model, key).ultrafast,
     context: model ? contextPref(model, key) : null,
@@ -654,7 +657,7 @@ export const useStore = create<State>((set, get) => {
       const next = {
         modelKey,
         effort: normalizeEffort(model, prefs.efforts[modelKey] ?? null),
-        ultra: !!model.ultraEffort && prefs.ultra[modelKey] === true,
+        ultra: prefs.ultra[ULTRA_KEY] === true,
         fast: speedPref(model, modelKey).fast,
         ultrafast: speedPref(model, modelKey).ultrafast,
         context: contextPref(model, modelKey),
@@ -743,7 +746,6 @@ export const useStore = create<State>((set, get) => {
       const model = findModel(s.models, modelKey)
       if (!model) return
       delete prefs.efforts[modelKey]
-      delete prefs.ultra[modelKey]
       delete prefs.fast[modelKey]
       delete prefs.ultrafast[modelKey]
       delete prefs.context[modelKey]
@@ -751,7 +753,7 @@ export const useStore = create<State>((set, get) => {
       const id = chatId === undefined ? s.activeChatId : chatId
       const chat = id ? s.chats[id] : null
       if ((chat ? chat.modelKey : s.draft.modelKey) === modelKey) {
-        const patch = { effort: model.defaultEffort, ultra: false, ...speedPref(model, modelKey), context: null }
+        const patch = { effort: model.defaultEffort, ...speedPref(model, modelKey), context: null }
         if (chat) void window.galaxy.chats.update(chat.id, patch)
         else set({ draft: { ...s.draft, ...patch } })
       } else {
@@ -766,7 +768,7 @@ export const useStore = create<State>((set, get) => {
       const chat = id ? s.chats[id] : null
       const key = chat ? chat.modelKey : s.draft.modelKey
       if (patch.effort) prefs.efforts[key] = patch.effort
-      if (patch.ultra !== undefined) prefs.ultra[key] = patch.ultra
+      if (patch.ultra !== undefined) prefs.ultra[ULTRA_KEY] = patch.ultra
       if (patch.fast !== undefined) prefs.fast[key] = patch.fast
       if (patch.ultrafast !== undefined) prefs.ultrafast[key] = patch.ultrafast
       if (patch.context) prefs.context[key] = patch.context
@@ -1086,7 +1088,7 @@ export function useRunConfig(): {
     model,
     subscription,
     effort: model ? normalizeEffort(model, source.effort) : null,
-    ultra: settings.ultraMode !== false && !!model?.ultraEffort && source.ultra,
+    ultra: settings.ultraMode !== false && source.ultra,
     fast: !!model?.fastMode && source.fast,
     ultrafast: !!model?.ultrafastMode && source.fast && source.ultrafast === true,
     context: model && source.context && model.contextOptions?.includes(source.context) ? source.context : model?.contextWindow ?? null,

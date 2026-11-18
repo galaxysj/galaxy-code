@@ -27,7 +27,6 @@ export interface ResolvedModel {
   subscription: Subscription
   efforts: Effort[]
   defaultEffort: Effort | null
-  ultraEffort: Effort | null
   fastMode: boolean
   /** Offers Ultrafast above Fast. Only true when fastMode is. */
   ultrafastMode: boolean
