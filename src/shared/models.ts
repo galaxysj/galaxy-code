@@ -302,6 +302,38 @@ export const AgentModel: AgentModelSpec[] = [
 //Openrouter GPT
   
   {
+    DisplayName: 'GPT-6.2 Sol',
+    ID: 'openai/gpt-6.2-sol',
+    ContextOptions: [272_000, 1_050_000],
+    Brand: 'GPT',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    UltraEffort: 'xhigh',
+    FastMode: true,
+    UltrafastMode: true
+  },
+  {
+    DisplayName: 'GPT-6.2 Terra',
+    ID: 'openai/gpt-6.2-terra',
+    ContextOptions: [272_000, 1_050_000],
+    Brand: 'GPT',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    UltraEffort: 'xhigh',
+    FastMode: true
+  },
+  {
+    DisplayName: 'GPT-6.2 Luna',
+    ID: 'openai/gpt-6.2-luna',
+    ContextOptions: [272_000, 1_050_000],
+    Brand: 'GPT',
+    Subscription: 'Default',
+    Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    DefaultEffort: 'medium',
+    UltraEffort: 'max',
+    FastMode: true
+  },
+  {
     DisplayName: 'GPT-6 Astra',
     ID: 'openai/gpt-6-astra',
     ContextOptions: [272_000, 1_050_000],
@@ -310,7 +342,8 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     UltraEffort: 'xhigh',
     FastMode: true,
-    UltrafastMode: true
+    UltrafastMode: true,
+    Off: true
   },
   {
     DisplayName: 'GPT-6.1 Sol',
@@ -321,8 +354,8 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     UltraEffort: 'xhigh',
     FastMode: true
-,
-    UltrafastMode: true
+    UltrafastMode: true,
+    Off: true
   },
   {
     DisplayName: 'GPT-6.1 Terra',
@@ -333,6 +366,7 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     UltraEffort: 'xhigh',
     FastMode: true,
+    Off: true
   },
   {
     DisplayName: 'GPT-6 Luna',
@@ -343,7 +377,8 @@ export const AgentModel: AgentModelSpec[] = [
     Efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     DefaultEffort: 'medium',
     UltraEffort: 'max',
-    FastMode: true
+    FastMode: true,
+    Off: true
   },
 
 //Legacy GPT
