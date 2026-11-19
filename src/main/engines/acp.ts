@@ -444,7 +444,7 @@ function agentModeFor(options: AcpConfigOption[], mode: 'ask' | 'plan'): { optio
 /** Runs a turn through a CLI that speaks the Agent Client Protocol. */
 export async function runAcp(account: AccountId, session: Session, turn: Turn): Promise<void> {
   const label = ACCOUNT_LABELS[account]
-  const ctx = await gatherContext(session, { permissionMode: turn.permissionMode, modelName: turn.model.name, ultra: turn.ultra })
+  const ctx = await gatherContext(session, { permissionMode: turn.permissionMode, modelName: turn.model.name, ultra: turn.ultra && !turn.mode })
   const cwd = ctx.cwd
   const env: ToolEnv = { session, cwd, signal: turn.signal, permissionMode: turn.permissionMode, skills: ctx.skills }
   const connection = await connect(account, session, env, turn.permissionMode)

@@ -484,6 +484,6 @@ export function buildBridgeInstructions(ctx: PromptContext, bridgeTools: string[
     const selected = inlineMentionsBlock(mentions)
     if (selected) parts.push(selected)
   }
-  if (ctx.ultra) parts.push(ULTRA_BLOCK.replace('with the Agent tool', 'with your subagent tool').replace('Plan with the task file', 'Plan with your task list tool'))
+  if (ctx.ultra && bridgeTools.includes('Agent')) parts.push(ULTRA_BLOCK)
   return parts.join('\n\n')
 }

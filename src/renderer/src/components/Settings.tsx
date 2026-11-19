@@ -195,8 +195,8 @@ function GeneralSection(): ReactNode {
               ]}
             />
           </RowItem>
-          <RowItem label="Ultra mode" hint="Offer Ultra as the last effort level.">
-            <Switch checked={settings.ultraMode !== false} onChange={(ultraMode) => void update({ ultraMode })} label="Ultra mode" />
+          <RowItem label="Ultra Mode" hint="Show the Ultra Mode switch when Auto is off, across subscriptions and ACP agents.">
+            <Switch checked={settings.ultraMode !== false} onChange={(ultraMode) => void update({ ultraMode })} label="Ultra Mode" />
           </RowItem>
         </Card>
       </Section>

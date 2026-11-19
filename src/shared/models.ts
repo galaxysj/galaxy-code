@@ -556,6 +556,16 @@ export const AgentModel: AgentModelSpec[] = [
     FastMode: false
   },
   {
+    DisplayName: 'Gemini 4 Neon',
+    ID: 'google/gemini-4-neon',
+    ContextOptions: [272_000, 1_048_576],
+    Brand: 'Gemini',
+    Subscription: 'Default',
+    Efforts: ['low', 'medium', 'high'],
+    DefaultEffort: 'high',
+    FastMode: false
+  },
+  {
     DisplayName: 'Gemini 4 Hydrogen',
     ID: 'google/gemini-4-hydrogen',
     ContextOptions: [272_000, 1_048_576],
@@ -868,12 +878,29 @@ export const AgentModel: AgentModelSpec[] = [
   
   // Codex account (ChatGPT)
   {
+    DisplayName: 'GPT-6.2 Astra',
+    ID: 'gpt-6.2-astra',
+    Brand: 'GPT',
+    Subscription: 'Codex',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    FastMode: true
+  },
+  {
+    DisplayName: 'GPT-6.2 Sol',
+    ID: 'gpt-6.2-sol',
+    Brand: 'GPT',
+    Subscription: 'Codex',
+    Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    FastMode: true
+  },
+  {
     DisplayName: 'GPT-6 Astra',
     ID: 'gpt-6-astra',
     Brand: 'GPT',
     Subscription: 'Codex',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    FastMode: true
+    FastMode: true,
+    Off: true
   },
   {
     DisplayName: 'GPT-6.1 Sol',
@@ -881,7 +908,8 @@ export const AgentModel: AgentModelSpec[] = [
     Brand: 'GPT',
     Subscription: 'Codex',
     Efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    FastMode: true
+    FastMode: true,
+    Off: true
   },
   {
     DisplayName: 'GPT-6.1 Terra',

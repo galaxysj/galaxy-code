@@ -34,7 +34,7 @@ interface EffortSliderProps {
   onChange(next: { effort?: Effort }): void
 }
 
-/** A pill slider over the model's efforts. Ultra is a switch of its own, under Auto. */
+/** A pill slider over the model's reasoning efforts. */
 function EffortSlider({ model, effort, onChange }: EffortSliderProps): ReactNode {
   const stops = model.efforts
   const index = Math.max(0, stops.indexOf(effort ?? model.defaultEffort ?? model.efforts[0]))
@@ -447,7 +447,6 @@ function usePickerSource(): ReturnType<typeof useRunConfig> & {
     ...config,
     model: current,
     effort,
-    ultra: false,
     fast: false,
     ultrafast: false,
     context: null,
@@ -456,11 +455,21 @@ function usePickerSource(): ReturnType<typeof useRunConfig> & {
       if (modelOption) setAcpOption(modelOption.id, key.slice('acp:'.length), chatId)
     },
     setOptions: (patch) => {
+      if (patch.ultra !== undefined) setRunOptions({ ultra: patch.ultra }, chatId)
       const value = patch.effort ? efforts.get(patch.effort) : undefined
       if (effortOption && value) setAcpOption(effortOption.id, value, chatId)
     },
     reset: () => {}
   }
+}
+
+function UltraModeSwitch({ checked, onChange }: { checked: boolean; onChange(on: boolean): void }): ReactNode {
+  return (
+    <div className="flex h-7 items-center justify-between text-[12px]">
+      <span className={cn(checked ? 'font-medium text-ultra' : 'text-fg')}>Ultra Mode</span>
+      <Switch checked={checked} onChange={onChange} label="Ultra Mode" glow />
+    </div>
+  )
 }
 
 /** The last model picked by hand, so turning Auto off goes back to it instead of the top of the list. */
@@ -502,6 +511,8 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
   const label = auto ? autoTier(model) : !model ? '' : optionSummary(model, { effort, fast, ultrafast, context })
   // With Auto on there is no search box, so a search left from before must not keep the list open.
   const needle = auto ? '' : query.trim().toLowerCase()
+  const showAuto = subscription === 'Default' && !needle
+  const showUltra = !!model && !auto && !noUltra
   const { locked, note, isLocked } = useCreditLock()
   const visible = models.filter((m) => m.enabled && !m.auto && !isLocked(m) && m.subscription === subscription && (!needle || m.name.toLowerCase().includes(needle) || m.id.toLowerCase().includes(needle)))
   const current = { effort, ultra, fast, ultrafast }
@@ -538,18 +549,15 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
       <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} placement="bottom-end" offset={8} className="flex! items-start gap-1.5 bg-transparent! shadow-none!">
         <div ref={listBox} className="picker-scroll flex w-[228px] shrink-0 flex-col overflow-y-auto overscroll-contain rounded-lg bg-elev shadow-pop" style={{ maxHeight: listHeight + 64 + 37 }}>
           {!auto && <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search models" className="h-8 shrink-0 bg-transparent px-3 text-[12px] placeholder:text-subtle" />}
-          {subscription === 'Default' && !needle && (
+          {(showAuto || showUltra) && (
             <div className="shrink-0 border-b border-line px-3 text-[12px]">
-              <div className="flex h-8 items-center justify-between">
-                <span>Auto</span>
-                <Switch checked={auto} onChange={(on) => config.pick(on ? AUTO_MODEL.key : ((visible.find((m) => m.key === lastManualKey) ?? visible[0])?.key ?? AUTO_MODEL.key))} label="Auto" />
-              </div>
-              {!noUltra && !auto && (
-                <div className="-mt-1 flex h-7 items-center justify-between">
-                  <span className={cn(ultra ? 'font-medium text-ultra' : 'text-fg')}>Ultra</span>
-                  <Switch checked={ultra} onChange={(on) => config.setOptions({ ultra: on })} label="Ultra" glow />
+              {showAuto && (
+                <div className="flex h-8 items-center justify-between">
+                  <span>Auto</span>
+                  <Switch checked={auto} onChange={(on) => config.pick(on ? AUTO_MODEL.key : ((visible.find((m) => m.key === lastManualKey) ?? visible[0])?.key ?? AUTO_MODEL.key))} label="Auto" />
                 </div>
               )}
+              {showUltra && <UltraModeSwitch checked={ultra} onChange={(on) => config.setOptions({ ultra: on })} />}
               {/* With Auto on, the slider picks Free or an OpenRouter Auto Router tier. */}
               {auto && <>
                 {!locked && model && <div className="pb-1 pt-1"><AutoTabs model={model} onPick={config.pick} /></div>}
@@ -624,11 +632,11 @@ function ListPicker({ noUltra }: { noUltra: boolean }): ReactNode {
 /** Picks the style chosen in Settings > General > Composer. `noUltra` hides Ultra, for modes that cannot run with it. */
 export function ModelPicker({ noUltra = false }: { noUltra?: boolean }): ReactNode {
   const style = useStore((s) => s.settings.modelPickerStyle ?? 'default')
-  return style === 'slider' ? <SliderPicker /> : <ListPicker noUltra={noUltra} />
+  return style === 'slider' ? <SliderPicker noUltra={noUltra} /> : <ListPicker noUltra={noUltra} />
 }
 
 /** The Slider style: one model, with an effort slider. */
-function SliderPicker(): ReactNode {
+function SliderPicker({ noUltra }: { noUltra: boolean }): ReactNode {
   const creditsLocked = useStore((s) => s.creditsLocked)
   const { note: creditNote } = useCreditLock()
   const anchor = useRef<HTMLButtonElement>(null)
@@ -636,8 +644,7 @@ function SliderPicker(): ReactNode {
   const [listing, setListing] = useState(false)
   const config = usePickerSource()
   const { model, subscription, effort, fast, ultrafast } = config
-  // Ultra is switched on in the default picker only.
-  const ultra = false
+  const ultra = config.ultra && !noUltra
 
   const close = useCallback(() => {
     setOpen(false)
@@ -649,7 +656,7 @@ function SliderPicker(): ReactNode {
   // Reset goes back to the model's DefaultSpeed from models.ts.
   const defaultFast = !!model?.fastMode && (model.defaultSpeed === 'Fast' || model.defaultSpeed === 'Ultrafast')
   const defaultUltrafast = defaultFast && !!model?.ultrafastMode && model.defaultSpeed === 'Ultrafast'
-  const isDefault = !!model && !ultra && fast === defaultFast && ultrafast === defaultUltrafast && effort === model.defaultEffort
+  const isDefault = !!model && fast === defaultFast && ultrafast === defaultUltrafast && effort === model.defaultEffort
   const speedIcon = ultrafast ? <UltrafastIcon /> : fast ? <FastIcon /> : null
   // Off, Fast, then Ultrafast where the model has it.
   const nextSpeed = (): { fast: boolean; ultrafast: boolean } =>
@@ -748,6 +755,7 @@ function SliderPicker(): ReactNode {
                 <EffortSlider model={model} effort={effort} onChange={(next) => config.setOptions(next)} />
               </div>
             )}
+            {!auto && !noUltra && <div className="mt-2"><UltraModeSwitch checked={ultra} onChange={(on) => config.setOptions({ ultra: on })} /></div>}
           </div>
         )}
       </Popover>

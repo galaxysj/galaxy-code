@@ -571,8 +571,8 @@ class ChatManager {
         session.update<UserItem>(userItem.id, { revertible: true })
       }
 
-      // Multitask runs its own subagents and cannot be combined with Ultra; Settings can turn Ultra off altogether.
-      const ultra = chat.ultra && store.settings.ultraMode !== false && mode !== 'multitask'
+      // Auto routing and Multitask run without Ultra, even if the chat has it saved.
+      const ultra = chat.ultra && !model.auto && store.settings.ultraMode !== false && mode !== 'multitask'
       delete session.doc.engine.replay
       const turn: Turn = {
         text: [parent.text, replay, missed.length ? `<events_while_stopped>\nThese events fired while you were stopped:\n\n${missed.map((entry) => entry.text).join('\n\n')}\n</events_while_stopped>` : '', text].filter(Boolean).join('\n\n'),
