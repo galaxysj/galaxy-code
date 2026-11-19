@@ -2114,7 +2114,7 @@ function BrowserSection(): ReactNode {
       </Section>
       <Section title="Agents" description="What agents can do in the browser.">
         <Card>
-          <RowItem label="Browser control" hint="Let agents open pages, click and type.">
+          <RowItem label="Browser control" hint="Let agents open pages, click and type in the embedded browser or a separate Chrome profile.">
             <Switch checked={settings.browserAgentControl} onChange={(browserAgentControl) => void update({ browserAgentControl })} label="Browser control" />
           </RowItem>
           <RowItem label="Save screenshots" hint="After each browser action, keep a PNG with the cursor and glow in the chat's artifacts folder.">

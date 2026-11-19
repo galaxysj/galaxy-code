@@ -15,12 +15,16 @@ Your coding agents. One clear workspace.
 - **Projects and conversations**: Work in local folders or Git worktrees, with separate windows and side chats.
 - **Multiple agents**: Connect the built-in OpenRouter agent, Claude Code, Codex, and ACP agents.
 - **Editing and review**: Browse files, edit , inspect diffs, and restore conversation checkpoints.
-- **Terminal and browser**: Run commands and inspect web pages within the app.
+- **Terminal and browser**: Run commands and inspect web pages in the app or in a separate Google Chrome window.
 - **Execution controls**: Send follow-up instructions during a run, inspect tool activity, and manage approvals and permission modes.
 - **Model options**: Choose models, reasoning effort, and speed options where supported.
 - **ACP agents**: Connect external providers, Codex & Claude for integrated use in one workspace.
 
 Available tools and model options depend on the selected agent.
+
+### Google Chrome
+
+Ask the agent to open or interact with a page **in Chrome**. Galaxy Code starts an installed Chrome with a dedicated profile and uses the Chrome DevTools Protocol over a local pipe. This profile keeps its own tabs and site data separate from your regular Chrome profile. Browser control and approvals apply in both the embedded browser and Chrome.
 
 ## Getting started
 

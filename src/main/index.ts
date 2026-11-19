@@ -9,6 +9,7 @@ import { disposeAccountWorkers } from './services/accountWorkers'
 import { registerIpc } from './ipc'
 import { bridge } from './services/bridge'
 import { browser } from './services/browser'
+import { chromeBrowser } from './services/chromeBrowser'
 import { computer } from './services/computer'
 import { mcp } from './services/mcp'
 import { store } from './store'
@@ -193,6 +194,7 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     manager.stopAll()
+    chromeBrowser.close()
     computer.releaseAll()
     store.flushSync()
     killBackgroundProcesses()

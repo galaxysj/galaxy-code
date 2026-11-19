@@ -1,11 +1,13 @@
 import { isDocumentArtifact, isScreenshotArtifact, isVisualArtifact, parseFrontMatter, visualViewName } from '@shared/artifacts'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { nativeImage } from 'electron'
 import { basename, extname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { resolveImageModels } from '@shared/catalog'
 import type { AskQuestion, PresentedFile } from '@shared/types'
-import { browser, type BrowserAction } from '../services/browser'
+import { browser, saveBrowserScreenshot, type BrowserAction } from '../services/browser'
+import { chromeBrowser } from '../services/chromeBrowser'
 import { memoryPath, updateMemory, type MemoryAction } from '../services/memory'
 import { generateImage } from '../services/openrouter'
 import { webFetch, webSearch } from '../services/web'
@@ -148,18 +150,31 @@ function requireBrowserControl(): void {
   if (!store.settings.browserAgentControl) throw new Error('The user turned off agent browser control in Settings. Tell them, and do not try to work around it.')
 }
 
+const BROWSER_TARGET = {
+  type: 'string',
+  enum: ['embedded', 'chrome'],
+  description: 'Use embedded (default) for the app sidebar, or chrome for the separate Galaxy Code Chrome profile.'
+}
+
+function browserTarget(input: Record<string, unknown>): 'embedded' | 'chrome' {
+  if (input.browser === undefined || input.browser === 'embedded') return 'embedded'
+  if (input.browser === 'chrome') return 'chrome'
+  throw new ToolInputError('browser must be embedded or chrome')
+}
+
 export const listTabsTool: ToolDef = {
   name: 'ListTabs',
   kind: 'browser',
   parallel: true,
-  description: "List open browser tabs in the current chat's window, including background tabs, with their title, URL and 1-based tabIndex in sidebar order. Each window has its own tab indices. Renamed tab titles are preserved. File preview pages are excluded. Does not open a page, select a tab or change focus. Pass a returned tabIndex to Browser to control that tab.",
-  parameters: { type: 'object', properties: {}, additionalProperties: false },
-  present() { return { title: 'Listed tabs' } },
-  async execute(_input, ctx) {
+  description: "List open browser tabs in the current chat's window, including background tabs, with their title, URL and 1-based tabIndex in sidebar order. Each window has its own tab indices. Renamed tab titles are preserved. File preview pages are excluded. Does not open a page, select a tab or change focus. Set browser to \"chrome\" for tabs in the separate Galaxy Code Chrome profile. Pass the same browser and a returned tabIndex to Browser.",
+  parameters: { type: 'object', properties: { browser: BROWSER_TARGET }, additionalProperties: false },
+  present(input) { return { title: input.browser === 'chrome' ? 'Listed Chrome tabs' : 'Listed tabs' } },
+  async execute(input, ctx) {
     requireBrowserControl()
-    const tabs = browser.listTabsForChat(ctx.session.team?.chatId ?? ctx.session.id).map(({ title, url, tabIndex }) => ({ tabIndex, title, url }))
+    const target = browserTarget(input)
+    const tabs = target === 'chrome' ? chromeBrowser.listTabs() : browser.listTabsForChat(ctx.session.team?.chatId ?? ctx.session.id).map(({ title, url, tabIndex }) => ({ tabIndex, title, url }))
     return {
-      text: tabs.length ? JSON.stringify(tabs, null, 2) : 'No open browser tabs. You can create one now: call Browser with {"title":"Open example.com","steps":[{"action":"create","url":"https://example.com","background":false}]}, using the requested URL. Do not wait for the user to open a tab.',
+      text: tabs.length ? JSON.stringify(tabs, null, 2) : `No open ${target === 'chrome' ? 'Chrome' : 'browser'} tabs. Call Browser with browser: "${target}" and a create step using the requested URL.`,
       display: tabs.length ? tabs.map((tab) => `${tab.tabIndex}. ${oneLine(tab.title, 160)}\n   ${tab.url || 'about:blank'}`).join('\n\n') : 'No open browser tabs.'
     }
   }
@@ -169,6 +184,8 @@ export const browserTool: ToolDef = {
   name: 'Browser',
   kind: 'browser',
   description: `Control in-app Chromium tabs in the current chat's window. tabIndex is scoped to that window; use ListTabs to find its tabs. By default tabs open and actions run in the background without opening the sidebar or changing the user's selected tab or keyboard focus. For navigate, set background:false to open the sidebar and select the target tab so the user can watch. Choose based on the user's intent: show pages they ask to open or see; keep research and implementation checks in the background. Use it to check pages you built, reproduce UI bugs, or work through sites that need interaction.
+
+Set the top-level \`browser\` to "chrome" when the user asks for Google Chrome. It launches a regular Chrome window using Galaxy Code's separate profile. Select Chrome tabs with ListTabs using the same browser value. Chrome indices are in opening order within this profile; use an explicit tabIndex to choose a tab, or omit it to stay on the previous step's tab (most recently opened tab when starting a call). Chrome uses full HTTP(S) URLs or local file URLs, and background:false brings the tab forward in Chrome. Chrome may bring a newly created tab to the foreground.
 
 Each call has a short \`title\` and a list of \`steps\`. Steps run in order. After an error, later steps that act on the page are skipped, including scroll, but snapshot, screenshot, console, tabs and wait still run; the result reports each step's output and what failed or was skipped, and every screenshot comes back. Batch the steps you can already predict into one call, such as navigate then snapshot, or type then press then screenshot. Do not guess what you cannot know yet: refs come from a snapshot and change with the page, so click a ref in a later call, or use a CSS selector you are sure of. Coordinates come from a screenshot, so they belong in a later call too.
 
@@ -196,6 +213,7 @@ Examples: {"title":"Open example.com and read the page","steps":[{"action":"navi
   parameters: {
     type: 'object',
     properties: {
+      browser: BROWSER_TARGET,
       title: { type: 'string', description: 'Short action title displayed in the tool log, starting with a verb, for example "Open example.com and read the page".', maxLength: 120 },
       steps: {
         type: 'array',
@@ -241,71 +259,97 @@ Examples: {"title":"Open example.com and read the page","steps":[{"action":"navi
     const labels = steps.map(browserStepTitle)
     const title = typeof input.title === 'string' ? oneLine(input.title.trim(), 120) : ''
     const opened = steps.find((step) => (step.action === 'navigate' || step.action === 'create') && step.url)
-    return { title: title || labels[0] || 'Browser', detail: labels.join(' · ') || undefined, meta: opened ? { url: String(opened.url) } : undefined }
+    const detail = labels.join(' · ')
+    return {
+      title: title || labels[0] || 'Browser',
+      detail: input.browser === 'chrome' ? ['Chrome', detail].filter(Boolean).join(' · ') : detail || undefined,
+      meta: opened ? { url: String(opened.url) } : undefined
+    }
   },
   approval(input) {
     // The call is about to fail, so there is nothing to approve.
     if (!store.settings.browserAgentControl) return null
+    const target = browserTarget(input)
     const steps = browserSteps(input)
     if (steps.every(readsOnly)) return null
-    // Only the steps are judged; the title is the model's own description of them.
+    // Only the target and steps are judged; the title is the model's own description.
     return {
-      action: { tool: 'Browser', steps },
-      sessionKey: 'browser',
-      sessionLabel: 'Allow browser control in this chat'
+      action: { tool: 'Browser', browser: target, steps },
+      sessionKey: target === 'chrome' ? 'browser:chrome' : 'browser',
+      sessionLabel: target === 'chrome' ? 'Allow Chrome control in this chat' : 'Allow browser control in this chat'
     }
   },
   async execute(input, ctx) {
     requireBrowserControl()
-    const steps = browserSteps(input)
-    if (steps.length === 0) throw new ToolInputError('`steps` must be a non-empty array')
-    const outputs: string[] = []
-    const images: ToolImage[] = []
-    const files: string[] = []
-    const urls: string[] = []
-    const failures: string[] = []
-    const notRun: number[] = []
-    const finished = () => ({ text: outputs.join('\n\n'), images: images.length ? images : undefined, meta: { urls, ...(files.length ? { images: files } : {}) } })
-    let tabIndex: number | undefined
-    for (const [index, step] of steps.entries()) {
-      const label = `Step ${index + 1} of ${steps.length}: ${String(step.action ?? '')}`
-      try {
-        ctx.signal.throwIfAborted()
-        // Set before the step runs, so the reads after a failed step still look at its tab.
-        tabIndex = num(step, 'tabIndex') ?? tabIndex
-        // Later steps assumed the failed one worked, so only what cannot change the page goes on.
-        if (failures.length && !runsAfterError(step)) {
-          notRun.push(index + 1)
-          continue
-        }
-        if (step.action === 'navigate_file' && !step.path) throw new ToolInputError('`path` is required for navigate_file')
-        const target = step.action === 'navigate_file' ? { ...step, action: 'navigate', url: pathToFileURL(resolvePath(ctx.cwd, String(step.path))).href } : step
-        const action = { ...target, tabIndex } as unknown as BrowserAction
-        const result = await browser.act(ctx.session.team?.chatId ?? ctx.session.id, action, ctx.signal)
-        if (action.action === 'close' && result.tabId) ctx.session.emitUi({ type: 'close-panel-tab', tabId: result.tabId })
-        // A closed tab leaves nothing to continue on; listing tabs does not move off the current one.
-        tabIndex = action.action === 'close' ? undefined : result.tabIndex ?? tabIndex
-        if (result.url) urls.push(result.url)
-        outputs.push(steps.length > 1 ? `${label}\n${result.text}` : result.text)
-        if (result.image) {
-          // Keep a copy on disk so the screenshot survives in the timeline.
-          const dir = join(tmpdir(), 'galaxy-code', 'screenshots')
-          await mkdir(dir, { recursive: true })
-          const file = join(dir, `${newId()}.jpg`)
-          await writeFile(file, Buffer.from(result.image.base64, 'base64'))
-          images.push(result.image)
-          files.push(file)
-        }
-      } catch (err) {
-        if (steps.length === 1 || isAbortError(err) || ctx.signal.aborted) throw err
-        failures.push(`${label} failed: ${errorMessage(err)}`)
-      }
-    }
-    if (failures.length === 0) return finished()
-    // Last, because the timeline shows the last line of a failed call.
-    outputs.push(`${failures.join(' ')}${notRun.length ? ` ${plural(notRun.length, 'later step')} not run: ${notRun.join(', ')}.` : ''}`)
-    return { ...finished(), isError: true }
+    const target = browserTarget(input)
+    const run = () => runBrowserSteps(input, ctx, target)
+    return target === 'chrome' ? chromeBrowser.run(run, ctx.signal) : run()
   }
+}
+
+async function runBrowserSteps(
+  input: Record<string, unknown>,
+  ctx: Parameters<ToolDef['execute']>[1],
+  target: 'embedded' | 'chrome'
+) {
+  const steps = browserSteps(input)
+  if (steps.length === 0) throw new ToolInputError('`steps` must be a non-empty array')
+  const outputs: string[] = []
+  const images: ToolImage[] = []
+  const files: string[] = []
+  const urls: string[] = []
+  const failures: string[] = []
+  const notRun: number[] = []
+  const finished = () => ({ text: outputs.join('\n\n'), images: images.length ? images : undefined, meta: { urls, ...(files.length ? { images: files } : {}) } })
+  const chatId = ctx.session.team?.chatId ?? ctx.session.id
+  let tabIndex: number | undefined
+  let chromeTabId: string | undefined
+  for (const [index, step] of steps.entries()) {
+    const label = `Step ${index + 1} of ${steps.length}: ${String(step.action ?? '')}`
+    requireBrowserControl()
+    try {
+      ctx.signal.throwIfAborted()
+      // Set before the step runs, so the reads after a failed step still look at its tab.
+      tabIndex = num(step, 'tabIndex') ?? tabIndex
+      // Later steps assumed the failed one worked, so only what cannot change the page goes on.
+      if (failures.length && !runsAfterError(step)) {
+        notRun.push(index + 1)
+        continue
+      }
+      if (step.action === 'navigate_file' && !step.path) throw new ToolInputError('`path` is required for navigate_file')
+      const normalized = step.action === 'navigate_file' ? { ...step, action: 'navigate', url: pathToFileURL(resolvePath(ctx.cwd, String(step.path))).href } : step
+      const action = { ...normalized, tabIndex: target === 'chrome' ? step.tabIndex : tabIndex } as unknown as BrowserAction
+      const result = target === 'chrome'
+        ? await chromeBrowser.act(action, chromeTabId, (id) => { chromeTabId = id }, ctx.signal)
+        : await browser.act(chatId, action, ctx.signal)
+      if (target === 'embedded' && action.action === 'close' && result.tabId) ctx.session.emitUi({ type: 'close-panel-tab', tabId: result.tabId })
+      // A closed tab leaves nothing to continue on; listing tabs does not move off the current one.
+      tabIndex = action.action === 'close' ? undefined : result.tabIndex ?? tabIndex
+      if (result.url) urls.push(result.url)
+      outputs.push(steps.length > 1 ? `${label}\n${result.text}` : result.text)
+      if (result.image) {
+        // Keep a copy on disk so the screenshot survives in the timeline.
+        const dir = join(tmpdir(), 'galaxy-code', 'screenshots')
+        await mkdir(dir, { recursive: true })
+        const file = join(dir, `${newId()}.jpg`)
+        const jpeg = Buffer.from(result.image.base64, 'base64')
+        await writeFile(file, jpeg)
+        if (target === 'chrome') {
+          const png = await saveBrowserScreenshot(chatId, nativeImage.createFromBuffer(jpeg).toPNG())
+          if (png) outputs.push(`Saved as a PNG file: ${png}. Give it to the user with Present.`)
+        }
+        images.push(result.image)
+        files.push(file)
+      }
+    } catch (err) {
+      if (steps.length === 1 || isAbortError(err) || ctx.signal.aborted) throw err
+      failures.push(`${label} failed: ${errorMessage(err)}`)
+    }
+  }
+  if (failures.length === 0) return finished()
+  // Last, because the timeline shows the last line of a failed call.
+  outputs.push(`${failures.join(' ')}${notRun.length ? ` ${plural(notRun.length, 'later step')} not run: ${notRun.join(', ')}.` : ''}`)
+  return { ...finished(), isError: true }
 }
 
 function parseQuestions(input: Record<string, unknown>): AskQuestion[] {
